@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestLoadOpenAICompatibleRuntimeFields(t *testing.T) {
+func TestLoadOpenAICompatibleConfig(t *testing.T) {
 	t.Setenv("GOLEM_PROVIDER", "openai_compatible")
 	t.Setenv("GOLEM_API_KEY", "test-key")
 	t.Setenv("GOLEM_BASE_URL", "https://example.test/v1")
@@ -30,7 +30,7 @@ func TestLoadOpenAICompatibleRuntimeFields(t *testing.T) {
 	if cfg.Timeout != 45*time.Second {
 		t.Fatalf("timeout = %s", cfg.Timeout)
 	}
-	if cfg.TeamMode != "on" || cfg.DisableCodeMode != true || cfg.CodeModeStatus != "off" {
+	if cfg.TeamMode != "on" || cfg.DisableCodeMode != true {
 		t.Fatalf("unexpected team/code mode fields: %+v", cfg)
 	}
 	if !cfg.TopLevelPersonality || !cfg.DisableGreedyThinkingPressure {
@@ -38,6 +38,25 @@ func TestLoadOpenAICompatibleRuntimeFields(t *testing.T) {
 	}
 	if cfg.AutoContextMaxTokens != 900000 || cfg.AutoContextKeepLastN != 20 {
 		t.Fatalf("unexpected auto-context config: %d/%d", cfg.AutoContextMaxTokens, cfg.AutoContextKeepLastN)
+	}
+}
+
+func TestLoadOpenAIConfigReadsBaseURLOverride(t *testing.T) {
+	t.Setenv("GOLEM_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("GOLEM_BASE_URL", "https://proxy.example.test/v1")
+	t.Setenv("OPENAI_BASE_URL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Provider != ProviderOpenAI {
+		t.Fatalf("provider = %q", cfg.Provider)
+	}
+	if cfg.BaseURL != "https://proxy.example.test/v1" {
+		t.Fatalf("baseURL = %q", cfg.BaseURL)
 	}
 }
 

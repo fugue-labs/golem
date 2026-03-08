@@ -29,16 +29,20 @@ var (
 	codeRunnerErr  error
 )
 
+// thinkingBudgetResponsePaddingTokens reserves room for the model's non-thinking
+// response and tool traffic beyond the explicit thinking budget.
+const thinkingBudgetResponsePaddingTokens = 16000
+
 // New creates a configured coding agent using Gollem's full codetool stack,
 // plus Vessel-specific runtime guidance that highlights the framework's
 // strongest capabilities in the TUI.
-func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extra ...core.AgentOption[string]) (*core.Agent[string], error) {
+func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extra ...core.AgentOption[string]) (*core.Agent[string], RuntimeState, error) {
+	runtime := buildRuntimeState(cfg, runPrompt)
+
 	model, err := createModel(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("creating model: %w", err)
+		return nil, runtime, fmt.Errorf("creating model: %w", err)
 	}
-
-	applyRuntimeProfile(cfg, runPrompt)
 
 	toolOpts := []codetool.Option{
 		codetool.WithModel(model),
@@ -53,7 +57,7 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 	if cfg.DisableDelegate {
 		toolOpts = append(toolOpts, codetool.WithDisableDelegate())
 	}
-	if cfg.EffectiveTeamMode {
+	if runtime.EffectiveTeamMode {
 		toolOpts = append(toolOpts, codetool.WithTeamMode())
 	}
 	if cfg.DisableGreedyThinkingPressure {
@@ -63,18 +67,18 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 		toolOpts = append(toolOpts, codetool.WithReasoningSandwichConfig(sandwichCfg))
 	}
 	if runner, err := maybeCodeRunner(cfg); err != nil {
-		cfg.CodeModeStatus = "unavailable"
-		cfg.CodeModeError = err.Error()
+		runtime.CodeModeStatus = "unavailable"
+		runtime.CodeModeError = err.Error()
 	} else if runner != nil {
 		toolOpts = append(toolOpts, codetool.WithCodeMode(runner))
-		cfg.CodeModeStatus = "on"
+		runtime.CodeModeStatus = "on"
 	}
 
 	opts := codetool.AgentOptions(cfg.WorkingDir, toolOpts...)
 	opts = append(opts,
 		core.WithSystemPrompt[string](strings.TrimSpace(vesselSystemPrompt)),
 		core.WithDynamicSystemPrompt[string](func(_ context.Context, _ *core.RunContext) (string, error) {
-			return buildRuntimePrompt(cfg, activeSkills), nil
+			return buildRuntimePrompt(cfg, runtime, activeSkills), nil
 		}),
 	)
 
@@ -101,19 +105,10 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 		}))
 	}
 
-	if len(activeSkills) > 0 {
-		prompt := buildSkillsPrompt(activeSkills)
-		opts = append(opts, core.WithDynamicSystemPrompt[string](
-			func(_ context.Context, _ *core.RunContext) (string, error) {
-				return prompt, nil
-			},
-		))
-	}
-
 	switch cfg.Provider {
 	case config.ProviderAnthropic, config.ProviderVertexAnthropic, config.ProviderVertexAI:
 		if cfg.ThinkingBudget > 0 {
-			maxTokens := cfg.ThinkingBudget + 16000
+			maxTokens := cfg.ThinkingBudget + thinkingBudgetResponsePaddingTokens
 			opts = append(opts,
 				core.WithThinkingBudget[string](cfg.ThinkingBudget),
 				core.WithMaxTokens[string](maxTokens),
@@ -132,38 +127,23 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 	}
 
 	opts = append(opts, extra...)
-	return core.NewAgent[string](model, opts...), nil
+	return core.NewAgent[string](model, opts...), runtime, nil
 }
 
-func buildSkillsPrompt(activeSkills []skills.Skill) string {
+func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills []skills.Skill) string {
 	var b strings.Builder
-	b.WriteString("\n# Active Skills\n\n")
-	for _, s := range activeSkills {
-		b.WriteString("## Skill: ")
-		b.WriteString(s.Name)
-		b.WriteString("\n\n")
-		b.WriteString(s.Content)
-		b.WriteString("\n\n")
-	}
-	return b.String()
-}
-
-func buildRuntimePrompt(cfg *config.Config, activeSkills []skills.Skill) string {
-	var b strings.Builder
-	b.WriteString("# Vessel Runtime Profile\n")
-	b.WriteString("You are running inside Vessel, the flagship TUI for the fugue-labs/gollem framework. Demonstrate a world-class coding workflow that can compete with Claude Code, Gemini, and Codex by fully using Gollem's planning, invariants, delegation, verification, auto-context, and code-execution architecture.\n\n")
+	b.WriteString("# Vessel Runtime Profile\n\n")
 	b.WriteString("## Effective runtime\n")
 	fmt.Fprintf(&b, "- provider/model: %s/%s\n", cfg.Provider, cfg.Model)
 	fmt.Fprintf(&b, "- timeout: %s\n", cfg.Timeout)
-	fmt.Fprintf(&b, "- team mode: %s", cfg.TeamMode)
-	if cfg.TeamModeReason != "" {
-		fmt.Fprintf(&b, " (%s)", cfg.TeamModeReason)
+	fmt.Fprintf(&b, "- team mode: %s (effective: %s)\n", cfg.TeamMode, onOff(runtime.EffectiveTeamMode))
+	if runtime.TeamModeReason != "" {
+		fmt.Fprintf(&b, "- team mode note: %s\n", runtime.TeamModeReason)
 	}
-	b.WriteString("\n")
 	fmt.Fprintf(&b, "- delegate: %s\n", onOff(!cfg.DisableDelegate))
-	fmt.Fprintf(&b, "- code mode: %s\n", cfg.CodeModeStatus)
-	if cfg.CodeModeError != "" {
-		fmt.Fprintf(&b, "- code mode note: %s\n", cfg.CodeModeError)
+	fmt.Fprintf(&b, "- code mode: %s\n", runtime.CodeModeStatus)
+	if runtime.CodeModeError != "" {
+		fmt.Fprintf(&b, "- code mode note: %s\n", runtime.CodeModeError)
 	}
 	if cfg.ReasoningEffort != "" {
 		fmt.Fprintf(&b, "- reasoning effort: %s\n", cfg.ReasoningEffort)
@@ -176,32 +156,16 @@ func buildRuntimePrompt(cfg *config.Config, activeSkills []skills.Skill) string 
 	}
 	fmt.Fprintf(&b, "- top-level personality: %s\n", onOff(cfg.TopLevelPersonality))
 	if len(activeSkills) > 0 {
-		b.WriteString("- active skills: ")
-		for i, s := range activeSkills {
-			if i > 0 {
-				b.WriteString(", ")
+		b.WriteString("\n## Active skills\n")
+		for _, s := range activeSkills {
+			fmt.Fprintf(&b, "\n### %s\n", s.Name)
+			if content := strings.TrimSpace(s.Content); content != "" {
+				b.WriteString(content)
+				b.WriteString("\n")
 			}
-			b.WriteString(s.Name)
 		}
-		b.WriteString("\n")
 	}
-	b.WriteString("\n## Showcase expectations\n")
-	b.WriteString("- For non-trivial work, create and maintain a plan early, then keep it accurate.\n")
-	b.WriteString("- Use invariants as hard completion gates; summarize them before finishing.\n")
-	b.WriteString("- Use delegate/team capabilities for parallel-safe research or isolated focused subtasks when that will reduce wall-clock time.\n")
-	b.WriteString("- Use execute_code/code mode for batched analysis or transformations when it saves API turns.\n")
-	b.WriteString("- If context recovery appears, immediately re-anchor on the task, call planning get when needed, and continue decisively.\n")
 	return b.String()
-}
-
-func applyRuntimeProfile(cfg *config.Config, prompt string) {
-	cfg.CodeModeError = ""
-	if cfg.DisableCodeMode {
-		cfg.CodeModeStatus = "off"
-	} else {
-		cfg.CodeModeStatus = "pending"
-	}
-	cfg.EffectiveTeamMode, cfg.TeamModeReason = decideTeamMode(cfg, prompt)
 }
 
 func decideTeamMode(cfg *config.Config, prompt string) (bool, string) {
@@ -214,27 +178,112 @@ func decideTeamMode(cfg *config.Config, prompt string) (bool, string) {
 	case "off":
 		return false, "forced off"
 	}
-	lower := strings.ToLower(prompt)
-	score := 0
-	if len(prompt) >= 320 {
-		score++
+
+	weakSignals := 0
+	if len(prompt) >= 600 {
+		weakSignals++
 	}
-	if strings.Count(prompt, "\n") >= 6 {
-		score++
+	if strings.Count(prompt, "\n") >= 8 {
+		weakSignals++
 	}
-	for _, hint := range []string{
-		"parallel", "multiple files", "large codebase", "end-to-end", "architecture",
-		"refactor", "migrate", "investigate", "research", "benchmark", "compare",
-		"full stack", "across the repo", "multi-step", "planner", "team",
-	} {
-		if strings.Contains(lower, hint) {
-			score++
+
+	type teamModeHint struct {
+		phrase string
+		weight int
+	}
+	hints := []teamModeHint{
+		{phrase: "parallel", weight: 3},
+		{phrase: "parallelize", weight: 3},
+		{phrase: "delegate", weight: 3},
+		{phrase: "subagent", weight: 3},
+		{phrase: "spawn teammate", weight: 3},
+		{phrase: "multiple files", weight: 2},
+		{phrase: "across the repo", weight: 2},
+		{phrase: "large codebase", weight: 2},
+		{phrase: "architecture", weight: 2},
+		{phrase: "migrate", weight: 2},
+		{phrase: "benchmark", weight: 2},
+		{phrase: "full stack", weight: 2},
+		{phrase: "compare", weight: 1},
+		{phrase: "refactor", weight: 1},
+		{phrase: "investigate", weight: 1},
+		{phrase: "research", weight: 1},
+		{phrase: "multi step", weight: 1},
+		{phrase: "end to end", weight: 1},
+	}
+
+	signalScore := 0
+	matched := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		if promptHasAffirmedHint(prompt, hint.phrase) {
+			signalScore += hint.weight
+			matched = append(matched, hint.phrase)
 		}
 	}
-	if score >= 3 {
-		return true, fmt.Sprintf("auto heuristic score=%d", score)
+
+	enabled := signalScore >= 3 || (signalScore >= 2 && weakSignals >= 1)
+	reason := fmt.Sprintf("auto heuristic signals=%d weak=%d", signalScore, weakSignals)
+	if len(matched) > 0 {
+		reason += " matched=" + strings.Join(matched, ", ")
 	}
-	return false, fmt.Sprintf("auto heuristic score=%d", score)
+	return enabled, reason
+}
+
+func promptHasAffirmedHint(prompt, hint string) bool {
+	promptTokens := strings.Fields(normalizePromptText(prompt))
+	hintTokens := strings.Fields(normalizePromptText(hint))
+	if len(promptTokens) == 0 || len(hintTokens) == 0 || len(promptTokens) < len(hintTokens) {
+		return false
+	}
+	for start := 0; start <= len(promptTokens)-len(hintTokens); start++ {
+		if !matchesTokenSequence(promptTokens[start:start+len(hintTokens)], hintTokens) {
+			continue
+		}
+		if !promptHintNegated(promptTokens, start) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesTokenSequence(tokens, expected []string) bool {
+	for i := range expected {
+		if tokens[i] != expected[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func promptHintNegated(tokens []string, start int) bool {
+	for _, token := range tokens[max(0, start-6):start] {
+		switch token {
+		case "no", "not", "dont", "never", "avoid", "without":
+			return true
+		}
+	}
+	return false
+}
+
+func normalizePromptText(text string) string {
+	var b strings.Builder
+	b.Grow(len(text))
+	lastSpace := true
+	for _, r := range strings.ToLower(text) {
+		switch {
+		case r == '\'':
+			continue
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			lastSpace = false
+		default:
+			if !lastSpace {
+				b.WriteByte(' ')
+				lastSpace = true
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func reasoningSandwichConfig(cfg *config.Config) (codetool.ReasoningSandwichConfig, bool) {
@@ -268,13 +317,6 @@ func onOff(v bool) string {
 	return "off"
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func createModel(cfg *config.Config) (core.Model, error) {
 	switch cfg.Provider {
 	case config.ProviderAnthropic:
@@ -295,6 +337,17 @@ func createModel(cfg *config.Config) (core.Model, error) {
 		}
 		if cfg.APIKey != "" {
 			opts = append(opts, openai.WithAPIKey(cfg.APIKey))
+		}
+		if cfg.BaseURL != "" {
+			opts = append(opts,
+				openai.WithBaseURL(cfg.BaseURL),
+				openai.WithTransport("http"),
+			)
+		} else {
+			opts = append(opts,
+				openai.WithTransport("websocket"),
+				openai.WithWebSocketHTTPFallback(true),
+			)
 		}
 		return openai.New(opts...), nil
 

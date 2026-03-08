@@ -96,14 +96,14 @@ func (m *Model) renderRuntimeSummaryMessage() *chat.Message {
 	b.WriteString("**Runtime profile**\n\n")
 	b.WriteString(fmt.Sprintf("- Provider/model: `%s/%s`\n", m.cfg.Provider, m.cfg.Model))
 	b.WriteString(fmt.Sprintf("- Timeout: `%s`\n", m.cfg.Timeout))
-	b.WriteString(fmt.Sprintf("- Team mode: `%s` (effective: `%t`)\n", m.cfg.TeamMode, m.cfg.EffectiveTeamMode))
-	if m.cfg.TeamModeReason != "" {
-		b.WriteString(fmt.Sprintf("- Team mode reason: %s\n", m.cfg.TeamModeReason))
+	b.WriteString(fmt.Sprintf("- Team mode: `%s` (effective: `%t`)\n", m.cfg.TeamMode, m.runtime.EffectiveTeamMode))
+	if m.runtime.TeamModeReason != "" {
+		b.WriteString(fmt.Sprintf("- Team mode reason: %s\n", m.runtime.TeamModeReason))
 	}
 	b.WriteString(fmt.Sprintf("- Delegate: `%t`\n", !m.cfg.DisableDelegate))
-	b.WriteString(fmt.Sprintf("- Code mode: `%s`\n", m.cfg.CodeModeStatus))
-	if m.cfg.CodeModeError != "" {
-		b.WriteString(fmt.Sprintf("- Code mode note: %s\n", m.cfg.CodeModeError))
+	b.WriteString(fmt.Sprintf("- Code mode: `%s`\n", m.runtime.CodeModeStatus))
+	if m.runtime.CodeModeError != "" {
+		b.WriteString(fmt.Sprintf("- Code mode note: %s\n", m.runtime.CodeModeError))
 	}
 	if m.cfg.ReasoningEffort != "" {
 		b.WriteString(fmt.Sprintf("- Reasoning effort: `%s`\n", m.cfg.ReasoningEffort))

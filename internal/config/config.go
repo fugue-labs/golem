@@ -25,7 +25,7 @@ type Config struct {
 	Provider        Provider
 	Model           string
 	APIKey          string
-	BaseURL         string // for OpenAI-compatible endpoints (xAI, Groq, etc.)
+	BaseURL         string // for custom OpenAI/OpenAI-compatible endpoints (xAI, Groq, proxies, etc.)
 	WorkingDir      string
 	ProjectID       string // for Vertex AI
 	Region          string // for Vertex AI
@@ -34,12 +34,8 @@ type Config struct {
 	Timeout         time.Duration
 
 	TeamMode                      string // auto, on, off
-	EffectiveTeamMode             bool
-	TeamModeReason                string
 	DisableDelegate               bool
 	DisableCodeMode               bool
-	CodeModeStatus                string // pending, on, off, unavailable
-	CodeModeError                 string
 	TopLevelPersonality           bool
 	DisableGreedyThinkingPressure bool
 
@@ -70,6 +66,7 @@ func Load() (*Config, error) {
 
 	case ProviderOpenAI:
 		cfg.APIKey = os.Getenv("OPENAI_API_KEY")
+		cfg.BaseURL = firstNonEmpty(os.Getenv("GOLEM_BASE_URL"), os.Getenv("OPENAI_BASE_URL"))
 		cfg.Model = envOr("GOLEM_MODEL", "gpt-5.4")
 		cfg.ReasoningEffort = envOr("GOLEM_REASONING_EFFORT", "xhigh")
 		cfg.AutoContextMaxTokens = 350000
@@ -112,13 +109,6 @@ func Load() (*Config, error) {
 	cfg.DisableCodeMode = isTruthyEnv("GOLEM_DISABLE_CODE_MODE") || isTruthyEnv("GOLEM_NO_CODE_MODE")
 	cfg.TopLevelPersonality = isTruthyEnv("GOLEM_TOP_LEVEL_PERSONALITY")
 	cfg.DisableGreedyThinkingPressure = isTruthyEnv("GOLEM_DISABLE_GREEDY_THINKING_PRESSURE")
-	cfg.CodeModeStatus = "pending"
-	if cfg.DisableCodeMode {
-		cfg.CodeModeStatus = "off"
-	}
-	if cfg.DisableDelegate {
-		cfg.TeamModeReason = "delegate disabled"
-	}
 
 	return cfg, nil
 }
@@ -188,9 +178,10 @@ func intEnvOr(key string, fallback int) int {
 }
 
 func teamModeEnvOr(key, fallback string) string {
-	switch strings.ToLower(strings.TrimSpace(envOr(key, fallback))) {
+	v := strings.ToLower(strings.TrimSpace(envOr(key, fallback)))
+	switch v {
 	case "on", "off", "auto":
-		return strings.ToLower(strings.TrimSpace(envOr(key, fallback)))
+		return v
 	default:
 		return fallback
 	}

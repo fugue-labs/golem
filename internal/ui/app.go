@@ -37,11 +37,12 @@ type (
 
 // Model is the main BubbleTea model.
 type Model struct {
-	cfg    *config.Config
-	sty    *styles.Styles
-	agent  *core.Agent[string]
-	cancel context.CancelFunc
-	prog   *tea.Program
+	cfg     *config.Config
+	runtime agent.RuntimeState
+	sty     *styles.Styles
+	agent   *core.Agent[string]
+	cancel  context.CancelFunc
+	prog    *tea.Program
 
 	// UI components.
 	input   textarea.Model
@@ -85,6 +86,7 @@ func New(cfg *config.Config) *Model {
 
 	return &Model{
 		cfg:       cfg,
+		runtime:   agent.InitialRuntimeState(cfg),
 		input:     ti,
 		spinner:   sp,
 		allSkills: allSkills,
@@ -294,6 +296,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.startTime = time.Now()
 		m.agent = nil
+		m.runtime = agent.InitialRuntimeState(m.cfg)
 		return m, m.runAgent(text)
 
 	case key == "up":
@@ -393,7 +396,7 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 				}
 			},
 		}
-		a, err := agent.New(m.cfg, prompt, m.activeSkills,
+		a, runtime, err := agent.New(m.cfg, prompt, m.activeSkills,
 			core.WithHooks[string](hooks),
 			core.WithAgentMiddleware[string](m.steeringMiddleware()),
 		)
@@ -403,6 +406,7 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 			}
 		}
 		m.agent = a
+		m.runtime = runtime
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

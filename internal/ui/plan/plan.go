@@ -1,6 +1,9 @@
 package plan
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Task mirrors gollem's deep.PlanTask for TUI display.
 type Task struct {
@@ -67,7 +70,7 @@ func (s *State) revertSnapshot() {
 func (s *State) Progress() (completed, total int) {
 	total = len(s.Tasks)
 	for _, t := range s.Tasks {
-		if t.Status == "completed" {
+		if normalizeTaskStatus(t.Status) == "completed" {
 			completed++
 		}
 	}
@@ -86,8 +89,7 @@ func (s *State) HandleToolCall(rawArgs string) {
 
 	switch cmd.Command {
 	case "create":
-		s.Tasks = make([]Task, len(cmd.Tasks))
-		copy(s.Tasks, cmd.Tasks)
+		s.Tasks = normalizeTasks(cmd.Tasks)
 		for i := range s.Tasks {
 			if s.Tasks[i].Status == "" {
 				s.Tasks[i].Status = "pending"
@@ -96,16 +98,11 @@ func (s *State) HandleToolCall(rawArgs string) {
 
 	case "add":
 		if len(cmd.Tasks) > 0 {
-			for _, t := range cmd.Tasks {
-				if t.Status == "" {
-					t.Status = "pending"
-				}
-				s.Tasks = append(s.Tasks, t)
-			}
+			s.Tasks = append(s.Tasks, normalizeTasks(cmd.Tasks)...)
 		} else if cmd.TaskID != "" && cmd.Description != "" {
 			s.Tasks = append(s.Tasks, Task{
-				ID:          cmd.TaskID,
-				Description: cmd.Description,
+				ID:          strings.TrimSpace(cmd.TaskID),
+				Description: strings.TrimSpace(cmd.Description),
 				Status:      "pending",
 			})
 		}
@@ -114,7 +111,7 @@ func (s *State) HandleToolCall(rawArgs string) {
 		for i := range s.Tasks {
 			if s.Tasks[i].ID == cmd.TaskID {
 				if cmd.Status != "" {
-					s.Tasks[i].Status = cmd.Status
+					s.Tasks[i].Status = normalizeTaskStatus(cmd.Status)
 				}
 				if cmd.Notes != "" {
 					s.Tasks[i].Notes = cmd.Notes
@@ -144,17 +141,56 @@ func (s *State) HandleToolResult(result string) {
 	}
 
 	if s.lastCommand == "get" && res.Tasks != nil {
-		s.Tasks = res.Tasks
+		s.Tasks = normalizeTasks(res.Tasks)
 		return
 	}
 
 	if s.lastCommand == "update" && res.Task != nil {
+		normalized := normalizeTask(*res.Task)
 		for i := range s.Tasks {
-			if s.Tasks[i].ID == res.Task.ID {
-				s.Tasks[i] = *res.Task
+			if s.Tasks[i].ID == normalized.ID {
+				s.Tasks[i] = normalized
 				break
 			}
 		}
+	}
+}
+
+func normalizeTasks(tasks []Task) []Task {
+	if tasks == nil {
+		return nil
+	}
+	normalized := make([]Task, len(tasks))
+	for i, task := range tasks {
+		normalized[i] = normalizeTask(task)
+	}
+	return normalized
+}
+
+func normalizeTask(task Task) Task {
+	task.ID = strings.TrimSpace(task.ID)
+	task.Description = strings.TrimSpace(task.Description)
+	task.Status = normalizeTaskStatus(task.Status)
+	if task.Status == "" {
+		task.Status = "pending"
+	}
+	return task
+}
+
+func normalizeTaskStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "":
+		return ""
+	case "pending", "todo", "to_do", "queued", "not_started":
+		return "pending"
+	case "in_progress", "in-progress", "in progress", "wip", "working", "active":
+		return "in_progress"
+	case "completed", "complete", "done", "finished":
+		return "completed"
+	case "blocked", "stuck":
+		return "blocked"
+	default:
+		return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(status)), " ", "_")
 	}
 }
 

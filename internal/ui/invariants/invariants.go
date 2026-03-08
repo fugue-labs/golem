@@ -3,6 +3,7 @@ package invariants
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Item mirrors gollem's invariants tool item for TUI display.
@@ -130,17 +131,12 @@ func (s *State) HandleToolCall(rawArgs string) {
 	case "add":
 		if len(cmd.Items) > 0 {
 			for _, item := range cmd.Items {
-				item.Kind = normalizeKind(item.Kind)
-				item.Status = normalizeStatus(item.Status)
-				if item.Status == "" {
-					item.Status = "unknown"
-				}
-				s.Items = append(s.Items, item)
+				s.Items = append(s.Items, normalizeItem(item))
 			}
 		} else if cmd.Description != "" {
 			s.Items = append(s.Items, Item{
 				ID:          nextID(s.Items),
-				Description: cmd.Description,
+				Description: strings.TrimSpace(cmd.Description),
 				Kind:        normalizeKind(cmd.Kind),
 				Status:      "unknown",
 			})
@@ -156,7 +152,10 @@ func (s *State) HandleToolResult(result string) {
 		return
 	}
 	if res.Items != nil {
-		s.Items = cloneItems(res.Items)
+		s.Items = make([]Item, len(res.Items))
+		for i, item := range res.Items {
+			s.Items[i] = normalizeItem(item)
+		}
 	}
 	s.Extracted = s.Extracted || res.Extracted
 }
@@ -166,34 +165,48 @@ func (s *State) HandleToolError() {
 }
 
 func normalizeKind(kind string) string {
-	if kind == "soft" {
+	if strings.EqualFold(strings.TrimSpace(kind), "soft") {
 		return "soft"
 	}
 	return "hard"
 }
 
 func normalizeStatus(status string) string {
-	switch status {
-	case "unknown", "in_progress", "pass", "fail":
-		return status
-	case "in-progress", "wip":
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "":
+		return ""
+	case "unknown", "unresolved", "todo", "not_started":
+		return "unknown"
+	case "in_progress", "in-progress", "in progress", "wip", "working", "active":
 		return "in_progress"
-	case "passed":
+	case "pass", "passed", "done", "complete", "completed", "satisfied", "ok":
 		return "pass"
-	case "failed":
+	case "fail", "failed", "broken", "unmet":
 		return "fail"
 	default:
-		return status
+		return "unknown"
 	}
 }
 
+func normalizeItem(item Item) Item {
+	item.ID = strings.TrimSpace(item.ID)
+	item.Description = strings.TrimSpace(item.Description)
+	item.Kind = normalizeKind(item.Kind)
+	item.Status = normalizeStatus(item.Status)
+	if item.Status == "" {
+		item.Status = "unknown"
+	}
+	item.Evidence = strings.TrimSpace(item.Evidence)
+	return item
+}
+
 func nextID(items []Item) string {
-	max := 0
+	highestID := 0
 	for _, item := range items {
 		var n int
-		if _, err := fmt.Sscanf(item.ID, "I%d", &n); err == nil && n > max {
-			max = n
+		if _, err := fmt.Sscanf(item.ID, "I%d", &n); err == nil && n > highestID {
+			highestID = n
 		}
 	}
-	return fmt.Sprintf("I%d", max+1)
+	return fmt.Sprintf("I%d", highestID+1)
 }
