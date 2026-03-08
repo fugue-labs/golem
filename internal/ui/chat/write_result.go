@@ -27,21 +27,21 @@ func renderWriteResult(msg *Message, toolCall *Message, sty *styles.Styles, widt
 	}
 
 	rendered := []string{
-		"    " + sty.Tool.DiffHeader.Render("+++ " + base),
+		"  " + sty.Tool.DiffHeader.Render("+++ " + base),
 	}
 	for _, line := range lines {
-		if len(line) > width-8 {
-			line = line[:width-8]
+		if len(line) > width-6 {
+			line = line[:width-6]
 		}
-		rendered = append(rendered, "    "+sty.Tool.DiffAdd.Render("+ "+line))
+		rendered = append(rendered, "  "+sty.Tool.DiffAdd.Render("+ "+line))
 	}
 	if truncated {
-		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+		rendered = append(rendered, "  "+sty.Tool.Truncation.Render(
 			fmt.Sprintf("... (%d more lines)", len(strings.Split(args.Content, "\n"))-maxLines),
 		))
 	}
 	if msg.Content != "" {
-		rendered = append(rendered, "    "+sty.Tool.ContentLine.Render(msg.Content))
+		rendered = append(rendered, "  "+sty.Tool.ContentLine.Render(msg.Content))
 	}
 	return strings.Join(rendered, "\n")
 }

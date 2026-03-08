@@ -217,7 +217,7 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 
 	// Separate line numbers from content for highlighting.
 	rawLines := strings.Split(msg.Content, "\n")
-	maxLines := 15
+	maxLines := 12
 	truncated := len(rawLines) > maxLines
 	if truncated {
 		rawLines = rawLines[:maxLines]
@@ -265,11 +265,11 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 		}
 		available := max(0, width-10)
 		hline = ansi.Truncate(hline, available, "")
-		rendered = append(rendered, "    "+num+hline)
+		rendered = append(rendered, "  "+num+hline)
 	}
 
 	if truncated {
-		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+		rendered = append(rendered, "  "+sty.Tool.Truncation.Render(
 			fmt.Sprintf("... (%d more lines)", len(strings.Split(msg.Content, "\n"))-maxLines),
 		))
 	}
@@ -278,28 +278,30 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 }
 
 func renderBashResult(msg *Message, toolCall *Message, sty *styles.Styles, width int) string {
-	command := extractJSONField(toolCall.RawArgs, "command")
-	lines := strings.Split(msg.Content, "\n")
-	maxLines := 12
-	truncated := len(lines) > maxLines
-	if truncated {
-		lines = lines[:maxLines]
+	content := strings.TrimRight(msg.Content, "\n")
+	prefix := sty.Tool.ResultPrefix.Render("⎿")
+	available := max(0, width-8)
+
+	// Empty or whitespace-only output.
+	if strings.TrimSpace(content) == "" {
+		return "  " + prefix + " " + sty.Tool.Truncation.Render("(No output)")
 	}
 
-	available := max(0, width-10)
-	rendered := []string{}
-	if command != "" {
-		command = ansi.Truncate(command, available, "...")
-		rendered = append(rendered, "    "+sty.Tool.OutputMeta.Render("command"))
-		rendered = append(rendered, "    "+sty.Tool.CommandPrompt.Render("$")+" "+sty.Tool.CommandText.Render(command))
+	lines := strings.Split(content, "\n")
+	maxLines := 6
+	truncated := len(lines) > maxLines
+	if truncated {
+		lines = lines[len(lines)-maxLines:] // Show tail, not head
 	}
+
+	var rendered []string
 	for _, line := range lines {
 		line = ansi.Truncate(line, available, "...")
-		rendered = append(rendered, "    "+sty.Tool.OutputBorder.Render("│")+" "+sty.Tool.ContentCode.Render(line))
+		rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentCode.Render(line))
 	}
 	if truncated {
-		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
-			fmt.Sprintf("... (%d lines hidden)", len(strings.Split(msg.Content, "\n"))-maxLines),
+		rendered = append(rendered, "  "+prefix+" "+sty.Tool.Truncation.Render(
+			fmt.Sprintf("... (%d lines hidden)", len(strings.Split(content, "\n"))-maxLines),
 		))
 	}
 	return strings.Join(rendered, "\n")
@@ -320,42 +322,42 @@ func renderEditResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 
 	// File header.
 	base := filepath.Base(args.Path)
-	rendered = append(rendered, "    "+sty.Tool.DiffHeader.Render("--- "+base))
-	rendered = append(rendered, "    "+sty.Tool.DiffHeader.Render("+++ "+base))
+	rendered = append(rendered, "  "+sty.Tool.DiffHeader.Render("--- "+base))
+	rendered = append(rendered, "  "+sty.Tool.DiffHeader.Render("+++ "+base))
 
 	// Removed lines.
 	oldLines := strings.Split(args.OldString, "\n")
 	maxDiffLines := 8
 	for i, line := range oldLines {
 		if i >= maxDiffLines {
-			rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+			rendered = append(rendered, "  "+sty.Tool.Truncation.Render(
 				fmt.Sprintf("  ... (%d more removed)", len(oldLines)-maxDiffLines),
 			))
 			break
 		}
-		if len(line) > width-8 {
-			line = line[:width-8]
+		if len(line) > width-6 {
+			line = line[:width-6]
 		}
-		rendered = append(rendered, "    "+sty.Tool.DiffDel.Render("- "+line))
+		rendered = append(rendered, "  "+sty.Tool.DiffDel.Render("- "+line))
 	}
 
 	// Added lines.
 	newLines := strings.Split(args.NewString, "\n")
 	for i, line := range newLines {
 		if i >= maxDiffLines {
-			rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+			rendered = append(rendered, "  "+sty.Tool.Truncation.Render(
 				fmt.Sprintf("  ... (%d more added)", len(newLines)-maxDiffLines),
 			))
 			break
 		}
-		if len(line) > width-8 {
-			line = line[:width-8]
+		if len(line) > width-6 {
+			line = line[:width-6]
 		}
-		rendered = append(rendered, "    "+sty.Tool.DiffAdd.Render("+ "+line))
+		rendered = append(rendered, "  "+sty.Tool.DiffAdd.Render("+ "+line))
 	}
 
 	// Summary line from the tool result.
-	rendered = append(rendered, "    "+sty.Tool.ContentLine.Render(msg.Content))
+	rendered = append(rendered, "  "+sty.Tool.ContentLine.Render(msg.Content))
 
 	return strings.Join(rendered, "\n")
 }
@@ -363,22 +365,24 @@ func renderEditResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 // renderPlainResult renders a generic tool result with truncation.
 func renderPlainResult(content string, sty *styles.Styles, width int) string {
 	lines := strings.Split(content, "\n")
-	maxLines := 10
+	maxLines := 6
 	truncated := false
 	if len(lines) > maxLines {
 		truncated = true
 		lines = lines[:maxLines]
 	}
 
+	prefix := sty.Tool.ResultPrefix.Render("⎿")
 	var rendered []string
 	for _, line := range lines {
-		if len(line) > width-4 {
-			line = line[:width-4] + "..."
+		available := max(0, width-8)
+		if len(line) > available {
+			line = line[:available] + "..."
 		}
-		rendered = append(rendered, "    "+sty.Tool.ContentLine.Render(line))
+		rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentCode.Render(line))
 	}
 	if truncated {
-		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+		rendered = append(rendered, "  "+prefix+" "+sty.Tool.Truncation.Render(
 			fmt.Sprintf("... (%d lines hidden)", len(strings.Split(content, "\n"))-maxLines),
 		))
 	}

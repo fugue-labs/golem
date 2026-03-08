@@ -86,6 +86,7 @@ type Styles struct {
 		ContentLine   lipgloss.Style
 		ContentCode   lipgloss.Style
 		OutputBorder  lipgloss.Style
+		ResultPrefix  lipgloss.Style
 		OutputMeta    lipgloss.Style
 		Truncation    lipgloss.Style
 		StateWaiting  lipgloss.Style
@@ -239,9 +240,10 @@ func New(_ color.Color) *Styles {
 	s.Tool.CommandPrompt = lipgloss.NewStyle().Foreground(greenDk).Bold(true)
 	s.Tool.CommandText = lipgloss.NewStyle().Foreground(white)
 	s.Tool.Body = lipgloss.NewStyle().PaddingLeft(2)
-	s.Tool.ContentLine = lipgloss.NewStyle().Foreground(fgHalf)
-	s.Tool.ContentCode = lipgloss.NewStyle().Foreground(fgBase)
+	s.Tool.ContentLine = lipgloss.NewStyle().Foreground(fgMuted)
+	s.Tool.ContentCode = lipgloss.NewStyle().Foreground(fgHalf)
 	s.Tool.OutputBorder = lipgloss.NewStyle().Foreground(border)
+	s.Tool.ResultPrefix = lipgloss.NewStyle().Foreground(fgMuted)
 	s.Tool.OutputMeta = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
 	s.Tool.Truncation = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
 	s.Tool.StateWaiting = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
@@ -289,21 +291,26 @@ func New(_ color.Color) *Styles {
 // markdownStyle creates a glamour-compatible style config.
 func markdownStyle() ansi.StyleConfig {
 	primary := charmtone.Charple.Hex()
+	bright := charmtone.Butter.Hex()
 	info := charmtone.Malibu.Hex()
 	muted := charmtone.Squid.Hex()
+	fgBase := charmtone.Ash.Hex()
 	bg := charmtone.Charcoal.Hex()
+	hrColor := charmtone.Smoke.Hex()
 
 	return ansi.StyleConfig{
 		Document: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
+				Color:       &fgBase,
 				BlockSuffix: "\n",
 			},
 			Margin: uintPtr(0),
 		},
 		Heading: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
-				Bold:  boolPtr(true),
-				Color: &primary,
+				Bold:        boolPtr(true),
+				Color:       &primary,
+				BlockSuffix: "\n",
 			},
 		},
 		H1: ansi.StyleBlock{
@@ -327,16 +334,22 @@ func markdownStyle() ansi.StyleConfig {
 				Prefix: "### ",
 			},
 		},
+		Text: ansi.StylePrimitive{
+			Color: &fgBase,
+		},
 		Code: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
 				Color:           &info,
 				BackgroundColor: &bg,
+				Prefix:          " ",
+				Suffix:          " ",
 			},
 		},
 		CodeBlock: ansi.StyleCodeBlock{
 			StyleBlock: ansi.StyleBlock{
 				Margin: uintPtr(1),
 			},
+			Theme:  "dracula",
 			Chroma: &ansi.Chroma{},
 		},
 		Link: ansi.StylePrimitive{
@@ -344,23 +357,39 @@ func markdownStyle() ansi.StyleConfig {
 			Underline: boolPtr(true),
 		},
 		LinkText: ansi.StylePrimitive{
-			Bold: boolPtr(true),
+			Color: &info,
+			Bold:  boolPtr(true),
 		},
 		Emph: ansi.StylePrimitive{
 			Italic: boolPtr(true),
 		},
 		Strong: ansi.StylePrimitive{
-			Bold: boolPtr(true),
+			Bold:  boolPtr(true),
+			Color: &bright,
+		},
+		HorizontalRule: ansi.StylePrimitive{
+			Color:  &hrColor,
+			Format: "\n--------\n",
 		},
 		List: ansi.StyleList{
 			StyleBlock:  ansi.StyleBlock{},
 			LevelIndent: 2,
 		},
 		Item: ansi.StylePrimitive{
-			BlockPrefix: "  ",
+			BlockPrefix: "• ",
+		},
+		Enumeration: ansi.StylePrimitive{
+			BlockPrefix: ". ",
+		},
+		Task: ansi.StyleTask{
+			Ticked:   "[✓] ",
+			Unticked: "[ ] ",
 		},
 		Paragraph: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{},
+		},
+		Strikethrough: ansi.StylePrimitive{
+			CrossedOut: boolPtr(true),
 		},
 		BlockQuote: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
