@@ -1,0 +1,71 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    # Bug detection
+    - bodyclose
+    - errcheck
+    - errorlint
+    - govet
+    - ineffassign
+    - nilerr
+    - noctx
+    - staticcheck
+    - unused
+    # Style
+    - asciicheck
+    - godot
+    - misspell
+    - nakedret
+    - nolintlint
+    - revive
+    - unconvert
+    - whitespace
+    # Performance
+    - perfsprint
+    - usestdlibvars
+    - intrange
+    # Security
+    - gosec
+  settings:
+    nakedret:
+      max-func-lines: 30
+    gosec:
+      excludes:
+        - G104 # unhandled errors on deferred Close, fmt.Fprint — intentional
+        - G204 # subprocess with variable args — required for tool execution
+        - G301 # directory permissions 0755 — standard for config/data dirs
+        - G304 # file inclusion via variable — required for file operations
+        - G404 # weak random — used for jitter, not crypto
+    revive:
+      rules:
+        - name: var-naming
+          disabled: true
+        - name: unused-parameter
+          disabled: true
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - errorlint
+          - perfsprint
+      # Deferred Close/Cleanup calls — error is intentionally ignored.
+      - linters:
+          - errcheck
+        text: "Error return value of .*(Close|Cleanup).*is not checked"
+      # fmt.Fprintf to writers — errors handled by caller or intentionally ignored.
+      - linters:
+          - errcheck
+        text: "Error return value of `fmt.Fprint"
+
+issues:
+  max-same-issues: 50
+
+formatters:
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/fugue-labs/golem
