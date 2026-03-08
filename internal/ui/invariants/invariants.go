@@ -1,7 +1,6 @@
 package invariants
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/fugue-labs/gollem/ext/codetool"
@@ -34,29 +33,6 @@ func FromToolState(snapshot codetool.InvariantsState) State {
 		})
 	}
 	return State{Items: items, Extracted: snapshot.Extracted}
-}
-
-type invariantCommand struct {
-	Command     string `json:"command"`
-	ID          string `json:"id,omitempty"`
-	Status      string `json:"status,omitempty"`
-	Evidence    string `json:"evidence,omitempty"`
-	Description string `json:"description,omitempty"`
-	Kind        string `json:"kind,omitempty"`
-	Items       []Item `json:"items,omitempty"`
-}
-
-type invariantResult struct {
-	Status     string `json:"status"`
-	Extracted  bool   `json:"extracted"`
-	Items      []Item `json:"items,omitempty"`
-	HardTotal  int    `json:"hard_total"`
-	HardPass   int    `json:"hard_pass"`
-	HardFail   int    `json:"hard_fail"`
-	HardRemain int    `json:"hard_unresolved"`
-	SoftTotal  int    `json:"soft_total"`
-	SoftPass   int    `json:"soft_pass"`
-	SoftFail   int    `json:"soft_fail"`
 }
 
 func (s *State) HasItems() bool { return s.Extracted || len(s.Items) > 0 }
@@ -120,15 +96,4 @@ func normalizeItem(item Item) Item {
 	}
 	item.Evidence = strings.TrimSpace(item.Evidence)
 	return item
-}
-
-func nextID(items []Item) string {
-	highestID := 0
-	for _, item := range items {
-		var n int
-		if _, err := fmt.Sscanf(item.ID, "I%d", &n); err == nil && n > highestID {
-			highestID = n
-		}
-	}
-	return fmt.Sprintf("I%d", highestID+1)
 }

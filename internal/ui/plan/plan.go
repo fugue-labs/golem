@@ -39,23 +39,6 @@ func fromDeepTasks(tasks []deep.PlanTask) []Task {
 	return converted
 }
 
-// planCommand mirrors the planning tool's input schema.
-type planCommand struct {
-	Command     string `json:"command"`
-	Tasks       []Task `json:"tasks,omitempty"`
-	TaskID      string `json:"task_id,omitempty"`
-	Status      string `json:"status,omitempty"`
-	Notes       string `json:"notes,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-// planResult captures relevant fields from planning tool results.
-type planResult struct {
-	Status string `json:"status"`
-	Tasks  []Task `json:"tasks,omitempty"`
-	Task   *Task  `json:"task,omitempty"`
-}
-
 func (s *State) HasTasks() bool { return len(s.Tasks) > 0 }
 
 // Progress returns completed and total task counts.
