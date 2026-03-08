@@ -239,25 +239,25 @@ func onOff(v bool) string {
 }
 
 // chatgptTokenRefresher returns a TokenRefresher that auto-refreshes ChatGPT
-// OAuth tokens and persists the updated credentials to disk.
-func chatgptTokenRefresher(cfg *config.Config) openai.TokenRefresher {
+// OAuth tokens and persists the updated credentials to disk. The refresher is
+// synchronized with a mutex since it may be called from concurrent sessions.
+func chatgptTokenRefresher(creds *openaiauth.Credentials) openai.TokenRefresher {
+	var mu sync.Mutex
 	return func() (string, error) {
-		creds := &openaiauth.Credentials{
-			AccessToken:  cfg.ChatGPTAccessToken,
-			RefreshToken: cfg.ChatGPTRefreshToken,
-			AccountID:    cfg.ChatGPTAccountID,
-			AuthMode:     "chatgpt",
-		}
+		mu.Lock()
+		defer mu.Unlock()
 		refreshed, err := openaiauth.RefreshIfNeeded(creds)
 		if err != nil {
-			return cfg.ChatGPTAccessToken, nil
+			// Return the current token so the request can proceed (it may
+			// still be valid even if refresh failed).
+			return creds.AccessToken, nil
 		}
 		if refreshed != creds {
-			cfg.ChatGPTAccessToken = refreshed.AccessToken
-			cfg.ChatGPTRefreshToken = refreshed.RefreshToken
-			_ = openaiauth.SaveCredentials(refreshed)
+			// Update the shared credentials and persist to disk.
+			*creds = *refreshed
+			_ = openaiauth.SaveCredentials(creds)
 		}
-		return cfg.ChatGPTAccessToken, nil
+		return creds.AccessToken, nil
 	}
 }
 
@@ -283,9 +283,9 @@ func createModelWithName(cfg *config.Config, modelName string) (core.Model, erro
 			openai.WithPromptCacheRetention("24h"),
 			openai.WithPromptCacheKey("golem"),
 		}
-		if cfg.ChatGPTAuthMode {
-			opts = append(opts, openai.WithChatGPTAuth(cfg.ChatGPTAccessToken, cfg.ChatGPTAccountID))
-			opts = append(opts, openai.WithTokenRefresher(chatgptTokenRefresher(cfg)))
+		if cfg.ChatGPTCreds != nil {
+			opts = append(opts, openai.WithChatGPTAuth(cfg.ChatGPTCreds.AccessToken, cfg.ChatGPTCreds.AccountID))
+			opts = append(opts, openai.WithTokenRefresher(chatgptTokenRefresher(cfg.ChatGPTCreds)))
 		} else if cfg.APIKey != "" {
 			opts = append(opts, openai.WithAPIKey(cfg.APIKey))
 		}

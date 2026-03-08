@@ -45,11 +45,8 @@ type Config struct {
 	AutoContextMaxTokens int
 	AutoContextKeepLastN int
 
-	// ChatGPT subscription auth fields (populated from ~/.golem/auth.json).
-	ChatGPTAccessToken  string
-	ChatGPTRefreshToken string
-	ChatGPTAccountID    string
-	ChatGPTAuthMode     bool // true when using ChatGPT subscription auth
+	// ChatGPT subscription auth (populated from ~/.golem/auth.json).
+	ChatGPTCreds *openaiauth.Credentials // nil when not using ChatGPT auth
 }
 
 // Load reads configuration from environment variables and flags.
@@ -65,25 +62,23 @@ func Load() (*Config, error) {
 		cfg.Provider = Provider(strings.ToLower(p))
 	}
 
-	// Auto-detect ChatGPT subscription credentials if no explicit OpenAI API
-	// key is set. This lets users with ChatGPT Plus/Pro/Team subscriptions
-	// use OpenAI models without a separate API key.
-	if cfg.Provider == ProviderAnthropic && !hasNonEmptyEnv("ANTHROPIC_API_KEY") {
-		// No explicit provider key — check for stored ChatGPT credentials.
+	// Auto-detect ChatGPT subscription credentials if no explicit API key is
+	// set. This lets users with ChatGPT Plus/Pro/Team subscriptions use OpenAI
+	// models without a separate API key.
+	//
+	// Only auto-detect when the provider was NOT explicitly set via
+	// GOLEM_PROVIDER (to avoid silently overriding the user's choice).
+	explicitProvider := hasNonEmptyEnv("GOLEM_PROVIDER")
+	if !explicitProvider && cfg.Provider == ProviderAnthropic && !hasNonEmptyEnv("ANTHROPIC_API_KEY") {
+		// No explicit provider or key — check for stored ChatGPT credentials.
 		if creds, err := openaiauth.LoadCredentials(); err == nil && creds.AuthMode == "chatgpt" {
 			cfg.Provider = ProviderOpenAI
-			cfg.ChatGPTAccessToken = creds.AccessToken
-			cfg.ChatGPTRefreshToken = creds.RefreshToken
-			cfg.ChatGPTAccountID = creds.AccountID
-			cfg.ChatGPTAuthMode = true
+			cfg.ChatGPTCreds = creds
 		}
 	} else if cfg.Provider == ProviderOpenAI && !hasNonEmptyEnv("OPENAI_API_KEY") {
-		// OpenAI provider explicitly chosen but no API key — try ChatGPT creds.
+		// OpenAI provider chosen (explicitly or by detection) but no API key.
 		if creds, err := openaiauth.LoadCredentials(); err == nil && creds.AuthMode == "chatgpt" {
-			cfg.ChatGPTAccessToken = creds.AccessToken
-			cfg.ChatGPTRefreshToken = creds.RefreshToken
-			cfg.ChatGPTAccountID = creds.AccountID
-			cfg.ChatGPTAuthMode = true
+			cfg.ChatGPTCreds = creds
 		}
 	}
 
