@@ -240,6 +240,16 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 		codeLines = append(codeLines, line)
 	}
 
+	// Expand tabs to spaces before highlighting. Terminal tab stops have
+	// variable width, which breaks ansi.StringWidth / ansi.Truncate (they
+	// treat tabs as zero-width). Four spaces matches Go convention and is
+	// close enough for other languages.
+	for i, line := range codeLines {
+		if strings.ContainsRune(line, '\t') {
+			codeLines[i] = strings.ReplaceAll(line, "\t", "    ")
+		}
+	}
+
 	// Highlight all code as a block for consistent tokenization.
 	codeBlock := strings.Join(codeLines, "\n")
 	highlighted := common.SyntaxHighlight(codeBlock, fileName)

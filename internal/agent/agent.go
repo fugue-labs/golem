@@ -21,7 +21,7 @@ import (
 )
 
 //go:embed system_prompt.md
-var vesselSystemPrompt string
+var golemSystemPrompt string
 
 var (
 	codeRunnerOnce sync.Once
@@ -34,8 +34,7 @@ var (
 const thinkingBudgetResponsePaddingTokens = 16000
 
 // New creates a configured coding agent using Gollem's full codetool stack,
-// plus Vessel-specific runtime guidance that highlights the framework's
-// strongest capabilities in the TUI.
+// plus Golem-specific runtime guidance for the consumer-grade TUI.
 func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extra ...core.AgentOption[string]) (*core.Agent[string], RuntimeState, error) {
 	runtime := buildRuntimeState(cfg, runPrompt)
 
@@ -78,7 +77,7 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 
 	opts := codetool.AgentOptions(cfg.WorkingDir, toolOpts...)
 	opts = append(opts,
-		core.WithSystemPrompt[string](strings.TrimSpace(vesselSystemPrompt)),
+		core.WithSystemPrompt[string](strings.TrimSpace(golemSystemPrompt)),
 		core.WithDynamicSystemPrompt[string](func(_ context.Context, _ *core.RunContext) (string, error) {
 			return buildRuntimePrompt(cfg, runtime, activeSkills), nil
 		}),
@@ -92,8 +91,8 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 			}
 			generated, err := personalityGen(ctx, modelutil.PersonalityRequest{
 				Task:       rc.Prompt,
-				Role:       "terminal coding agent and Gollem/Vessel showcase",
-				BasePrompt: "Prioritize verifier-defined success criteria, decisive execution, and visible progress through planning, invariants, and verification.",
+				Role:       "expert terminal coding agent",
+				BasePrompt: "Decisive execution, explicit planning, disciplined verification, and effective delegation.",
 				Context: map[string]string{
 					"provider": string(cfg.Provider),
 					"model":    cfg.Model,
@@ -135,7 +134,7 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 
 func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills []skills.Skill) string {
 	var b strings.Builder
-	b.WriteString("# Vessel Runtime Profile\n\n")
+	b.WriteString("# Golem Runtime Profile\n\n")
 	b.WriteString("## Effective runtime\n")
 	fmt.Fprintf(&b, "- provider/model: %s/%s\n", cfg.Provider, cfg.Model)
 	fmt.Fprintf(&b, "- timeout: %s\n", cfg.Timeout)
