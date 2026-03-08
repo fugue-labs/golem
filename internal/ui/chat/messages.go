@@ -253,9 +253,8 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 		} else {
 			num = sty.Tool.DiffContext.Render("     │ ")
 		}
-		if len(hline) > width-10 {
-			hline = hline[:width-10]
-		}
+		available := max(0, width-10)
+		hline = ansi.Truncate(hline, available, "")
 		rendered = append(rendered, "    "+num+hline)
 	}
 
