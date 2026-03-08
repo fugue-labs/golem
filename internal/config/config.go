@@ -69,7 +69,7 @@ func Load() (*Config, error) {
 		cfg.BaseURL = firstNonEmpty(os.Getenv("GOLEM_BASE_URL"), os.Getenv("OPENAI_BASE_URL"))
 		cfg.Model = envOr("GOLEM_MODEL", "gpt-5.4")
 		cfg.ReasoningEffort = envOr("GOLEM_REASONING_EFFORT", "xhigh")
-		cfg.AutoContextMaxTokens = 350000
+		cfg.AutoContextMaxTokens = 900000
 		cfg.AutoContextKeepLastN = 20
 
 	case ProviderOpenAICompatible:
