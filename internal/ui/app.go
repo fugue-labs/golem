@@ -29,8 +29,8 @@ import (
 type (
 	textDeltaMsg     struct{ runID int; text string }
 	thinkingDeltaMsg struct{ runID int; text string }
-	toolCallMsg      struct{ runID int; name, args, rawArgs string }
-	toolResultMsg    struct{ runID int; name, result, errText string }
+	toolCallMsg      struct{ runID int; callID, name, args, rawArgs string }
+	toolResultMsg    struct{ runID int; callID, name, result, errText string }
 	agentDoneMsg struct {
 		runID    int
 		usage    core.RunUsage
@@ -159,6 +159,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.messages = append(m.messages, &chat.Message{
 			Kind:     chat.KindToolCall,
+			CallID:   msg.callID,
 			ToolName: msg.name,
 			ToolArgs: extractMainParam(msg.args),
 			RawArgs:  msg.rawArgs,
@@ -177,7 +178,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
-		m.finishLastTool(msg.name, msg.result, msg.errText)
+		m.finishLastTool(msg.callID, msg.name, msg.result, msg.errText)
 		if msg.name == "planning" {
 			if msg.errText != "" {
 				m.planState.HandleToolError()
@@ -452,20 +453,20 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 					}
 				}
 			},
-			OnToolStart: func(_ context.Context, _ *core.RunContext, toolName, argsJSON string) {
+			OnToolStart: func(_ context.Context, _ *core.RunContext, toolCallID, toolName, argsJSON string) {
 				if p != nil {
 					rid := int(m.hookRID.Load())
-					p.Send(toolCallMsg{runID: rid, name: toolName, args: argsJSON, rawArgs: argsJSON})
+					p.Send(toolCallMsg{runID: rid, callID: toolCallID, name: toolName, args: argsJSON, rawArgs: argsJSON})
 				}
 			},
-			OnToolEnd: func(_ context.Context, _ *core.RunContext, toolName, result string, err error) {
+			OnToolEnd: func(_ context.Context, _ *core.RunContext, toolCallID, toolName, result string, err error) {
 				if p != nil {
 					rid := int(m.hookRID.Load())
 					errText := ""
 					if err != nil {
 						errText = err.Error()
 					}
-					p.Send(toolResultMsg{runID: rid, name: toolName, result: result, errText: errText})
+					p.Send(toolResultMsg{runID: rid, callID: toolCallID, name: toolName, result: result, errText: errText})
 				}
 			},
 		}
@@ -533,20 +534,30 @@ func (m *Model) appendOrUpdateThinking(delta string) {
 	})
 }
 
-func (m *Model) finishLastTool(name, result, errText string) {
+func (m *Model) finishLastTool(callID, name, result, errText string) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].Kind == chat.KindToolCall && m.messages[i].ToolName == name && m.messages[i].Status == chat.ToolRunning {
-			if errText != "" {
-				m.messages[i].Status = chat.ToolError
-			} else {
-				m.messages[i].Status = chat.ToolSuccess
-			}
-			break
+		msg := m.messages[i]
+		if msg.Kind != chat.KindToolCall || msg.Status != chat.ToolRunning {
+			continue
 		}
+		// Match by call ID when available, fall back to name match.
+		if callID != "" && msg.CallID != callID {
+			continue
+		}
+		if callID == "" && msg.ToolName != name {
+			continue
+		}
+		if errText != "" {
+			msg.Status = chat.ToolError
+		} else {
+			msg.Status = chat.ToolSuccess
+		}
+		break
 	}
 	if result != "" {
 		m.messages = append(m.messages, &chat.Message{
 			Kind:     chat.KindToolResult,
+			CallID:   callID,
 			ToolName: name,
 			Content:  result,
 		})

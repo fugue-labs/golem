@@ -30,6 +30,7 @@ type Message struct {
 	Content string
 
 	// Tool-specific fields.
+	CallID   string // Provider-assigned tool call ID for exact matching.
 	ToolName string
 	ToolArgs string
 	RawArgs  string // Full JSON args for rich rendering (diffs, etc.)
@@ -169,12 +170,21 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 }
 
 // findToolCallFor finds the tool call that corresponds to a given tool result.
-// When the model makes parallel calls of the same tool (e.g., 3 "view" calls),
-// results arrive in arbitrary order. We pair the Nth result of a given tool
-// name with the Nth-from-last unclaimed call of that name, counting from the
-// result's position backward. This ensures each result maps to a unique call.
+// When a CallID is present (from the provider's tool_call_id), we match
+// exactly. Otherwise, we fall back to rank-based pairing for backward compat.
 func findToolCallFor(msg *Message, allMessages []*Message) *Message {
-	// Find msg's index.
+	// Fast path: exact match by call ID.
+	if msg.CallID != "" {
+		for i := len(allMessages) - 1; i >= 0; i-- {
+			m := allMessages[i]
+			if m.Kind == KindToolCall && m.CallID == msg.CallID {
+				return m
+			}
+		}
+		return nil
+	}
+
+	// Fallback: rank-based pairing for when call IDs aren't available.
 	msgIdx := -1
 	for i := len(allMessages) - 1; i >= 0; i-- {
 		if allMessages[i] == msg {
@@ -186,21 +196,17 @@ func findToolCallFor(msg *Message, allMessages []*Message) *Message {
 		return nil
 	}
 
-	// Count how many results with the same tool name appear between this
-	// result and the preceding tool calls (i.e., this result's "rank" among
-	// its siblings). Then match it to the call at the same rank.
 	resultRank := 0
 	for i := msgIdx - 1; i >= 0; i-- {
 		m := allMessages[i]
 		if m.Kind == KindToolCall && m.ToolName == msg.ToolName {
-			break // Reached the tool call region — stop counting results.
+			break
 		}
 		if m.Kind == KindToolResult && m.ToolName == msg.ToolName {
 			resultRank++
 		}
 	}
 
-	// Now find the (resultRank)th tool call walking backward from before msg.
 	callIdx := 0
 	for i := msgIdx - 1; i >= 0; i-- {
 		m := allMessages[i]
