@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Provider identifies an LLM provider.
@@ -28,6 +30,21 @@ type Config struct {
 	ProjectID       string // for Vertex AI
 	Region          string // for Vertex AI
 	ReasoningEffort string // for reasoning models (e.g., "low", "medium", "high", "xhigh")
+	ThinkingBudget  int    // for Anthropic and Gemini thinking-capable models
+	Timeout         time.Duration
+
+	TeamMode                      string // auto, on, off
+	EffectiveTeamMode             bool
+	TeamModeReason                string
+	DisableDelegate               bool
+	DisableCodeMode               bool
+	CodeModeStatus                string // pending, on, off, unavailable
+	CodeModeError                 string
+	TopLevelPersonality           bool
+	DisableGreedyThinkingPressure bool
+
+	AutoContextMaxTokens int
+	AutoContextKeepLastN int
 }
 
 // Load reads configuration from environment variables and flags.
@@ -37,53 +54,88 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("getting working directory: %w", err)
 	}
 
-	cfg := &Config{
-		WorkingDir: wd,
+	cfg := &Config{WorkingDir: wd}
+	cfg.Provider = detectProvider()
+	if p := strings.TrimSpace(os.Getenv("GOLEM_PROVIDER")); p != "" {
+		cfg.Provider = Provider(strings.ToLower(p))
 	}
 
-	// Detect provider from environment.
-	switch {
-	case os.Getenv("ANTHROPIC_API_KEY") != "":
-		cfg.Provider = ProviderAnthropic
+	switch cfg.Provider {
+	case ProviderAnthropic:
 		cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
 		cfg.Model = envOr("GOLEM_MODEL", "claude-sonnet-4-20250514")
+		cfg.ThinkingBudget = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
+		cfg.AutoContextMaxTokens = 150000
+		cfg.AutoContextKeepLastN = 12
 
-	case os.Getenv("OPENAI_API_KEY") != "":
-		cfg.Provider = ProviderOpenAI
+	case ProviderOpenAI:
 		cfg.APIKey = os.Getenv("OPENAI_API_KEY")
 		cfg.Model = envOr("GOLEM_MODEL", "gpt-5.4")
 		cfg.ReasoningEffort = envOr("GOLEM_REASONING_EFFORT", "xhigh")
+		cfg.AutoContextMaxTokens = 350000
+		cfg.AutoContextKeepLastN = 20
 
-	case os.Getenv("XAI_API_KEY") != "":
-		cfg.Provider = ProviderOpenAICompatible
-		cfg.APIKey = os.Getenv("XAI_API_KEY")
-		cfg.BaseURL = envOr("XAI_BASE_URL", "https://api.x.ai/v1")
+	case ProviderOpenAICompatible:
+		cfg.APIKey = firstNonEmpty(os.Getenv("GOLEM_API_KEY"), os.Getenv("XAI_API_KEY"))
+		cfg.BaseURL = firstNonEmpty(os.Getenv("GOLEM_BASE_URL"), os.Getenv("XAI_BASE_URL"), "https://api.x.ai/v1")
 		cfg.Model = envOr("GOLEM_MODEL", "grok-3")
+		cfg.AutoContextMaxTokens = 900000
+		cfg.AutoContextKeepLastN = 20
 
-	case os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" || os.Getenv("VERTEX_PROJECT") != "":
-		cfg.Provider = ProviderVertexAI
+	case ProviderVertexAI:
 		cfg.ProjectID = os.Getenv("VERTEX_PROJECT")
 		cfg.Region = envOr("VERTEX_REGION", "us-central1")
 		cfg.Model = envOr("GOLEM_MODEL", "gemini-2.5-pro")
+		cfg.ThinkingBudget = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
+		cfg.AutoContextMaxTokens = 900000
+		cfg.AutoContextKeepLastN = 20
+
+	case ProviderVertexAnthropic:
+		cfg.ProjectID = os.Getenv("VERTEX_PROJECT")
+		cfg.Region = envOr("VERTEX_REGION", "us-central1")
+		cfg.Model = envOr("GOLEM_MODEL", "claude-sonnet-4-5")
+		cfg.ThinkingBudget = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
+		cfg.AutoContextMaxTokens = 150000
+		cfg.AutoContextKeepLastN = 12
 
 	default:
-		// Default to anthropic if no env detected.
-		cfg.Provider = ProviderAnthropic
-		cfg.Model = envOr("GOLEM_MODEL", "claude-sonnet-4-20250514")
+		return nil, fmt.Errorf("unsupported provider: %s", cfg.Provider)
 	}
 
-	// Override provider if explicitly set.
-	if p := os.Getenv("GOLEM_PROVIDER"); p != "" {
-		cfg.Provider = Provider(strings.ToLower(p))
+	timeout, err := durationEnvOr("GOLEM_TIMEOUT", 30*time.Minute)
+	if err != nil {
+		return nil, err
 	}
-	if m := os.Getenv("GOLEM_MODEL"); m != "" {
-		cfg.Model = m
+	cfg.Timeout = timeout
+	cfg.TeamMode = teamModeEnvOr("GOLEM_TEAM_MODE", "auto")
+	cfg.DisableDelegate = isTruthyEnv("GOLEM_DISABLE_DELEGATE")
+	cfg.DisableCodeMode = isTruthyEnv("GOLEM_DISABLE_CODE_MODE") || isTruthyEnv("GOLEM_NO_CODE_MODE")
+	cfg.TopLevelPersonality = isTruthyEnv("GOLEM_TOP_LEVEL_PERSONALITY")
+	cfg.DisableGreedyThinkingPressure = isTruthyEnv("GOLEM_DISABLE_GREEDY_THINKING_PRESSURE")
+	cfg.CodeModeStatus = "pending"
+	if cfg.DisableCodeMode {
+		cfg.CodeModeStatus = "off"
 	}
-	if u := os.Getenv("GOLEM_BASE_URL"); u != "" {
-		cfg.BaseURL = u
+	if cfg.DisableDelegate {
+		cfg.TeamModeReason = "delegate disabled"
 	}
 
 	return cfg, nil
+}
+
+func detectProvider() Provider {
+	switch {
+	case os.Getenv("ANTHROPIC_API_KEY") != "":
+		return ProviderAnthropic
+	case os.Getenv("OPENAI_API_KEY") != "":
+		return ProviderOpenAI
+	case os.Getenv("XAI_API_KEY") != "" || os.Getenv("GOLEM_BASE_URL") != "" || os.Getenv("GOLEM_API_KEY") != "":
+		return ProviderOpenAICompatible
+	case os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" || os.Getenv("VERTEX_PROJECT") != "":
+		return ProviderVertexAI
+	default:
+		return ProviderAnthropic
+	}
 }
 
 // ShortDir returns a display-friendly working directory path.
@@ -100,4 +152,55 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func durationEnvOr(key string, fallback time.Duration) (time.Duration, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s duration %q: %w", key, v, err)
+	}
+	return d, nil
+}
+
+func intEnvOr(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func teamModeEnvOr(key, fallback string) string {
+	switch strings.ToLower(strings.TrimSpace(envOr(key, fallback))) {
+	case "on", "off", "auto":
+		return strings.ToLower(strings.TrimSpace(envOr(key, fallback)))
+	default:
+		return fallback
+	}
+}
+
+func isTruthyEnv(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

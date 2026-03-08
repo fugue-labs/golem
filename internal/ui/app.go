@@ -17,6 +17,7 @@ import (
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/skills"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	"github.com/fugue-labs/gollem/core"
@@ -28,7 +29,10 @@ type (
 	thinkingDeltaMsg struct{ text string }
 	toolCallMsg      struct{ name, args, rawArgs string }
 	toolResultMsg    struct{ name, result, errText string }
-	agentDoneMsg     struct{ usage core.RunUsage; err error }
+	agentDoneMsg     struct {
+		usage core.RunUsage
+		err   error
+	}
 )
 
 // Model is the main BubbleTea model.
@@ -56,8 +60,9 @@ type Model struct {
 	usage     core.RunUsage
 	startTime time.Time
 
-	// Plan panel state — mirrored from planning tool messages.
-	planState plan.State
+	// Plan/invariant state — mirrored from tool messages.
+	planState      plan.State
+	invariantState uiinvariants.State
 
 	// Pending user messages queued while the agent is working.
 	// Drained by middleware before each model turn.
@@ -144,6 +149,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.name == "planning" {
 			m.planState.HandleToolCall(msg.rawArgs)
 		}
+		if msg.name == "invariants" {
+			m.invariantState.HandleToolCall(msg.rawArgs)
+		}
 		m.scroll = 0
 		return m, nil
 
@@ -154,6 +162,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.planState.HandleToolError()
 			} else {
 				m.planState.HandleToolResult(msg.result)
+			}
+		}
+		if msg.name == "invariants" {
+			if msg.errText != "" {
+				m.invariantState.HandleToolError()
+			} else {
+				m.invariantState.HandleToolResult(msg.result)
 			}
 		}
 		m.scroll = 0
@@ -233,6 +248,18 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.scroll = 0
 				return m, m.input.Focus()
 			}
+			if text == "/invariants" {
+				m.input.Reset()
+				m.messages = append(m.messages, m.renderInvariantSummaryMessage())
+				m.scroll = 0
+				return m, m.input.Focus()
+			}
+			if text == "/runtime" {
+				m.input.Reset()
+				m.messages = append(m.messages, m.renderRuntimeSummaryMessage())
+				m.scroll = 0
+				return m, m.input.Focus()
+			}
 			if text == "/skills" {
 				m.input.Reset()
 				m.messages = append(m.messages, m.renderSkillsList()...)
@@ -266,6 +293,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		m.busy = true
 		m.startTime = time.Now()
+		m.agent = nil
 		return m, m.runAgent(text)
 
 	case key == "up":
@@ -365,7 +393,7 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 				}
 			},
 		}
-		a, err := agent.New(m.cfg, m.activeSkills,
+		a, err := agent.New(m.cfg, prompt, m.activeSkills,
 			core.WithHooks[string](hooks),
 			core.WithAgentMiddleware[string](m.steeringMiddleware()),
 		)
@@ -668,6 +696,18 @@ func (m *Model) renderStatusBar() string {
 		skills := m.sty.StatusBar.Key.Render("skills ") +
 			m.sty.StatusBar.Value.Render(fmt.Sprintf("%d", len(m.activeSkills)))
 		leftParts = append(leftParts, divider, skills)
+	}
+
+	if completed, total := m.planState.Progress(); total > 0 {
+		plan := m.sty.StatusBar.Key.Render("plan ") +
+			m.sty.StatusBar.Value.Render(fmt.Sprintf("%d/%d", completed, total))
+		leftParts = append(leftParts, divider, plan)
+	}
+
+	if hardTotal, hardPass, hardFail, hardUnresolved, _, _, _ := m.invariantState.Counts(); hardTotal > 0 || len(m.invariantState.Items) > 0 || m.invariantState.Extracted {
+		inv := m.sty.StatusBar.Key.Render("inv ") +
+			m.sty.StatusBar.Value.Render(fmt.Sprintf("%d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved))
+		leftParts = append(leftParts, divider, inv)
 	}
 
 	if m.scroll > 0 {
