@@ -10,6 +10,7 @@ func TestLoadOpenAICompatibleConfig(t *testing.T) {
 	t.Setenv("GOLEM_API_KEY", "test-key")
 	t.Setenv("GOLEM_BASE_URL", "https://example.test/v1")
 	t.Setenv("GOLEM_MODEL", "grok-test")
+	t.Setenv("GOLEM_ROUTER_MODEL", "grok-cheap")
 	t.Setenv("GOLEM_TIMEOUT", "45s")
 	t.Setenv("GOLEM_TEAM_MODE", "on")
 	t.Setenv("GOLEM_DISABLE_CODE_MODE", "true")
@@ -26,6 +27,9 @@ func TestLoadOpenAICompatibleConfig(t *testing.T) {
 	}
 	if cfg.APIKey != "test-key" || cfg.BaseURL != "https://example.test/v1" || cfg.Model != "grok-test" {
 		t.Fatalf("unexpected api/model fields: %+v", cfg)
+	}
+	if cfg.RouterModel != "grok-cheap" {
+		t.Fatalf("router model = %q", cfg.RouterModel)
 	}
 	if cfg.Timeout != 45*time.Second {
 		t.Fatalf("timeout = %s", cfg.Timeout)

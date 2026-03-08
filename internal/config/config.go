@@ -24,6 +24,7 @@ const (
 type Config struct {
 	Provider        Provider
 	Model           string
+	RouterModel     string
 	APIKey          string
 	BaseURL         string // for custom OpenAI/OpenAI-compatible endpoints (xAI, Groq, proxies, etc.)
 	WorkingDir      string
@@ -113,6 +114,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.Timeout = timeout
+	cfg.RouterModel = firstNonEmpty(os.Getenv("GOLEM_ROUTER_MODEL"), os.Getenv("GOLEM_CHEAP_MODEL"))
 	cfg.TeamMode = teamModeEnvOr("GOLEM_TEAM_MODE", "auto")
 	cfg.DisableDelegate = isTruthyEnv("GOLEM_DISABLE_DELEGATE")
 	cfg.DisableCodeMode = isTruthyEnv("GOLEM_DISABLE_CODE_MODE") || isTruthyEnv("GOLEM_NO_CODE_MODE")

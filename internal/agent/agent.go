@@ -36,14 +36,35 @@ const thinkingBudgetResponsePaddingTokens = 16000
 // New creates a configured coding agent using Gollem's full codetool stack,
 // plus Golem-specific runtime guidance for the consumer-grade TUI.
 func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extra ...core.AgentOption[string]) (*core.Agent[string], RuntimeState, error) {
-	runtime := buildRuntimeState(cfg, runPrompt)
+	runtime, err := PrepareRuntime(context.Background(), cfg, runPrompt)
+	if err != nil {
+		return nil, InitialRuntimeState(cfg), err
+	}
+	a, err := NewWithRuntime(cfg, &runtime, activeSkills, extra...)
+	if err != nil {
+		return nil, runtime, err
+	}
+	return a, runtime, nil
+}
+
+// NewWithRuntime constructs a coding agent from a precomputed runtime decision.
+func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []skills.Skill, extra ...core.AgentOption[string]) (*core.Agent[string], error) {
+	if runtime == nil {
+		state := InitialRuntimeState(cfg)
+		runtime = &state
+	}
 
 	model, err := createModel(cfg)
 	if err != nil {
-		return nil, runtime, fmt.Errorf("creating model: %w", err)
+		return nil, fmt.Errorf("creating model: %w", err)
 	}
 
-	session := &codetool.Session{}
+	session := runtime.Session
+	if session == nil {
+		session = &codetool.Session{}
+		runtime.Session = session
+	}
+
 	toolOpts := []codetool.Option{
 		codetool.WithModel(model),
 		codetool.WithTimeout(cfg.Timeout),
@@ -79,7 +100,7 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 	opts = append(opts,
 		core.WithSystemPrompt[string](strings.TrimSpace(golemSystemPrompt)),
 		core.WithDynamicSystemPrompt[string](func(_ context.Context, _ *core.RunContext) (string, error) {
-			return buildRuntimePrompt(cfg, runtime, activeSkills), nil
+			return buildRuntimePrompt(cfg, *runtime, activeSkills), nil
 		}),
 	)
 
@@ -128,8 +149,7 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 	}
 
 	opts = append(opts, extra...)
-	runtime.Session = session
-	return core.NewAgent[string](model, opts...), runtime, nil
+	return core.NewAgent[string](model, opts...), nil
 }
 
 func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills []skills.Skill) string {
@@ -137,6 +157,9 @@ func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills [
 	b.WriteString("# Golem Runtime Profile\n\n")
 	b.WriteString("## Effective runtime\n")
 	fmt.Fprintf(&b, "- provider/model: %s/%s\n", cfg.Provider, cfg.Model)
+	if cfg.RouterModel != "" {
+		fmt.Fprintf(&b, "- router model: %s\n", cfg.RouterModel)
+	}
 	fmt.Fprintf(&b, "- timeout: %s\n", cfg.Timeout)
 	fmt.Fprintf(&b, "- team mode: %s (effective: %s)\n", cfg.TeamMode, onOff(runtime.EffectiveTeamMode))
 	if runtime.TeamModeReason != "" {
@@ -168,124 +191,6 @@ func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills [
 		}
 	}
 	return b.String()
-}
-
-func decideTeamMode(cfg *config.Config, prompt string) (bool, string) {
-	if cfg.DisableDelegate {
-		return false, "delegate disabled"
-	}
-	switch cfg.TeamMode {
-	case "on":
-		return true, "forced on"
-	case "off":
-		return false, "forced off"
-	}
-
-	weakSignals := 0
-	if len(prompt) >= 600 {
-		weakSignals++
-	}
-	if strings.Count(prompt, "\n") >= 8 {
-		weakSignals++
-	}
-
-	type teamModeHint struct {
-		phrase string
-		weight int
-	}
-	hints := []teamModeHint{
-		{phrase: "parallel", weight: 3},
-		{phrase: "parallelize", weight: 3},
-		{phrase: "delegate", weight: 3},
-		{phrase: "subagent", weight: 3},
-		{phrase: "spawn teammate", weight: 3},
-		{phrase: "multiple files", weight: 2},
-		{phrase: "across the repo", weight: 2},
-		{phrase: "large codebase", weight: 2},
-		{phrase: "architecture", weight: 2},
-		{phrase: "migrate", weight: 2},
-		{phrase: "benchmark", weight: 2},
-		{phrase: "full stack", weight: 2},
-		{phrase: "compare", weight: 1},
-		{phrase: "refactor", weight: 1},
-		{phrase: "investigate", weight: 1},
-		{phrase: "research", weight: 1},
-		{phrase: "multi step", weight: 1},
-		{phrase: "end to end", weight: 1},
-	}
-
-	signalScore := 0
-	matched := make([]string, 0, len(hints))
-	for _, hint := range hints {
-		if promptHasAffirmedHint(prompt, hint.phrase) {
-			signalScore += hint.weight
-			matched = append(matched, hint.phrase)
-		}
-	}
-
-	enabled := signalScore >= 3 || (signalScore >= 2 && weakSignals >= 1)
-	reason := fmt.Sprintf("auto heuristic signals=%d weak=%d", signalScore, weakSignals)
-	if len(matched) > 0 {
-		reason += " matched=" + strings.Join(matched, ", ")
-	}
-	return enabled, reason
-}
-
-func promptHasAffirmedHint(prompt, hint string) bool {
-	promptTokens := strings.Fields(normalizePromptText(prompt))
-	hintTokens := strings.Fields(normalizePromptText(hint))
-	if len(promptTokens) == 0 || len(hintTokens) == 0 || len(promptTokens) < len(hintTokens) {
-		return false
-	}
-	for start := 0; start <= len(promptTokens)-len(hintTokens); start++ {
-		if !matchesTokenSequence(promptTokens[start:start+len(hintTokens)], hintTokens) {
-			continue
-		}
-		if !promptHintNegated(promptTokens, start) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchesTokenSequence(tokens, expected []string) bool {
-	for i := range expected {
-		if tokens[i] != expected[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func promptHintNegated(tokens []string, start int) bool {
-	for _, token := range tokens[max(0, start-6):start] {
-		switch token {
-		case "no", "not", "dont", "never", "avoid", "without":
-			return true
-		}
-	}
-	return false
-}
-
-func normalizePromptText(text string) string {
-	var b strings.Builder
-	b.Grow(len(text))
-	lastSpace := true
-	for _, r := range strings.ToLower(text) {
-		switch {
-		case r == '\'':
-			continue
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
-			b.WriteRune(r)
-			lastSpace = false
-		default:
-			if !lastSpace {
-				b.WriteByte(' ')
-				lastSpace = true
-			}
-		}
-	}
-	return strings.TrimSpace(b.String())
 }
 
 func reasoningSandwichConfig(cfg *config.Config) (codetool.ReasoningSandwichConfig, bool) {
@@ -320,10 +225,14 @@ func onOff(v bool) string {
 }
 
 func createModel(cfg *config.Config) (core.Model, error) {
+	return createModelWithName(cfg, cfg.Model)
+}
+
+func createModelWithName(cfg *config.Config, modelName string) (core.Model, error) {
 	switch cfg.Provider {
 	case config.ProviderAnthropic:
 		opts := []anthropic.Option{
-			anthropic.WithModel(cfg.Model),
+			anthropic.WithModel(modelName),
 		}
 		if cfg.APIKey != "" {
 			opts = append(opts, anthropic.WithAPIKey(cfg.APIKey))
@@ -332,7 +241,7 @@ func createModel(cfg *config.Config) (core.Model, error) {
 
 	case config.ProviderOpenAI:
 		opts := []openai.Option{
-			openai.WithModel(cfg.Model),
+			openai.WithModel(modelName),
 			openai.WithMaxTokens(128000),
 			openai.WithPromptCacheRetention("24h"),
 			openai.WithPromptCacheKey("golem"),
@@ -355,7 +264,7 @@ func createModel(cfg *config.Config) (core.Model, error) {
 
 	case config.ProviderOpenAICompatible:
 		opts := []openai.Option{
-			openai.WithModel(cfg.Model),
+			openai.WithModel(modelName),
 			openai.WithMaxTokens(128000),
 			openai.WithPromptCacheRetention("24h"),
 			openai.WithPromptCacheKey("golem"),
@@ -370,7 +279,7 @@ func createModel(cfg *config.Config) (core.Model, error) {
 
 	case config.ProviderVertexAI:
 		opts := []vertexai.Option{
-			vertexai.WithModel(cfg.Model),
+			vertexai.WithModel(modelName),
 		}
 		if cfg.ProjectID != "" {
 			opts = append(opts, vertexai.WithProject(cfg.ProjectID))
@@ -382,7 +291,7 @@ func createModel(cfg *config.Config) (core.Model, error) {
 
 	case config.ProviderVertexAnthropic:
 		opts := []vertexanthropic.Option{
-			vertexanthropic.WithModel(cfg.Model),
+			vertexanthropic.WithModel(modelName),
 		}
 		if cfg.ProjectID != "" {
 			opts = append(opts, vertexanthropic.WithProject(cfg.ProjectID))

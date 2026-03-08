@@ -29,9 +29,18 @@ import (
 
 // Agent event messages sent to the TUI via p.Send from the goroutine.
 type (
-	textDeltaMsg     struct{ runID int; text string }
-	thinkingDeltaMsg struct{ runID int; text string }
-	toolCallMsg      struct{ runID int; callID, name, args, rawArgs string }
+	textDeltaMsg struct {
+		runID int
+		text  string
+	}
+	thinkingDeltaMsg struct {
+		runID int
+		text  string
+	}
+	toolCallMsg struct {
+		runID                       int
+		callID, name, args, rawArgs string
+	}
 	toolResultMsg struct {
 		runID     int
 		callID    string
@@ -39,6 +48,12 @@ type (
 		result    string
 		errText   string
 		toolState map[string]any
+	}
+	runtimePreparedMsg struct {
+		runID   int
+		prompt  string
+		runtime agent.RuntimeState
+		err     error
 	}
 	agentDoneMsg struct {
 		runID     int
@@ -55,6 +70,7 @@ type Model struct {
 	runtime agent.RuntimeState
 	sty     *styles.Styles
 	agent   *core.Agent[string]
+	runCtx  context.Context
 	cancel  context.CancelFunc
 	prog    *tea.Program
 
@@ -67,9 +83,9 @@ type Model struct {
 	activeSkills []skills.Skill
 
 	// State.
-	messages []*chat.Message
-	history  []core.ModelMessage // gollem conversation history across turns
-	scroll   int
+	messages  []*chat.Message
+	history   []core.ModelMessage // gollem conversation history across turns
+	scroll    int
 	width     int
 	height    int
 	busy      bool
@@ -192,12 +208,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scroll = 0
 		return m, nil
 
+	case runtimePreparedMsg:
+		if msg.runID != m.runID {
+			return m, nil
+		}
+		return m.handleRuntimePrepared(msg)
+
 	case agentDoneMsg:
 		if msg.runID != m.runID {
 			return m, nil
 		}
 		m.busy = false
+		m.runCtx = nil
 		m.cancel = nil
+		m.agent = nil
 		m.usage = msg.usage
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.messages = append(m.messages, &chat.Message{
@@ -233,6 +257,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.busy && m.cancel != nil {
 			m.cancel()
 			m.cancel = nil
+			m.runCtx = nil
 			m.busy = false
 			m.runID++
 			m.agent = nil // old Run() may still be in-flight; force new agent
@@ -248,6 +273,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.busy && m.cancel != nil {
 			m.cancel()
 			m.cancel = nil
+			m.runCtx = nil
 			m.busy = false
 			m.runID++
 			m.agent = nil // old Run() may still be in-flight; force new agent
@@ -271,6 +297,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.busy && m.cancel != nil {
 				m.cancel()
 				m.cancel = nil
+				m.runCtx = nil
 			}
 			m.runtime.Session.Cleanup()
 			return m, tea.Quit
@@ -338,7 +365,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.startTime = time.Now()
 		m.runID++
 		m.hookRID.Store(int32(m.runID))
-		return m, m.runAgent(text)
+		m.runCtx, m.cancel = context.WithCancel(context.Background())
+		return m, m.prepareRun(text)
 
 	case key == "up":
 		m.scroll++
@@ -377,6 +405,7 @@ func (m *Model) clearSessionState() {
 	if m.busy && m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
+		m.runCtx = nil
 	}
 	m.runID++
 	m.hookRID.Store(int32(m.runID))
@@ -386,6 +415,7 @@ func (m *Model) clearSessionState() {
 	m.scroll = 0
 	m.usage = core.RunUsage{}
 	m.startTime = time.Time{}
+	m.runCtx = nil
 	m.runtime.Session.Cleanup()
 	if m.cfg != nil {
 		m.runtime = agent.InitialRuntimeState(m.cfg)
@@ -426,69 +456,91 @@ func (m *Model) steeringMiddleware() core.AgentMiddleware {
 	}
 }
 
-func (m *Model) runAgent(prompt string) tea.Cmd {
-	p := m.prog
+func (m *Model) prepareRun(prompt string) tea.Cmd {
 	runID := m.runID
+	ctx := m.runCtx
+	cfg := m.cfg
 
-	// Ensure agent exists with hooks for TUI visibility.
-	// The agent is kept alive across prompts so that stateful resources
-	// (LSP connections, planning/invariant state, middleware counters,
-	// background processes) persist naturally. Only /clear or skill
-	// toggles nil the agent.
-	if m.agent == nil {
-		hooks := core.Hook{
-			OnModelResponse: func(_ context.Context, _ *core.RunContext, resp *core.ModelResponse) {
-				rid := int(m.hookRID.Load())
-				if p == nil || resp == nil {
-					return
-				}
-				for _, part := range resp.Parts {
-					switch pt := part.(type) {
-					case core.TextPart:
-						if pt.Content != "" {
-							p.Send(textDeltaMsg{runID: rid, text: pt.Content})
-						}
-					case core.ThinkingPart:
-						if pt.Content != "" {
-							p.Send(thinkingDeltaMsg{runID: rid, text: pt.Content})
-						}
-					}
-				}
-			},
-			OnToolStart: func(_ context.Context, _ *core.RunContext, toolCallID, toolName, argsJSON string) {
-				if p != nil {
-					rid := int(m.hookRID.Load())
-					p.Send(toolCallMsg{runID: rid, callID: toolCallID, name: toolName, args: argsJSON, rawArgs: argsJSON})
-				}
-			},
-			OnToolEnd: func(_ context.Context, rc *core.RunContext, toolCallID, toolName, result string, err error) {
-				if p != nil {
-					rid := int(m.hookRID.Load())
-					errText := ""
-					if err != nil {
-						errText = err.Error()
-					}
-					p.Send(toolResultMsg{runID: rid, callID: toolCallID, name: toolName, result: result, errText: errText, toolState: rc.ToolState()})
-				}
-			},
+	return func() tea.Msg {
+		runtime, err := agent.PrepareRuntime(ctx, cfg, prompt)
+		return runtimePreparedMsg{runID: runID, prompt: prompt, runtime: runtime, err: err}
+	}
+}
+
+func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, func() tea.Msg {
+			return agentDoneMsg{runID: msg.runID, err: msg.err}
 		}
-		a, runtime, err := agent.New(m.cfg, prompt, m.activeSkills,
-			core.WithHooks[string](hooks),
-			core.WithAgentMiddleware[string](m.steeringMiddleware()),
-		)
-		if err != nil {
-			return func() tea.Msg {
-				return agentDoneMsg{runID: runID, err: err}
-			}
-		}
-		m.agent = a
-		m.runtime = runtime
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
+	msg.runtime.Session = m.runtime.Session
+	a, err := agent.NewWithRuntime(
+		m.cfg,
+		&msg.runtime,
+		m.activeSkills,
+		core.WithHooks[string](m.agentHooks()),
+		core.WithAgentMiddleware[string](m.steeringMiddleware()),
+	)
+	if err != nil {
+		return m, func() tea.Msg {
+			return agentDoneMsg{runID: msg.runID, err: err}
+		}
+	}
+
+	m.agent = a
+	m.runtime = msg.runtime
+	return m, m.runAgent(msg.prompt)
+}
+
+func (m *Model) agentHooks() core.Hook {
+	p := m.prog
+	return core.Hook{
+		OnModelResponse: func(_ context.Context, _ *core.RunContext, resp *core.ModelResponse) {
+			rid := int(m.hookRID.Load())
+			if p == nil || resp == nil {
+				return
+			}
+			for _, part := range resp.Parts {
+				switch pt := part.(type) {
+				case core.TextPart:
+					if pt.Content != "" {
+						p.Send(textDeltaMsg{runID: rid, text: pt.Content})
+					}
+				case core.ThinkingPart:
+					if pt.Content != "" {
+						p.Send(thinkingDeltaMsg{runID: rid, text: pt.Content})
+					}
+				}
+			}
+		},
+		OnToolStart: func(_ context.Context, _ *core.RunContext, toolCallID, toolName, argsJSON string) {
+			if p != nil {
+				rid := int(m.hookRID.Load())
+				p.Send(toolCallMsg{runID: rid, callID: toolCallID, name: toolName, args: argsJSON, rawArgs: argsJSON})
+			}
+		},
+		OnToolEnd: func(_ context.Context, rc *core.RunContext, toolCallID, toolName, result string, err error) {
+			if p != nil {
+				rid := int(m.hookRID.Load())
+				errText := ""
+				if err != nil {
+					errText = err.Error()
+				}
+				p.Send(toolResultMsg{runID: rid, callID: toolCallID, name: toolName, result: result, errText: errText, toolState: rc.ToolState()})
+			}
+		},
+	}
+}
+
+func (m *Model) runAgent(prompt string) tea.Cmd {
+	runID := m.runID
 	a := m.agent
 	history := m.history
+	ctx := m.runCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	return func() tea.Msg {
 		var runOpts []core.RunOption

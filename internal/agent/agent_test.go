@@ -9,31 +9,6 @@ import (
 	"github.com/fugue-labs/gollem/provider/openai"
 )
 
-func TestDecideTeamModeIgnoresNegatedHints(t *testing.T) {
-	cfg := &config.Config{TeamMode: "auto"}
-
-	enabled, reason := decideTeamMode(cfg, "I don't want to refactor this and please don't investigate unrelated issues.")
-	if enabled {
-		t.Fatalf("expected team mode off for negated hints, got on: %s", reason)
-	}
-}
-
-func TestDecideTeamModeEnablesOnStrongAffirmedSignals(t *testing.T) {
-	cfg := &config.Config{TeamMode: "auto"}
-	prompt := strings.Join([]string{
-		"Please parallelize the work across the repo.",
-		"Use a subagent to investigate architecture risks.",
-	}, "\n")
-
-	enabled, reason := decideTeamMode(cfg, prompt)
-	if !enabled {
-		t.Fatalf("expected team mode on, got off: %s", reason)
-	}
-	if !strings.Contains(reason, "matched=") {
-		t.Fatalf("expected matched hints in reason, got %q", reason)
-	}
-}
-
 func TestInitialRuntimeStateSeparatesConfigFromRuntime(t *testing.T) {
 	cfg := &config.Config{TeamMode: "on", DisableCodeMode: true}
 

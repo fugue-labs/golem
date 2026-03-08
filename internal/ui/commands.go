@@ -95,6 +95,9 @@ func (m *Model) renderRuntimeSummaryMessage() *chat.Message {
 	var b strings.Builder
 	b.WriteString("**Runtime profile**\n\n")
 	b.WriteString(fmt.Sprintf("- Provider/model: `%s/%s`\n", m.cfg.Provider, m.cfg.Model))
+	if m.cfg.RouterModel != "" {
+		b.WriteString(fmt.Sprintf("- Router model: `%s`\n", m.cfg.RouterModel))
+	}
 	b.WriteString(fmt.Sprintf("- Timeout: `%s`\n", m.cfg.Timeout))
 	b.WriteString(fmt.Sprintf("- Team mode: `%s` (effective: `%t`)\n", m.cfg.TeamMode, m.runtime.EffectiveTeamMode))
 	if m.runtime.TeamModeReason != "" {

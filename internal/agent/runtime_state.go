@@ -1,7 +1,12 @@
 package agent
 
 import (
+	"context"
+	"fmt"
+	"strings"
+
 	"github.com/fugue-labs/golem/internal/config"
+	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
 )
 
@@ -22,16 +27,47 @@ type RuntimeState struct {
 // InitialRuntimeState returns the baseline runtime state before an agent run is
 // constructed. Forced team-mode settings are still reflected here.
 func InitialRuntimeState(cfg *config.Config) RuntimeState {
-	return buildRuntimeState(cfg, "")
+	return buildRuntimeState(context.Background(), cfg, "", nil)
 }
 
-func buildRuntimeState(cfg *config.Config, prompt string) RuntimeState {
+// PrepareRuntime resolves the effective runtime for a specific prompt without
+// constructing the coding agent yet. This keeps prompt routing cheap to test
+// and lets UIs classify asynchronously before creating/reusing an agent.
+func PrepareRuntime(ctx context.Context, cfg *config.Config, prompt string) (RuntimeState, error) {
+	state := baselineRuntimeState(cfg)
+
+	model, err := createModel(cfg)
+	if err != nil {
+		return state, fmt.Errorf("creating model: %w", err)
+	}
+
+	routerModel := model
+	routerFallback := ""
+	if resolved, err := resolveRouterModelFunc(cfg, model); err != nil {
+		routerFallback = fmt.Sprintf(" router_fallback=%q", compactError(err, 120))
+	} else if resolved != nil {
+		routerModel = resolved
+	}
+
+	state = buildRuntimeState(ctx, cfg, prompt, routerModel)
+	if routerFallback != "" && strings.HasPrefix(state.TeamModeReason, "auto router") {
+		state.TeamModeReason += routerFallback
+	}
+	return state, nil
+}
+
+func baselineRuntimeState(cfg *config.Config) RuntimeState {
 	state := RuntimeState{}
 	if cfg.DisableCodeMode {
 		state.CodeModeStatus = "off"
 	} else {
 		state.CodeModeStatus = "pending"
 	}
-	state.EffectiveTeamMode, state.TeamModeReason = decideTeamMode(cfg, prompt)
+	return state
+}
+
+func buildRuntimeState(ctx context.Context, cfg *config.Config, prompt string, routerModel core.Model) RuntimeState {
+	state := baselineRuntimeState(cfg)
+	state.EffectiveTeamMode, state.TeamModeReason = decideTeamMode(ctx, cfg, prompt, routerModel)
 	return state
 }
