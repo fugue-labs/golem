@@ -27,7 +27,7 @@ type (
 	textDeltaMsg     struct{ text string }
 	thinkingDeltaMsg struct{ text string }
 	toolCallMsg      struct{ name, args, rawArgs string }
-	toolResultMsg    struct{ name, result string }
+	toolResultMsg    struct{ name, result, errText string }
 	agentDoneMsg     struct{ usage core.RunUsage; err error }
 )
 
@@ -148,9 +148,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case toolResultMsg:
-		m.finishLastTool(msg.name, msg.result)
+		m.finishLastTool(msg.name, msg.result, msg.errText)
 		if msg.name == "planning" {
-			m.planState.HandleToolResult(msg.result)
+			if msg.errText != "" {
+				m.planState.HandleToolError()
+			} else {
+				m.planState.HandleToolResult(msg.result)
+			}
 		}
 		m.scroll = 0
 		return m, nil
@@ -351,9 +355,13 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 					p.Send(toolCallMsg{name: toolName, args: argsJSON, rawArgs: argsJSON})
 				}
 			},
-			OnToolEnd: func(_ context.Context, _ *core.RunContext, toolName, result string, _ error) {
+			OnToolEnd: func(_ context.Context, _ *core.RunContext, toolName, result string, err error) {
 				if p != nil {
-					p.Send(toolResultMsg{name: toolName, result: result})
+					errText := ""
+					if err != nil {
+						errText = err.Error()
+					}
+					p.Send(toolResultMsg{name: toolName, result: result, errText: errText})
 				}
 			},
 		}
@@ -415,10 +423,14 @@ func (m *Model) appendOrUpdateThinking(delta string) {
 	})
 }
 
-func (m *Model) finishLastTool(name, result string) {
+func (m *Model) finishLastTool(name, result, errText string) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].Kind == chat.KindToolCall && m.messages[i].ToolName == name && m.messages[i].Status == chat.ToolRunning {
-			m.messages[i].Status = chat.ToolSuccess
+			if errText != "" {
+				m.messages[i].Status = chat.ToolError
+			} else {
+				m.messages[i].Status = chat.ToolSuccess
+			}
 			break
 		}
 	}
@@ -427,6 +439,12 @@ func (m *Model) finishLastTool(name, result string) {
 			Kind:     chat.KindToolResult,
 			ToolName: name,
 			Content:  result,
+		})
+	}
+	if errText != "" {
+		m.messages = append(m.messages, &chat.Message{
+			Kind:    chat.KindError,
+			Content: fmt.Sprintf("%s: %s", name, errText),
 		})
 	}
 }

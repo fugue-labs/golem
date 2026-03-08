@@ -254,7 +254,7 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 // renderEditResult renders a diff-style view showing old and new strings.
 func renderEditResult(msg *Message, toolCall *Message, sty *styles.Styles, width int) string {
 	var args struct {
-		FilePath  string `json:"file_path"`
+		Path      string `json:"path"`
 		OldString string `json:"old_string"`
 		NewString string `json:"new_string"`
 	}
@@ -265,7 +265,7 @@ func renderEditResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 	var rendered []string
 
 	// File header.
-	base := filepath.Base(args.FilePath)
+	base := filepath.Base(args.Path)
 	rendered = append(rendered, "    "+sty.Tool.DiffHeader.Render("--- "+base))
 	rendered = append(rendered, "    "+sty.Tool.DiffHeader.Render("+++ "+base))
 

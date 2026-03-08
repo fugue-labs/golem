@@ -14,6 +14,8 @@ type Task struct {
 type State struct {
 	Tasks       []Task
 	lastCommand string
+	prevTasks   []Task
+	hasPrev     bool
 }
 
 // planCommand mirrors the planning tool's input schema.
@@ -35,6 +37,32 @@ type planResult struct {
 
 func (s *State) HasTasks() bool { return len(s.Tasks) > 0 }
 
+func cloneTasks(tasks []Task) []Task {
+	if tasks == nil {
+		return nil
+	}
+	cloned := make([]Task, len(tasks))
+	copy(cloned, tasks)
+	return cloned
+}
+
+func (s *State) snapshot() {
+	s.prevTasks = cloneTasks(s.Tasks)
+	s.hasPrev = true
+}
+
+func (s *State) clearSnapshot() {
+	s.prevTasks = nil
+	s.hasPrev = false
+}
+
+func (s *State) revertSnapshot() {
+	if s.hasPrev {
+		s.Tasks = cloneTasks(s.prevTasks)
+	}
+	s.clearSnapshot()
+}
+
 // Progress returns completed and total task counts.
 func (s *State) Progress() (completed, total int) {
 	total = len(s.Tasks)
@@ -52,6 +80,8 @@ func (s *State) HandleToolCall(rawArgs string) {
 	if err := json.Unmarshal([]byte(rawArgs), &cmd); err != nil {
 		return
 	}
+
+	s.snapshot()
 	s.lastCommand = cmd.Command
 
 	switch cmd.Command {
@@ -106,18 +136,18 @@ func (s *State) HandleToolCall(rawArgs string) {
 // HandleToolResult reconciles state from planning tool results.
 // The "get" result contains the full task list, serving as a sync point.
 func (s *State) HandleToolResult(result string) {
+	defer s.clearSnapshot()
+
 	var res planResult
 	if err := json.Unmarshal([]byte(result), &res); err != nil {
 		return
 	}
 
-	// "get" returns the full task list — use it as ground truth.
 	if s.lastCommand == "get" && res.Tasks != nil {
 		s.Tasks = res.Tasks
 		return
 	}
 
-	// "update" result contains the updated task — reconcile it.
 	if s.lastCommand == "update" && res.Task != nil {
 		for i := range s.Tasks {
 			if s.Tasks[i].ID == res.Task.ID {
@@ -126,4 +156,8 @@ func (s *State) HandleToolResult(result string) {
 			}
 		}
 	}
+}
+
+func (s *State) HandleToolError() {
+	s.revertSnapshot()
 }
