@@ -168,17 +168,47 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 	return header
 }
 
-// findToolCallFor finds the most recent tool call for a given tool result.
+// findToolCallFor finds the tool call that corresponds to a given tool result.
+// When the model makes parallel calls of the same tool (e.g., 3 "view" calls),
+// results arrive in arbitrary order. We pair the Nth result of a given tool
+// name with the Nth-from-last unclaimed call of that name, counting from the
+// result's position backward. This ensures each result maps to a unique call.
 func findToolCallFor(msg *Message, allMessages []*Message) *Message {
-	// Walk backwards from this message to find its tool call.
-	found := false
+	// Find msg's index.
+	msgIdx := -1
 	for i := len(allMessages) - 1; i >= 0; i-- {
 		if allMessages[i] == msg {
-			found = true
-			continue
+			msgIdx = i
+			break
 		}
-		if found && allMessages[i].Kind == KindToolCall && allMessages[i].ToolName == msg.ToolName {
-			return allMessages[i]
+	}
+	if msgIdx < 0 {
+		return nil
+	}
+
+	// Count how many results with the same tool name appear between this
+	// result and the preceding tool calls (i.e., this result's "rank" among
+	// its siblings). Then match it to the call at the same rank.
+	resultRank := 0
+	for i := msgIdx - 1; i >= 0; i-- {
+		m := allMessages[i]
+		if m.Kind == KindToolCall && m.ToolName == msg.ToolName {
+			break // Reached the tool call region — stop counting results.
+		}
+		if m.Kind == KindToolResult && m.ToolName == msg.ToolName {
+			resultRank++
+		}
+	}
+
+	// Now find the (resultRank)th tool call walking backward from before msg.
+	callIdx := 0
+	for i := msgIdx - 1; i >= 0; i-- {
+		m := allMessages[i]
+		if m.Kind == KindToolCall && m.ToolName == msg.ToolName {
+			if callIdx == resultRank {
+				return m
+			}
+			callIdx++
 		}
 	}
 	return nil
