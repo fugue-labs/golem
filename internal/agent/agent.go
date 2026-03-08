@@ -162,6 +162,9 @@ func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills [
 	}
 	fmt.Fprintf(&b, "- timeout: %s\n", cfg.Timeout)
 	fmt.Fprintf(&b, "- team mode: %s (effective: %s)\n", cfg.TeamMode, onOff(runtime.EffectiveTeamMode))
+	if runtime.RouterModelName != "" {
+		fmt.Fprintf(&b, "- effective router model: %s\n", runtime.RouterModelName)
+	}
 	if runtime.TeamModeReason != "" {
 		fmt.Fprintf(&b, "- team mode note: %s\n", runtime.TeamModeReason)
 	}
@@ -180,6 +183,13 @@ func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills [
 		fmt.Fprintf(&b, "- auto-context: %d tokens, keep last %d turns\n", cfg.AutoContextMaxTokens, cfg.AutoContextKeepLastN)
 	}
 	fmt.Fprintf(&b, "- top-level personality: %s\n", onOff(cfg.TopLevelPersonality))
+	b.WriteString("\n## Tool surfaces\n")
+	b.WriteString("- guaranteed repo tools: bash, bash_status, bash_kill, view, edit, write, multi_edit, glob, grep, ls, lsp\n")
+	b.WriteString("- guaranteed workflow tools: planning, invariants\n")
+	fmt.Fprintf(&b, "- delegate: %s\n", onOff(!cfg.DisableDelegate))
+	fmt.Fprintf(&b, "- execute_code: %s\n", runtime.CodeModeStatus)
+	fmt.Fprintf(&b, "- open_image: %s\n", runtime.OpenImageStatus)
+	b.WriteString("- note: environment/toolchain-dependent capabilities should be trusted only when they appear in the active tool list.\n")
 	if len(activeSkills) > 0 {
 		b.WriteString("\n## Active skills\n")
 		for _, s := range activeSkills {

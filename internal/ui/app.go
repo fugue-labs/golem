@@ -255,29 +255,15 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key == "ctrl+c":
 		if m.busy && m.cancel != nil {
-			m.cancel()
-			m.cancel = nil
-			m.runCtx = nil
-			m.busy = false
-			m.runID++
-			m.agent = nil // old Run() may still be in-flight; force new agent
-			// Clean up old session resources in background (can't block —
-			// Run() goroutine is still winding down).
-			go m.runtime.Session.Cleanup()
+			m.cancelActiveRun(true)
 			return m, m.input.Focus()
 		}
-		m.runtime.Session.Cleanup()
+		m.cleanupSession()
 		return m, tea.Quit
 
 	case key == "escape":
 		if m.busy && m.cancel != nil {
-			m.cancel()
-			m.cancel = nil
-			m.runCtx = nil
-			m.busy = false
-			m.runID++
-			m.agent = nil // old Run() may still be in-flight; force new agent
-			go m.runtime.Session.Cleanup()
+			m.cancelActiveRun(true)
 			return m, m.input.Focus()
 		}
 
@@ -295,11 +281,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if text == "/quit" || text == "/exit" {
 			if m.busy && m.cancel != nil {
-				m.cancel()
-				m.cancel = nil
-				m.runCtx = nil
+				m.cancelActiveRun(false)
 			}
-			m.runtime.Session.Cleanup()
+			m.cleanupSession()
 			return m, tea.Quit
 		}
 		if text == "/clear" {
@@ -402,13 +386,7 @@ func (m *Model) drainPending() []string {
 }
 
 func (m *Model) clearSessionState() {
-	if m.busy && m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
-		m.runCtx = nil
-	}
-	m.runID++
-	m.hookRID.Store(int32(m.runID))
+	m.cancelActiveRun(false)
 	m.busy = false
 	m.messages = nil
 	m.history = nil
@@ -416,7 +394,7 @@ func (m *Model) clearSessionState() {
 	m.usage = core.RunUsage{}
 	m.startTime = time.Time{}
 	m.runCtx = nil
-	m.runtime.Session.Cleanup()
+	m.cleanupSession()
 	if m.cfg != nil {
 		m.runtime = agent.InitialRuntimeState(m.cfg)
 	} else {
@@ -661,9 +639,9 @@ func (m *Model) View() tea.View {
 		chatHeight = 1
 	}
 
-	const panelWidth = 32
-	const minWidthForPanel = 100
-	showPanel := m.planState.HasTasks() && m.width >= minWidthForPanel
+	const panelWidth = 38
+	const minWidthForPanel = 110
+	showPanel := m.hasWorkflowPanel() && m.width >= minWidthForPanel
 
 	chatWidth := m.width
 	if showPanel {
@@ -674,7 +652,7 @@ func (m *Model) View() tea.View {
 	if showPanel {
 		// Both sides have exact dimensions — join line-by-line.
 		chatLines := strings.Split(chatSection, "\n")
-		panelLines := strings.Split(m.renderPlanPanel(chatHeight, panelWidth), "\n")
+		panelLines := strings.Split(m.renderWorkflowPanel(chatHeight, panelWidth), "\n")
 		combined := make([]string, chatHeight)
 		for i := range combined {
 			cl, pl := "", ""
@@ -805,7 +783,11 @@ func (m *Model) renderInput() string {
 	if m.busy {
 		elapsed := time.Since(m.startTime).Truncate(time.Second)
 		sp := m.spinner.View()
-		status := m.sty.Muted.Render(fmt.Sprintf(" %s %s", sp, elapsed))
+		statusText := fmt.Sprintf("%s", elapsed)
+		if queued := m.pendingCount(); queued > 0 {
+			statusText += fmt.Sprintf(" · %d queued", queued)
+		}
+		status := m.sty.Muted.Render(fmt.Sprintf(" %s %s", sp, statusText))
 		prompt := m.sty.Input.Prompt.Render(" > ")
 		return status + "\n" + prompt + m.input.View()
 	}
@@ -852,6 +834,12 @@ func (m *Model) renderStatusBar() string {
 		inv := m.sty.StatusBar.Key.Render("inv ") +
 			m.sty.StatusBar.Value.Render(fmt.Sprintf("%d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved))
 		leftParts = append(leftParts, divider, inv)
+	}
+
+	if queued := m.pendingCount(); queued > 0 {
+		queue := m.sty.StatusBar.Key.Render("queued ") +
+			m.sty.StatusBar.Value.Render(fmt.Sprintf("%d", queued))
+		leftParts = append(leftParts, divider, queue)
 	}
 
 	if m.scroll > 0 {

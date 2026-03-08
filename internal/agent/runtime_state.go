@@ -8,6 +8,7 @@ import (
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
+	"github.com/fugue-labs/gollem/modelutil"
 )
 
 // RuntimeState captures mutable runtime-only execution decisions derived for a
@@ -16,8 +17,10 @@ import (
 type RuntimeState struct {
 	EffectiveTeamMode bool
 	TeamModeReason    string
+	RouterModelName   string
 	CodeModeStatus    string
 	CodeModeError     string
+	OpenImageStatus   string
 
 	// Session holds the persistent session handle for interactive TUIs.
 	// Call Session.Cleanup() when the session ends (e.g., /clear).
@@ -40,6 +43,10 @@ func PrepareRuntime(ctx context.Context, cfg *config.Config, prompt string) (Run
 	if err != nil {
 		return state, fmt.Errorf("creating model: %w", err)
 	}
+	openImageStatus := "off"
+	if modelutil.GetProfile(model).SupportsVision {
+		openImageStatus = "on"
+	}
 
 	routerModel := model
 	routerFallback := ""
@@ -50,6 +57,7 @@ func PrepareRuntime(ctx context.Context, cfg *config.Config, prompt string) (Run
 	}
 
 	state = buildRuntimeState(ctx, cfg, prompt, routerModel)
+	state.OpenImageStatus = openImageStatus
 	if routerFallback != "" && strings.HasPrefix(state.TeamModeReason, "auto router") {
 		state.TeamModeReason += routerFallback
 	}
@@ -58,16 +66,26 @@ func PrepareRuntime(ctx context.Context, cfg *config.Config, prompt string) (Run
 
 func baselineRuntimeState(cfg *config.Config) RuntimeState {
 	state := RuntimeState{}
-	if cfg.DisableCodeMode {
+	if cfg != nil {
+		state.RouterModelName = strings.TrimSpace(cfg.RouterModel)
+		if state.RouterModelName == "" {
+			state.RouterModelName = strings.TrimSpace(cfg.Model)
+		}
+	}
+	if cfg != nil && cfg.DisableCodeMode {
 		state.CodeModeStatus = "off"
 	} else {
 		state.CodeModeStatus = "pending"
 	}
+	state.OpenImageStatus = "pending"
 	return state
 }
 
 func buildRuntimeState(ctx context.Context, cfg *config.Config, prompt string, routerModel core.Model) RuntimeState {
 	state := baselineRuntimeState(cfg)
+	if routerModel != nil {
+		state.RouterModelName = strings.TrimSpace(routerModel.ModelName())
+	}
 	state.EffectiveTeamMode, state.TeamModeReason = decideTeamMode(ctx, cfg, prompt, routerModel)
 	return state
 }

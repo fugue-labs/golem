@@ -100,13 +100,11 @@ func (m *Model) renderRuntimeSummaryMessage() *chat.Message {
 	}
 	b.WriteString(fmt.Sprintf("- Timeout: `%s`\n", m.cfg.Timeout))
 	b.WriteString(fmt.Sprintf("- Team mode: `%s` (effective: `%t`)\n", m.cfg.TeamMode, m.runtime.EffectiveTeamMode))
+	if m.runtime.RouterModelName != "" {
+		b.WriteString(fmt.Sprintf("- Effective router model: `%s`\n", m.runtime.RouterModelName))
+	}
 	if m.runtime.TeamModeReason != "" {
 		b.WriteString(fmt.Sprintf("- Team mode reason: %s\n", m.runtime.TeamModeReason))
-	}
-	b.WriteString(fmt.Sprintf("- Delegate: `%t`\n", !m.cfg.DisableDelegate))
-	b.WriteString(fmt.Sprintf("- Code mode: `%s`\n", m.runtime.CodeModeStatus))
-	if m.runtime.CodeModeError != "" {
-		b.WriteString(fmt.Sprintf("- Code mode note: %s\n", m.runtime.CodeModeError))
 	}
 	if m.cfg.ReasoningEffort != "" {
 		b.WriteString(fmt.Sprintf("- Reasoning effort: `%s`\n", m.cfg.ReasoningEffort))
@@ -118,5 +116,17 @@ func (m *Model) renderRuntimeSummaryMessage() *chat.Message {
 		b.WriteString(fmt.Sprintf("- Auto-context: `%d` tokens, keep last `%d` turns\n", m.cfg.AutoContextMaxTokens, m.cfg.AutoContextKeepLastN))
 	}
 	b.WriteString(fmt.Sprintf("- Top-level personality: `%t`\n", m.cfg.TopLevelPersonality))
+	b.WriteString("\n**Tool surfaces**\n\n")
+	b.WriteString("- Guaranteed repo tools: `bash`, `bash_status`, `bash_kill`, `view`, `edit`, `write`, `multi_edit`, `glob`, `grep`, `ls`, `lsp`\n")
+	b.WriteString("- Guaranteed workflow tools: `planning`, `invariants`\n")
+	b.WriteString(fmt.Sprintf("- Delegate: `%t`\n", !m.cfg.DisableDelegate))
+	b.WriteString(fmt.Sprintf("- Execute code: `%s`\n", m.runtime.CodeModeStatus))
+	if m.runtime.CodeModeError != "" {
+		b.WriteString(fmt.Sprintf("- Execute code note: %s\n", m.runtime.CodeModeError))
+	}
+	if m.runtime.OpenImageStatus != "" {
+		b.WriteString(fmt.Sprintf("- Open image: `%s`\n", m.runtime.OpenImageStatus))
+	}
+	b.WriteString("- Optional environment-dependent tools should only be trusted when surfaced by the runtime/tool list.\n")
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
