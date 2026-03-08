@@ -34,6 +34,39 @@ type Message struct {
 	ToolArgs string
 	RawArgs  string // Full JSON args for rich rendering (diffs, etc.)
 	Status   ToolStatus
+
+	// Render cache — avoids re-rendering unchanged messages every frame.
+	cachedRender  string
+	cachedWidth   int
+	cachedContent string
+	cachedStatus  ToolStatus
+	cachedLines   int // number of lines in cachedRender
+}
+
+// Render returns the rendered string for this message, using a cache to avoid
+// re-rendering unchanged messages. The cache is invalidated when the message
+// content, status, or rendering width changes.
+func (msg *Message) Render(sty *styles.Styles, width int, allMessages []*Message) string {
+	if msg.cachedRender != "" && msg.cachedWidth == width &&
+		msg.cachedContent == msg.Content && msg.cachedStatus == msg.Status {
+		return msg.cachedRender
+	}
+	rendered := RenderMessage(msg, sty, width, allMessages)
+	msg.cachedRender = rendered
+	msg.cachedWidth = width
+	msg.cachedContent = msg.Content
+	msg.cachedStatus = msg.Status
+	msg.cachedLines = strings.Count(rendered, "\n") + 1
+	if rendered == "" {
+		msg.cachedLines = 0
+	}
+	return rendered
+}
+
+// Lines returns the cached line count for this message.
+// Must call Render first.
+func (msg *Message) Lines() int {
+	return msg.cachedLines
 }
 
 // ToolStatus tracks tool execution state.
@@ -116,7 +149,8 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 
 	// Show primary parameter.
 	if msg.ToolArgs != "" {
-		param := ansi.Truncate(msg.ToolArgs, width-lipgloss.Width(header)-2, "...")
+		available := max(0, width-lipgloss.Width(header)-2)
+		param := ansi.Truncate(msg.ToolArgs, available, "...")
 		header += " " + sty.Tool.ParamMain.Render(param)
 	}
 
@@ -152,6 +186,8 @@ func renderToolResult(msg *Message, sty *styles.Styles, width int, allMessages [
 			return renderViewResult(msg, toolCall, sty, width)
 		case "edit":
 			return renderEditResult(msg, toolCall, sty, width)
+		case "write":
+			return renderWriteResult(msg, toolCall, sty, width)
 		}
 	}
 
@@ -161,7 +197,10 @@ func renderToolResult(msg *Message, sty *styles.Styles, width int, allMessages [
 // renderViewResult renders file content with syntax highlighting.
 func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width int) string {
 	// Extract file path from tool args for language detection.
-	fileName := extractJSONField(toolCall.RawArgs, "file_path")
+	fileName := extractJSONField(toolCall.RawArgs, "path")
+	if fileName == "" {
+		fileName = extractJSONField(toolCall.RawArgs, "file_path")
+	}
 
 	// Separate line numbers from content for highlighting.
 	rawLines := strings.Split(msg.Content, "\n")

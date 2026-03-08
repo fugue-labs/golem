@@ -16,6 +16,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Redirect stderr to a log file so codetool's middleware logging
+	// doesn't corrupt the TUI. Logs go to /tmp/golem.log for debugging.
+	logFile, err := os.OpenFile("/tmp/golem.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err == nil {
+		os.Stderr = logFile
+		defer logFile.Close()
+	}
+
 	m := ui.New(cfg)
 	p := tea.NewProgram(m)
 	m.SetProgram(p)

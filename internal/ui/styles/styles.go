@@ -11,15 +11,18 @@ import (
 
 // Icons used throughout the UI.
 const (
-	CheckIcon   = "✓"
-	SpinnerIcon = "⋯"
-	PendingIcon = "●"
-	ErrorIcon   = "×"
-	ModelIcon   = "◇"
-	ArrowRight  = "→"
-	BorderThin  = "│"
-	BorderThick = "▌"
-	Separator   = "─"
+	CheckIcon      = "✓"
+	SpinnerIcon    = "⋯"
+	PendingIcon    = "●"
+	ErrorIcon      = "×"
+	ModelIcon      = "◇"
+	ArrowRight     = "→"
+	BorderThin     = "│"
+	BorderThick    = "▌"
+	Separator      = "─"
+	HollowIcon     = "○"
+	InProgressIcon = "◐"
+	BlockedIcon    = "✗"
 )
 
 // Styles contains all visual styles for the application.
@@ -94,6 +97,20 @@ type Styles struct {
 		Cursor  lipgloss.Style
 		Border  lipgloss.Style
 		Focused lipgloss.Style
+	}
+
+	// Right-hand panel
+	Panel struct {
+		Base           lipgloss.Style
+		Title          lipgloss.Style
+		Separator      lipgloss.Style
+		Progress       lipgloss.Style
+		TaskText       lipgloss.Style
+		TaskDone       lipgloss.Style
+		IconPending    lipgloss.Style
+		IconInProgress lipgloss.Style
+		IconCompleted  lipgloss.Style
+		IconBlocked    lipgloss.Style
 	}
 
 	// Spinner
@@ -236,6 +253,21 @@ func New(_ color.Color) *Styles {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(primary).
 		Padding(0, 1)
+
+	// Panel.
+	s.Panel.Base = lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(border).
+		PaddingLeft(1)
+	s.Panel.Title = lipgloss.NewStyle().Foreground(primary).Bold(true)
+	s.Panel.Separator = lipgloss.NewStyle().Foreground(fgSubtle)
+	s.Panel.Progress = lipgloss.NewStyle().Foreground(fgMuted)
+	s.Panel.TaskText = lipgloss.NewStyle().Foreground(fgBase)
+	s.Panel.TaskDone = lipgloss.NewStyle().Foreground(fgMuted).Strikethrough(true)
+	s.Panel.IconPending = lipgloss.NewStyle().Foreground(fgMuted)
+	s.Panel.IconInProgress = lipgloss.NewStyle().Foreground(yellow)
+	s.Panel.IconCompleted = lipgloss.NewStyle().Foreground(green)
+	s.Panel.IconBlocked = lipgloss.NewStyle().Foreground(red)
 
 	// Spinner.
 	s.SpinnerStyle = lipgloss.NewStyle().Foreground(primary)
