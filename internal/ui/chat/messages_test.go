@@ -66,3 +66,51 @@ func TestFindToolCallFor_NoMatch(t *testing.T) {
 		t.Errorf("expected nil, got %+v", got)
 	}
 }
+
+func TestLongestCommonDirPrefix(t *testing.T) {
+	tests := []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{"empty", nil, ""},
+		{"single", []string{"/a/b/c.go"}, "/a/b/"},
+		{"same dir", []string{"/a/b/c.go", "/a/b/d.go"}, "/a/b/"},
+		{"nested", []string{"/a/b/c/d.go", "/a/b/e/f.go"}, "/a/b/"},
+		{"root common", []string{"/x/y.go", "/z/w.go"}, "/"},
+		{"relative", []string{"src/a.go", "src/b.go"}, "src/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := longestCommonDirPrefix(tt.paths)
+			if got != tt.want {
+				t.Errorf("longestCommonDirPrefix(%v) = %q, want %q", tt.paths, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseGrepLine(t *testing.T) {
+	tests := []struct {
+		line    string
+		path    string
+		lineNum string
+		code    string
+		ok      bool
+	}{
+		{"src/main.go:42: func main() {", "src/main.go", "42", "func main() {", true},
+		{"src/main.go:42:func main() {", "src/main.go", "42", "func main() {", true},
+		{"no match here", "", "", "", false},
+		{"file.go:abc: not a number", "", "", "", false},
+		{"", "", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			path, num, code, ok := parseGrepLine(tt.line)
+			if ok != tt.ok || path != tt.path || num != tt.lineNum || code != tt.code {
+				t.Errorf("parseGrepLine(%q) = (%q, %q, %q, %v), want (%q, %q, %q, %v)",
+					tt.line, path, num, code, ok, tt.path, tt.lineNum, tt.code, tt.ok)
+			}
+		})
+	}
+}

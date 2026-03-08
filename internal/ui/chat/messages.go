@@ -188,6 +188,8 @@ func renderToolCallResult(msg *Message, sty *styles.Styles, width int) string {
 		return renderWriteResult(msg.Content, msg, sty, width)
 	case "bash":
 		return renderBashResult(msg.Content, sty, width)
+	case "grep":
+		return renderGrepResult(msg.Content, sty, width)
 	default:
 		return renderPlainResult(msg.Content, sty, width)
 	}
@@ -352,6 +354,171 @@ func renderBashResult(content string, sty *styles.Styles, width int) string {
 		))
 	}
 	return strings.Join(rendered, "\n")
+}
+
+// renderGrepResult renders grep output with relative paths and syntax highlighting.
+func renderGrepResult(content string, sty *styles.Styles, width int) string {
+	rawLines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+
+	// Separate content lines from the summary footer (e.g., "(5 matches in 2 files)").
+	var contentLines []string
+	var footer string
+	for _, line := range rawLines {
+		if strings.HasPrefix(line, "(") && strings.HasSuffix(line, ")") {
+			footer = line
+		} else if strings.HasPrefix(line, "... (results truncated") {
+			footer = line
+		} else {
+			contentLines = append(contentLines, line)
+		}
+	}
+
+	maxLines := 10
+	truncated := len(contentLines) > maxLines
+	if truncated {
+		contentLines = contentLines[:maxLines]
+	}
+
+	// Parse grep lines to extract paths, find common prefix.
+	type grepLine struct {
+		prefix   string // " " or ">" match indicator
+		filePath string
+		lineNum  string
+		code     string
+	}
+	var parsed []grepLine
+	var paths []string
+	for _, line := range contentLines {
+		if line == "---" || line == "--" {
+			parsed = append(parsed, grepLine{})
+			continue
+		}
+		// Lines may start with " " (context) or ">" (match).
+		indicator := ""
+		rest := line
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '>') {
+			indicator = string(line[0])
+			rest = line[1:]
+		}
+		// Parse path:linenum: code
+		if p, num, code, ok := parseGrepLine(rest); ok {
+			parsed = append(parsed, grepLine{prefix: indicator, filePath: p, lineNum: num, code: code})
+			paths = append(paths, p)
+			continue
+		}
+		// Unparseable — treat as raw.
+		parsed = append(parsed, grepLine{code: line})
+	}
+
+	// Strip common directory prefix to show relative paths.
+	commonDir := longestCommonDirPrefix(paths)
+
+	prefix := sty.Tool.ResultPrefix.Render("⎿")
+	var rendered []string
+	for _, gl := range parsed {
+		if gl.filePath == "" && gl.code == "" {
+			// Separator line — skip or render subtle.
+			continue
+		}
+		if gl.filePath == "" {
+			// Unparseable line.
+			available := max(0, width-8)
+			rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentCode.Render(
+				ansi.Truncate(gl.code, available, "..."),
+			))
+			continue
+		}
+
+		relPath := strings.TrimPrefix(gl.filePath, commonDir)
+		locStr := relPath + ":" + gl.lineNum + ":"
+		loc := sty.Tool.DiffContext.Render(locStr)
+
+		// Syntax-highlight the code portion.
+		highlighted := common.SyntaxHighlight(gl.code, gl.filePath)
+		highlighted = strings.TrimRight(highlighted, "\n")
+
+		available := max(0, width-lipgloss.Width(loc)-8)
+		highlighted = ansi.Truncate(highlighted, available, "...")
+
+		rendered = append(rendered, "  "+prefix+" "+loc+" "+highlighted)
+	}
+
+	if truncated {
+		total := len(strings.Split(strings.TrimRight(content, "\n"), "\n"))
+		rendered = append(rendered, "  "+prefix+" "+sty.Tool.Truncation.Render(
+			fmt.Sprintf("... (%d lines hidden)", total-maxLines),
+		))
+	}
+	if footer != "" {
+		rendered = append(rendered, "  "+prefix+" "+sty.Tool.Truncation.Render(footer))
+	}
+
+	return strings.Join(rendered, "\n")
+}
+
+// parseGrepLine parses "path:linenum: code" or "path:linenum:code".
+func parseGrepLine(line string) (path, lineNum, code string, ok bool) {
+	// Find first colon (end of path).
+	i := strings.IndexByte(line, ':')
+	if i <= 0 {
+		return "", "", "", false
+	}
+	path = line[:i]
+
+	// Find second colon (end of line number).
+	rest := line[i+1:]
+	j := strings.IndexByte(rest, ':')
+	if j <= 0 {
+		return "", "", "", false
+	}
+	lineNum = rest[:j]
+
+	// Verify line number is numeric.
+	for _, c := range lineNum {
+		if c < '0' || c > '9' {
+			return "", "", "", false
+		}
+	}
+
+	code = rest[j+1:]
+	if len(code) > 0 && code[0] == ' ' {
+		code = code[1:]
+	}
+	return path, lineNum, code, true
+}
+
+// longestCommonDirPrefix returns the longest shared directory prefix among paths.
+func longestCommonDirPrefix(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+
+	prefix := paths[0]
+	if !strings.HasSuffix(prefix, "/") {
+		idx := strings.LastIndexByte(prefix, '/')
+		if idx < 0 {
+			prefix = ""
+		} else {
+			prefix = prefix[:idx+1]
+		}
+	}
+
+	for _, p := range paths[1:] {
+		for prefix != "" && !strings.HasPrefix(p, prefix) {
+			trimmed := strings.TrimRight(prefix, "/")
+			idx := strings.LastIndexByte(trimmed, '/')
+			switch {
+			case idx >= 0:
+				prefix = trimmed[:idx+1]
+			case strings.HasPrefix(prefix, "/"):
+				prefix = "/"
+			default:
+				prefix = ""
+			}
+		}
+	}
+
+	return prefix
 }
 
 // renderEditResult renders a diff-style view showing old and new strings.
