@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	openaiauth "github.com/fugue-labs/gollem/auth/openai"
 )
 
 // Provider identifies an LLM provider.
@@ -42,6 +44,12 @@ type Config struct {
 
 	AutoContextMaxTokens int
 	AutoContextKeepLastN int
+
+	// ChatGPT subscription auth fields (populated from ~/.golem/auth.json).
+	ChatGPTAccessToken  string
+	ChatGPTRefreshToken string
+	ChatGPTAccountID    string
+	ChatGPTAuthMode     bool // true when using ChatGPT subscription auth
 }
 
 // Load reads configuration from environment variables and flags.
@@ -55,6 +63,28 @@ func Load() (*Config, error) {
 	cfg.Provider = detectProvider()
 	if p := strings.TrimSpace(os.Getenv("GOLEM_PROVIDER")); p != "" {
 		cfg.Provider = Provider(strings.ToLower(p))
+	}
+
+	// Auto-detect ChatGPT subscription credentials if no explicit OpenAI API
+	// key is set. This lets users with ChatGPT Plus/Pro/Team subscriptions
+	// use OpenAI models without a separate API key.
+	if cfg.Provider == ProviderAnthropic && !hasNonEmptyEnv("ANTHROPIC_API_KEY") {
+		// No explicit provider key — check for stored ChatGPT credentials.
+		if creds, err := openaiauth.LoadCredentials(); err == nil && creds.AuthMode == "chatgpt" {
+			cfg.Provider = ProviderOpenAI
+			cfg.ChatGPTAccessToken = creds.AccessToken
+			cfg.ChatGPTRefreshToken = creds.RefreshToken
+			cfg.ChatGPTAccountID = creds.AccountID
+			cfg.ChatGPTAuthMode = true
+		}
+	} else if cfg.Provider == ProviderOpenAI && !hasNonEmptyEnv("OPENAI_API_KEY") {
+		// OpenAI provider explicitly chosen but no API key — try ChatGPT creds.
+		if creds, err := openaiauth.LoadCredentials(); err == nil && creds.AuthMode == "chatgpt" {
+			cfg.ChatGPTAccessToken = creds.AccessToken
+			cfg.ChatGPTRefreshToken = creds.RefreshToken
+			cfg.ChatGPTAccountID = creds.AccountID
+			cfg.ChatGPTAuthMode = true
+		}
 	}
 
 	switch cfg.Provider {

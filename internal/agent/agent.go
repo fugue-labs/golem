@@ -11,6 +11,7 @@ import (
 
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/skills"
+	openaiauth "github.com/fugue-labs/gollem/auth/openai"
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
 	"github.com/fugue-labs/gollem/modelutil"
@@ -102,6 +103,9 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 		core.WithDynamicSystemPrompt[string](func(_ context.Context, _ *core.RunContext) (string, error) {
 			return buildRuntimePrompt(cfg, *runtime, activeSkills), nil
 		}),
+		// Token efficiency defaults: truncate large tool outputs and clean history.
+		core.WithToolOutputTruncation[string](core.DefaultTruncationConfig()),
+		core.WithHistoryProcessor[string](core.NormalizeHistory()),
 	)
 
 	if cfg.TopLevelPersonality {
@@ -185,7 +189,7 @@ func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills [
 	fmt.Fprintf(&b, "- top-level personality: %s\n", onOff(cfg.TopLevelPersonality))
 	b.WriteString("\n## Tool surfaces\n")
 	b.WriteString("- guaranteed repo tools: bash, bash_status, bash_kill, view, edit, write, multi_edit, glob, grep, ls, lsp\n")
-	b.WriteString("- guaranteed workflow tools: planning, invariants\n")
+	b.WriteString("- guaranteed workflow tools: planning, invariants, verification\n")
 	fmt.Fprintf(&b, "- delegate: %s\n", onOff(!cfg.DisableDelegate))
 	fmt.Fprintf(&b, "- execute_code: %s\n", runtime.CodeModeStatus)
 	fmt.Fprintf(&b, "- open_image: %s\n", runtime.OpenImageStatus)
@@ -234,6 +238,29 @@ func onOff(v bool) string {
 	return "off"
 }
 
+// chatgptTokenRefresher returns a TokenRefresher that auto-refreshes ChatGPT
+// OAuth tokens and persists the updated credentials to disk.
+func chatgptTokenRefresher(cfg *config.Config) openai.TokenRefresher {
+	return func() (string, error) {
+		creds := &openaiauth.Credentials{
+			AccessToken:  cfg.ChatGPTAccessToken,
+			RefreshToken: cfg.ChatGPTRefreshToken,
+			AccountID:    cfg.ChatGPTAccountID,
+			AuthMode:     "chatgpt",
+		}
+		refreshed, err := openaiauth.RefreshIfNeeded(creds)
+		if err != nil {
+			return cfg.ChatGPTAccessToken, nil
+		}
+		if refreshed != creds {
+			cfg.ChatGPTAccessToken = refreshed.AccessToken
+			cfg.ChatGPTRefreshToken = refreshed.RefreshToken
+			_ = openaiauth.SaveCredentials(refreshed)
+		}
+		return cfg.ChatGPTAccessToken, nil
+	}
+}
+
 func createModel(cfg *config.Config) (core.Model, error) {
 	return createModelWithName(cfg, cfg.Model)
 }
@@ -256,7 +283,10 @@ func createModelWithName(cfg *config.Config, modelName string) (core.Model, erro
 			openai.WithPromptCacheRetention("24h"),
 			openai.WithPromptCacheKey("golem"),
 		}
-		if cfg.APIKey != "" {
+		if cfg.ChatGPTAuthMode {
+			opts = append(opts, openai.WithChatGPTAuth(cfg.ChatGPTAccessToken, cfg.ChatGPTAccountID))
+			opts = append(opts, openai.WithTokenRefresher(chatgptTokenRefresher(cfg)))
+		} else if cfg.APIKey != "" {
 			opts = append(opts, openai.WithAPIKey(cfg.APIKey))
 		}
 		if cfg.BaseURL != "" {
