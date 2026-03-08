@@ -10,9 +10,10 @@ import (
 )
 
 func main() {
+	errOut := os.Stderr
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		fmt.Fprintf(errOut, "config error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -28,7 +29,7 @@ func main() {
 	p := tea.NewProgram(m)
 	m.SetProgram(p)
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintf(errOut, "error: %v\n", err)
 		os.Exit(1)
 	}
 }

@@ -44,9 +44,11 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 		return nil, runtime, fmt.Errorf("creating model: %w", err)
 	}
 
+	session := &codetool.Session{}
 	toolOpts := []codetool.Option{
 		codetool.WithModel(model),
 		codetool.WithTimeout(cfg.Timeout),
+		codetool.WithPersistentSession(session),
 	}
 	if cfg.AutoContextMaxTokens > 0 {
 		toolOpts = append(toolOpts, codetool.WithAutoContextConfig(core.AutoContextConfig{
@@ -127,6 +129,7 @@ func New(cfg *config.Config, runPrompt string, activeSkills []skills.Skill, extr
 	}
 
 	opts = append(opts, extra...)
+	runtime.Session = session
 	return core.NewAgent[string](model, opts...), runtime, nil
 }
 

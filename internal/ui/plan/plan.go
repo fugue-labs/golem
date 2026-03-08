@@ -100,11 +100,16 @@ func (s *State) HandleToolCall(rawArgs string) {
 		if len(cmd.Tasks) > 0 {
 			s.Tasks = append(s.Tasks, normalizeTasks(cmd.Tasks)...)
 		} else if cmd.TaskID != "" && cmd.Description != "" {
-			s.Tasks = append(s.Tasks, Task{
+			task := Task{
 				ID:          strings.TrimSpace(cmd.TaskID),
 				Description: strings.TrimSpace(cmd.Description),
-				Status:      "pending",
-			})
+				Status:      normalizeTaskStatus(cmd.Status),
+				Notes:       strings.TrimSpace(cmd.Notes),
+			}
+			if task.Status == "" {
+				task.Status = "pending"
+			}
+			s.Tasks = append(s.Tasks, task)
 		}
 
 	case "update":

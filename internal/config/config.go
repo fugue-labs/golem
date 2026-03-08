@@ -60,7 +60,10 @@ func Load() (*Config, error) {
 	case ProviderAnthropic:
 		cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
 		cfg.Model = envOr("GOLEM_MODEL", "claude-sonnet-4-20250514")
-		cfg.ThinkingBudget = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
+		cfg.ThinkingBudget, err = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
+		if err != nil {
+			return nil, err
+		}
 		cfg.AutoContextMaxTokens = 150000
 		cfg.AutoContextKeepLastN = 12
 
@@ -83,7 +86,10 @@ func Load() (*Config, error) {
 		cfg.ProjectID = os.Getenv("VERTEX_PROJECT")
 		cfg.Region = envOr("VERTEX_REGION", "us-central1")
 		cfg.Model = envOr("GOLEM_MODEL", "gemini-2.5-pro")
-		cfg.ThinkingBudget = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
+		cfg.ThinkingBudget, err = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
+		if err != nil {
+			return nil, err
+		}
 		cfg.AutoContextMaxTokens = 900000
 		cfg.AutoContextKeepLastN = 20
 
@@ -91,7 +97,10 @@ func Load() (*Config, error) {
 		cfg.ProjectID = os.Getenv("VERTEX_PROJECT")
 		cfg.Region = envOr("VERTEX_REGION", "us-central1")
 		cfg.Model = envOr("GOLEM_MODEL", "claude-sonnet-4-5")
-		cfg.ThinkingBudget = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
+		cfg.ThinkingBudget, err = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
+		if err != nil {
+			return nil, err
+		}
 		cfg.AutoContextMaxTokens = 150000
 		cfg.AutoContextKeepLastN = 12
 
@@ -115,13 +124,13 @@ func Load() (*Config, error) {
 
 func detectProvider() Provider {
 	switch {
-	case os.Getenv("ANTHROPIC_API_KEY") != "":
+	case hasNonEmptyEnv("ANTHROPIC_API_KEY"):
 		return ProviderAnthropic
-	case os.Getenv("OPENAI_API_KEY") != "":
+	case hasNonEmptyEnv("OPENAI_API_KEY"):
 		return ProviderOpenAI
-	case os.Getenv("XAI_API_KEY") != "" || os.Getenv("GOLEM_BASE_URL") != "" || os.Getenv("GOLEM_API_KEY") != "":
+	case hasNonEmptyEnv("XAI_API_KEY") || hasNonEmptyEnv("GOLEM_BASE_URL") || hasNonEmptyEnv("GOLEM_API_KEY"):
 		return ProviderOpenAICompatible
-	case os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" || os.Getenv("VERTEX_PROJECT") != "":
+	case hasNonEmptyEnv("GOOGLE_APPLICATION_CREDENTIALS") || hasNonEmptyEnv("VERTEX_PROJECT"):
 		return ProviderVertexAI
 	default:
 		return ProviderAnthropic
@@ -138,7 +147,7 @@ func (c *Config) ShortDir() string {
 }
 
 func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
 	}
 	return fallback
@@ -146,8 +155,8 @@ func envOr(key, fallback string) string {
 
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			return trimmed
 		}
 	}
 	return ""
@@ -165,16 +174,16 @@ func durationEnvOr(key string, fallback time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-func intEnvOr(key string, fallback int) int {
+func intEnvOr(key string, fallback int) (int, error) {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
-		return fallback
+		return fallback, nil
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("invalid %s integer %q: %w", key, v, err)
 	}
-	return n
+	return n, nil
 }
 
 func teamModeEnvOr(key, fallback string) string {
@@ -185,6 +194,10 @@ func teamModeEnvOr(key, fallback string) string {
 	default:
 		return fallback
 	}
+}
+
+func hasNonEmptyEnv(key string) bool {
+	return strings.TrimSpace(os.Getenv(key)) != ""
 }
 
 func isTruthyEnv(key string) bool {

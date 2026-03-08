@@ -134,12 +134,21 @@ func (s *State) HandleToolCall(rawArgs string) {
 				s.Items = append(s.Items, normalizeItem(item))
 			}
 		} else if cmd.Description != "" {
-			s.Items = append(s.Items, Item{
-				ID:          nextID(s.Items),
+			id := strings.TrimSpace(cmd.ID)
+			if id == "" {
+				id = nextID(s.Items)
+			}
+			item := Item{
+				ID:          id,
 				Description: strings.TrimSpace(cmd.Description),
 				Kind:        normalizeKind(cmd.Kind),
-				Status:      "unknown",
-			})
+				Status:      normalizeStatus(cmd.Status),
+				Evidence:    strings.TrimSpace(cmd.Evidence),
+			}
+			if item.Status == "" {
+				item.Status = "unknown"
+			}
+			s.Items = append(s.Items, item)
 		}
 	}
 }

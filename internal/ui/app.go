@@ -3,9 +3,11 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
@@ -25,13 +27,15 @@ import (
 
 // Agent event messages sent to the TUI via p.Send from the goroutine.
 type (
-	textDeltaMsg     struct{ text string }
-	thinkingDeltaMsg struct{ text string }
-	toolCallMsg      struct{ name, args, rawArgs string }
-	toolResultMsg    struct{ name, result, errText string }
-	agentDoneMsg     struct {
-		usage core.RunUsage
-		err   error
+	textDeltaMsg     struct{ runID int; text string }
+	thinkingDeltaMsg struct{ runID int; text string }
+	toolCallMsg      struct{ runID int; name, args, rawArgs string }
+	toolResultMsg    struct{ runID int; name, result, errText string }
+	agentDoneMsg struct {
+		runID    int
+		usage    core.RunUsage
+		messages []core.ModelMessage
+		err      error
 	}
 )
 
@@ -53,13 +57,16 @@ type Model struct {
 	activeSkills []skills.Skill
 
 	// State.
-	messages  []*chat.Message
-	scroll    int
+	messages []*chat.Message
+	history  []core.ModelMessage // gollem conversation history across turns
+	scroll   int
 	width     int
 	height    int
 	busy      bool
 	usage     core.RunUsage
 	startTime time.Time
+	runID     int
+	hookRID   atomic.Int32 // hook-visible runID; read atomically by hooks from agent goroutine
 
 	// Plan/invariant state — mirrored from tool messages.
 	planState      plan.State
@@ -131,16 +138,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Agent streaming events.
 	case textDeltaMsg:
+		if msg.runID != m.runID {
+			return m, nil
+		}
 		m.appendOrUpdateAssistant(msg.text)
 		m.scroll = 0
 		return m, nil
 
 	case thinkingDeltaMsg:
+		if msg.runID != m.runID {
+			return m, nil
+		}
 		m.appendOrUpdateThinking(msg.text)
 		m.scroll = 0
 		return m, nil
 
 	case toolCallMsg:
+		if msg.runID != m.runID {
+			return m, nil
+		}
 		m.messages = append(m.messages, &chat.Message{
 			Kind:     chat.KindToolCall,
 			ToolName: msg.name,
@@ -158,6 +174,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case toolResultMsg:
+		if msg.runID != m.runID {
+			return m, nil
+		}
 		m.finishLastTool(msg.name, msg.result, msg.errText)
 		if msg.name == "planning" {
 			if msg.errText != "" {
@@ -177,13 +196,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case agentDoneMsg:
+		if msg.runID != m.runID {
+			return m, nil
+		}
 		m.busy = false
+		m.cancel = nil
 		m.usage = msg.usage
-		if msg.err != nil {
+		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.messages = append(m.messages, &chat.Message{
 				Kind:    chat.KindError,
 				Content: msg.err.Error(),
 			})
+		} else if msg.messages != nil {
+			m.history = msg.messages
 		}
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
@@ -204,15 +229,26 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key == "ctrl+c":
 		if m.busy && m.cancel != nil {
 			m.cancel()
+			m.cancel = nil
 			m.busy = false
+			m.runID++
+			m.agent = nil // old Run() may still be in-flight; force new agent
+			// Clean up old session resources in background (can't block —
+			// Run() goroutine is still winding down).
+			go m.runtime.Session.Cleanup()
 			return m, m.input.Focus()
 		}
+		m.runtime.Session.Cleanup()
 		return m, tea.Quit
 
 	case key == "escape":
 		if m.busy && m.cancel != nil {
 			m.cancel()
+			m.cancel = nil
 			m.busy = false
+			m.runID++
+			m.agent = nil // old Run() may still be in-flight; force new agent
+			go m.runtime.Session.Cleanup()
 			return m, m.input.Focus()
 		}
 
@@ -228,53 +264,55 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if text == "" {
 			return m, nil
 		}
-		if !m.busy {
-			if text == "/quit" || text == "/exit" {
-				return m, tea.Quit
+		if text == "/quit" || text == "/exit" {
+			if m.busy && m.cancel != nil {
+				m.cancel()
+				m.cancel = nil
 			}
-			if text == "/clear" {
-				m.messages = nil
-				m.scroll = 0
-				m.input.Reset()
-				return m, m.input.Focus()
-			}
-			if text == "/help" {
-				m.input.Reset()
-				m.messages = append(m.messages, m.renderHelpMessage())
-				m.scroll = 0
-				return m, m.input.Focus()
-			}
-			if text == "/plan" {
-				m.input.Reset()
-				m.messages = append(m.messages, m.renderPlanSummaryMessage())
-				m.scroll = 0
-				return m, m.input.Focus()
-			}
-			if text == "/invariants" {
-				m.input.Reset()
-				m.messages = append(m.messages, m.renderInvariantSummaryMessage())
-				m.scroll = 0
-				return m, m.input.Focus()
-			}
-			if text == "/runtime" {
-				m.input.Reset()
-				m.messages = append(m.messages, m.renderRuntimeSummaryMessage())
-				m.scroll = 0
-				return m, m.input.Focus()
-			}
-			if text == "/skills" {
-				m.input.Reset()
-				m.messages = append(m.messages, m.renderSkillsList()...)
-				m.scroll = 0
-				return m, m.input.Focus()
-			}
-			if strings.HasPrefix(text, "/skill ") {
-				name := strings.TrimSpace(strings.TrimPrefix(text, "/skill "))
-				m.input.Reset()
-				m.messages = append(m.messages, m.activateSkill(name))
-				m.scroll = 0
-				return m, m.input.Focus()
-			}
+			m.runtime.Session.Cleanup()
+			return m, tea.Quit
+		}
+		if text == "/clear" {
+			m.clearSessionState()
+			m.input.Reset()
+			return m, m.input.Focus()
+		}
+		if text == "/help" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderHelpMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/plan" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderPlanSummaryMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/invariants" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderInvariantSummaryMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/runtime" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderRuntimeSummaryMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/skills" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderSkillsList()...)
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if strings.HasPrefix(text, "/skill ") {
+			name := strings.TrimSpace(strings.TrimPrefix(text, "/skill "))
+			m.input.Reset()
+			m.messages = append(m.messages, m.activateSkill(name))
+			m.scroll = 0
+			return m, m.input.Focus()
 		}
 		m.input.Reset()
 		m.input.SetHeight(1)
@@ -295,8 +333,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		m.busy = true
 		m.startTime = time.Now()
-		m.agent = nil
-		m.runtime = agent.InitialRuntimeState(m.cfg)
+		m.runID++
+		m.hookRID.Store(int32(m.runID))
 		return m, m.runAgent(text)
 
 	case key == "up":
@@ -332,6 +370,33 @@ func (m *Model) drainPending() []string {
 	return msgs
 }
 
+func (m *Model) clearSessionState() {
+	if m.busy && m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	m.runID++
+	m.hookRID.Store(int32(m.runID))
+	m.busy = false
+	m.messages = nil
+	m.history = nil
+	m.scroll = 0
+	m.usage = core.RunUsage{}
+	m.startTime = time.Time{}
+	m.runtime.Session.Cleanup()
+	if m.cfg != nil {
+		m.runtime = agent.InitialRuntimeState(m.cfg)
+	} else {
+		m.runtime = agent.RuntimeState{}
+	}
+	m.agent = nil
+	m.planState = plan.State{}
+	m.invariantState = uiinvariants.State{}
+	m.pendingMu.Lock()
+	m.pendingMsgs = nil
+	m.pendingMu.Unlock()
+}
+
 // steeringMiddleware injects queued user messages before each model turn.
 func (m *Model) steeringMiddleware() core.AgentMiddleware {
 	return func(
@@ -360,11 +425,17 @@ func (m *Model) steeringMiddleware() core.AgentMiddleware {
 
 func (m *Model) runAgent(prompt string) tea.Cmd {
 	p := m.prog
+	runID := m.runID
 
 	// Ensure agent exists with hooks for TUI visibility.
+	// The agent is kept alive across prompts so that stateful resources
+	// (LSP connections, planning/invariant state, middleware counters,
+	// background processes) persist naturally. Only /clear or skill
+	// toggles nil the agent.
 	if m.agent == nil {
 		hooks := core.Hook{
 			OnModelResponse: func(_ context.Context, _ *core.RunContext, resp *core.ModelResponse) {
+				rid := int(m.hookRID.Load())
 				if p == nil || resp == nil {
 					return
 				}
@@ -372,27 +443,29 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 					switch pt := part.(type) {
 					case core.TextPart:
 						if pt.Content != "" {
-							p.Send(textDeltaMsg{text: pt.Content})
+							p.Send(textDeltaMsg{runID: rid, text: pt.Content})
 						}
 					case core.ThinkingPart:
 						if pt.Content != "" {
-							p.Send(thinkingDeltaMsg{text: pt.Content})
+							p.Send(thinkingDeltaMsg{runID: rid, text: pt.Content})
 						}
 					}
 				}
 			},
 			OnToolStart: func(_ context.Context, _ *core.RunContext, toolName, argsJSON string) {
 				if p != nil {
-					p.Send(toolCallMsg{name: toolName, args: argsJSON, rawArgs: argsJSON})
+					rid := int(m.hookRID.Load())
+					p.Send(toolCallMsg{runID: rid, name: toolName, args: argsJSON, rawArgs: argsJSON})
 				}
 			},
 			OnToolEnd: func(_ context.Context, _ *core.RunContext, toolName, result string, err error) {
 				if p != nil {
+					rid := int(m.hookRID.Load())
 					errText := ""
 					if err != nil {
 						errText = err.Error()
 					}
-					p.Send(toolResultMsg{name: toolName, result: result, errText: errText})
+					p.Send(toolResultMsg{runID: rid, name: toolName, result: result, errText: errText})
 				}
 			},
 		}
@@ -402,7 +475,7 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 		)
 		if err != nil {
 			return func() tea.Msg {
-				return agentDoneMsg{err: err}
+				return agentDoneMsg{runID: runID, err: err}
 			}
 		}
 		m.agent = a
@@ -412,13 +485,18 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	a := m.agent
+	history := m.history
 
 	return func() tea.Msg {
-		result, err := a.Run(ctx, prompt)
-		if err != nil {
-			return agentDoneMsg{err: err}
+		var runOpts []core.RunOption
+		if len(history) > 0 {
+			runOpts = append(runOpts, core.WithMessages(history...))
 		}
-		return agentDoneMsg{usage: result.Usage}
+		result, err := a.Run(ctx, prompt, runOpts...)
+		if err != nil {
+			return agentDoneMsg{runID: runID, err: err}
+		}
+		return agentDoneMsg{runID: runID, usage: result.Usage, messages: result.Messages}
 	}
 }
 
@@ -890,6 +968,10 @@ func (m *Model) renderSkillsList() []*chat.Message {
 }
 
 func (m *Model) activateSkill(name string) *chat.Message {
+	pending := ""
+	if m.busy {
+		pending = " (takes effect on next prompt)"
+	}
 	// Check if already active; if so, deactivate.
 	for i, s := range m.activeSkills {
 		if strings.EqualFold(s.Name, name) {
@@ -897,7 +979,7 @@ func (m *Model) activateSkill(name string) *chat.Message {
 			m.agent = nil // force agent recreation without this skill
 			return &chat.Message{
 				Kind:    chat.KindAssistant,
-				Content: fmt.Sprintf("Deactivated skill `%s`.", s.Name),
+				Content: fmt.Sprintf("Deactivated skill `%s`.%s", s.Name, pending),
 			}
 		}
 	}
@@ -914,6 +996,6 @@ func (m *Model) activateSkill(name string) *chat.Message {
 	m.agent = nil // force agent recreation with new skill
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Activated skill `%s`. The agent will now use this skill's instructions.", s.Name),
+		Content: fmt.Sprintf("Activated skill `%s`. The agent will now use this skill's instructions.%s", s.Name, pending),
 	}
 }
