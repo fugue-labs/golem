@@ -9,13 +9,13 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
 
-func renderWriteResult(msg *Message, toolCall *Message, sty *styles.Styles, width int) string {
+func renderWriteResult(content string, toolCall *Message, sty *styles.Styles, width int) string {
 	var args struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	}
 	if err := json.Unmarshal([]byte(toolCall.RawArgs), &args); err != nil {
-		return renderPlainResult(msg.Content, sty, width)
+		return renderPlainResult(content, sty, width)
 	}
 
 	base := filepath.Base(args.Path)
@@ -40,8 +40,8 @@ func renderWriteResult(msg *Message, toolCall *Message, sty *styles.Styles, widt
 			fmt.Sprintf("... (%d more lines)", len(strings.Split(args.Content, "\n"))-maxLines),
 		))
 	}
-	if msg.Content != "" {
-		rendered = append(rendered, "  "+sty.Tool.ContentLine.Render(msg.Content))
+	if content != "" {
+		rendered = append(rendered, "  "+sty.Tool.ContentLine.Render(content))
 	}
 	return strings.Join(rendered, "\n")
 }

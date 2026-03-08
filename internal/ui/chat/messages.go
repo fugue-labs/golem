@@ -145,6 +145,7 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 		icon = sty.Tool.IconError.Render(styles.ErrorIcon)
 	}
 
+	var header string
 	if msg.ToolName == "bash" {
 		prompt := sty.Tool.CommandPrompt.Render("$")
 		command := msg.ToolArgs
@@ -153,20 +154,43 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 		}
 		available := max(0, width-lipgloss.Width(icon)-lipgloss.Width(prompt)-6)
 		command = ansi.Truncate(command, available, "...")
-		return fmt.Sprintf("  %s %s %s", icon, prompt, sty.Tool.CommandText.Render(command))
+		header = fmt.Sprintf("  %s %s %s", icon, prompt, sty.Tool.CommandText.Render(command))
+	} else {
+		name := sty.Tool.NameNormal.Render(msg.ToolName)
+		header = fmt.Sprintf("  %s %s", icon, name)
+		if msg.ToolArgs != "" {
+			available := max(0, width-lipgloss.Width(header)-2)
+			param := ansi.Truncate(msg.ToolArgs, available, "...")
+			header += " " + sty.Tool.ParamMain.Render(param)
+		}
 	}
 
-	name := sty.Tool.NameNormal.Render(msg.ToolName)
-	header := fmt.Sprintf("  %s %s", icon, name)
-
-	// Show primary parameter.
-	if msg.ToolArgs != "" {
-		available := max(0, width-lipgloss.Width(header)-2)
-		param := ansi.Truncate(msg.ToolArgs, available, "...")
-		header += " " + sty.Tool.ParamMain.Render(param)
+	// If the result has been stored inline, render it below the header.
+	if msg.Content != "" {
+		body := renderToolCallResult(msg, sty, width)
+		if body != "" {
+			return header + "\n" + body
+		}
 	}
 
 	return header
+}
+
+// renderToolCallResult renders the result body for a completed tool call.
+// The result content is stored in msg.Content after the tool finishes.
+func renderToolCallResult(msg *Message, sty *styles.Styles, width int) string {
+	switch msg.ToolName {
+	case "view":
+		return renderViewResult(msg.Content, msg, sty, width)
+	case "edit":
+		return renderEditResult(msg.Content, msg, sty, width)
+	case "write":
+		return renderWriteResult(msg.Content, msg, sty, width)
+	case "bash":
+		return renderBashResult(msg.Content, sty, width)
+	default:
+		return renderPlainResult(msg.Content, sty, width)
+	}
 }
 
 // findToolCallFor finds the tool call that corresponds to a given tool result.
@@ -221,30 +245,17 @@ func findToolCallFor(msg *Message, allMessages []*Message) *Message {
 }
 
 func renderToolResult(msg *Message, sty *styles.Styles, width int, allMessages []*Message) string {
+	// Results are now merged into their tool call messages and rendered
+	// inline by renderToolCall. KindToolResult messages should be empty.
+	// Render as plain result only if orphaned content somehow exists.
 	if msg.Content == "" {
 		return ""
 	}
-
-	// Try specialized rendering based on tool name.
-	toolCall := findToolCallFor(msg, allMessages)
-	if toolCall != nil {
-		switch toolCall.ToolName {
-		case "view":
-			return renderViewResult(msg, toolCall, sty, width)
-		case "edit":
-			return renderEditResult(msg, toolCall, sty, width)
-		case "write":
-			return renderWriteResult(msg, toolCall, sty, width)
-		case "bash":
-			return renderBashResult(msg, toolCall, sty, width)
-		}
-	}
-
 	return renderPlainResult(msg.Content, sty, width)
 }
 
 // renderViewResult renders file content with syntax highlighting.
-func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width int) string {
+func renderViewResult(content string, toolCall *Message, sty *styles.Styles, width int) string {
 	// Extract file path from tool args for language detection.
 	fileName := extractJSONField(toolCall.RawArgs, "path")
 	if fileName == "" {
@@ -252,7 +263,7 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 	}
 
 	// Separate line numbers from content for highlighting.
-	rawLines := strings.Split(msg.Content, "\n")
+	rawLines := strings.Split(content, "\n")
 	maxLines := 12
 	truncated := len(rawLines) > maxLines
 	if truncated {
@@ -306,15 +317,15 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 
 	if truncated {
 		rendered = append(rendered, "  "+sty.Tool.Truncation.Render(
-			fmt.Sprintf("... (%d more lines)", len(strings.Split(msg.Content, "\n"))-maxLines),
+			fmt.Sprintf("... (%d more lines)", len(strings.Split(content, "\n"))-maxLines),
 		))
 	}
 
 	return strings.Join(rendered, "\n")
 }
 
-func renderBashResult(msg *Message, toolCall *Message, sty *styles.Styles, width int) string {
-	content := strings.TrimRight(msg.Content, "\n")
+func renderBashResult(content string, sty *styles.Styles, width int) string {
+	content = strings.TrimRight(content, "\n")
 	prefix := sty.Tool.ResultPrefix.Render("⎿")
 	available := max(0, width-8)
 
@@ -344,14 +355,14 @@ func renderBashResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 }
 
 // renderEditResult renders a diff-style view showing old and new strings.
-func renderEditResult(msg *Message, toolCall *Message, sty *styles.Styles, width int) string {
+func renderEditResult(content string, toolCall *Message, sty *styles.Styles, width int) string {
 	var args struct {
 		Path      string `json:"path"`
 		OldString string `json:"old_string"`
 		NewString string `json:"new_string"`
 	}
 	if err := json.Unmarshal([]byte(toolCall.RawArgs), &args); err != nil {
-		return renderPlainResult(msg.Content, sty, width)
+		return renderPlainResult(content, sty, width)
 	}
 
 	var rendered []string
@@ -393,7 +404,7 @@ func renderEditResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 	}
 
 	// Summary line from the tool result.
-	rendered = append(rendered, "  "+sty.Tool.ContentLine.Render(msg.Content))
+	rendered = append(rendered, "  "+sty.Tool.ContentLine.Render(content))
 
 	return strings.Join(rendered, "\n")
 }

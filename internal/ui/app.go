@@ -552,15 +552,12 @@ func (m *Model) finishLastTool(callID, name, result, errText string) {
 		} else {
 			msg.Status = chat.ToolSuccess
 		}
+		// Store result content inline on the tool call message so
+		// it renders directly below its header.
+		if result != "" {
+			msg.Content = result
+		}
 		break
-	}
-	if result != "" {
-		m.messages = append(m.messages, &chat.Message{
-			Kind:     chat.KindToolResult,
-			CallID:   callID,
-			ToolName: name,
-			Content:  result,
-		})
 	}
 	if errText != "" {
 		m.messages = append(m.messages, &chat.Message{
