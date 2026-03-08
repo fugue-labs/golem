@@ -144,6 +144,17 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 		icon = sty.Tool.IconError.Render(styles.ErrorIcon)
 	}
 
+	if msg.ToolName == "bash" {
+		prompt := sty.Tool.CommandPrompt.Render("$")
+		command := msg.ToolArgs
+		if command == "" {
+			command = msg.ToolName
+		}
+		available := max(0, width-lipgloss.Width(icon)-lipgloss.Width(prompt)-6)
+		command = ansi.Truncate(command, available, "...")
+		return fmt.Sprintf("  %s %s %s", icon, prompt, sty.Tool.CommandText.Render(command))
+	}
+
 	name := sty.Tool.NameNormal.Render(msg.ToolName)
 	header := fmt.Sprintf("  %s %s", icon, name)
 
@@ -188,6 +199,8 @@ func renderToolResult(msg *Message, sty *styles.Styles, width int, allMessages [
 			return renderEditResult(msg, toolCall, sty, width)
 		case "write":
 			return renderWriteResult(msg, toolCall, sty, width)
+		case "bash":
+			return renderBashResult(msg, toolCall, sty, width)
 		}
 	}
 
@@ -248,6 +261,34 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 		))
 	}
 
+	return strings.Join(rendered, "\n")
+}
+
+func renderBashResult(msg *Message, toolCall *Message, sty *styles.Styles, width int) string {
+	command := extractJSONField(toolCall.RawArgs, "command")
+	lines := strings.Split(msg.Content, "\n")
+	maxLines := 12
+	truncated := len(lines) > maxLines
+	if truncated {
+		lines = lines[:maxLines]
+	}
+
+	available := max(0, width-10)
+	rendered := []string{}
+	if command != "" {
+		command = ansi.Truncate(command, available, "...")
+		rendered = append(rendered, "    "+sty.Tool.OutputMeta.Render("command"))
+		rendered = append(rendered, "    "+sty.Tool.CommandPrompt.Render("$")+" "+sty.Tool.CommandText.Render(command))
+	}
+	for _, line := range lines {
+		line = ansi.Truncate(line, available, "...")
+		rendered = append(rendered, "    "+sty.Tool.OutputBorder.Render("│")+" "+sty.Tool.ContentCode.Render(line))
+	}
+	if truncated {
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+			fmt.Sprintf("... (%d lines hidden)", len(strings.Split(msg.Content, "\n"))-maxLines),
+		))
+	}
 	return strings.Join(rendered, "\n")
 }
 

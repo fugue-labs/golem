@@ -111,6 +111,7 @@ func createModel(cfg *config.Config) (core.Model, error) {
 	case config.ProviderOpenAI:
 		opts := []openai.Option{
 			openai.WithModel(cfg.Model),
+			openai.WithMaxTokens(128000),
 			openai.WithPromptCacheRetention("24h"),
 			openai.WithPromptCacheKey("golem"),
 		}
@@ -122,6 +123,7 @@ func createModel(cfg *config.Config) (core.Model, error) {
 	case config.ProviderOpenAICompatible:
 		opts := []openai.Option{
 			openai.WithModel(cfg.Model),
+			openai.WithMaxTokens(128000),
 			openai.WithPromptCacheRetention("24h"),
 			openai.WithPromptCacheKey("golem"),
 		}

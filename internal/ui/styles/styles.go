@@ -80,9 +80,13 @@ type Styles struct {
 		NameNormal    lipgloss.Style
 		ParamMain     lipgloss.Style
 		ParamKey      lipgloss.Style
+		CommandPrompt lipgloss.Style
+		CommandText   lipgloss.Style
 		Body          lipgloss.Style
 		ContentLine   lipgloss.Style
 		ContentCode   lipgloss.Style
+		OutputBorder  lipgloss.Style
+		OutputMeta    lipgloss.Style
 		Truncation    lipgloss.Style
 		StateWaiting  lipgloss.Style
 		DiffAdd       lipgloss.Style
@@ -230,11 +234,15 @@ func New(_ color.Color) *Styles {
 	s.Tool.IconSuccess = lipgloss.NewStyle().Foreground(green)
 	s.Tool.IconError = lipgloss.NewStyle().Foreground(red)
 	s.Tool.NameNormal = lipgloss.NewStyle().Foreground(fgBase).Bold(true)
-	s.Tool.ParamMain = lipgloss.NewStyle().Foreground(fgBase)
+	s.Tool.ParamMain = lipgloss.NewStyle().Foreground(fgHalf)
 	s.Tool.ParamKey = lipgloss.NewStyle().Foreground(fgMuted)
+	s.Tool.CommandPrompt = lipgloss.NewStyle().Foreground(greenDk).Bold(true)
+	s.Tool.CommandText = lipgloss.NewStyle().Foreground(white)
 	s.Tool.Body = lipgloss.NewStyle().PaddingLeft(2)
-	s.Tool.ContentLine = lipgloss.NewStyle().Background(bgSubtle).Foreground(fgBase)
-	s.Tool.ContentCode = lipgloss.NewStyle().Background(bgSubtle).Foreground(fgBase)
+	s.Tool.ContentLine = lipgloss.NewStyle().Foreground(fgHalf)
+	s.Tool.ContentCode = lipgloss.NewStyle().Foreground(fgBase)
+	s.Tool.OutputBorder = lipgloss.NewStyle().Foreground(border)
+	s.Tool.OutputMeta = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
 	s.Tool.Truncation = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
 	s.Tool.StateWaiting = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
 	s.Tool.DiffAdd = lipgloss.NewStyle().Foreground(green)
