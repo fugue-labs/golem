@@ -22,6 +22,7 @@ import (
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
 	"github.com/fugue-labs/golem/internal/ui/styles"
+	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
 	"github.com/fugue-labs/gollem/ext/deep"
@@ -94,9 +95,10 @@ type Model struct {
 	runID     int
 	hookRID   atomic.Int32 // hook-visible runID; read atomically by hooks from agent goroutine
 
-	// Plan/invariant state — mirrored from tool messages.
-	planState      plan.State
-	invariantState uiinvariants.State
+	// Plan/invariant/verification state — mirrored from tool messages.
+	planState         plan.State
+	invariantState    uiinvariants.State
+	verificationState uiverification.State
 
 	// Pending user messages queued while the agent is working.
 	// Drained by middleware before each model turn.
@@ -205,6 +207,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if currentInv, ok := codetool.InvariantsFromToolState(msg.toolState); ok {
 			m.invariantState = uiinvariants.FromToolState(currentInv)
 		}
+		if currentVerify, ok := codetool.VerificationFromToolState(msg.toolState); ok {
+			m.verificationState = uiverification.FromToolState(currentVerify)
+		}
+		// Auto-mark verification stale when a successful mutating tool completes,
+		// so the UI reflects staleness immediately rather than waiting for the
+		// model to explicitly call "verification stale".
+		if msg.errText == "" && isMutatingToolName(msg.name) && m.verificationState.HasEntries() {
+			m.verificationState.MarkAllStale(msg.name)
+		}
 		m.scroll = 0
 		return m, nil
 
@@ -235,6 +246,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if currentInv, ok := codetool.InvariantsFromToolState(msg.toolState); ok {
 				m.invariantState = uiinvariants.FromToolState(currentInv)
+			}
+			if currentVerify, ok := codetool.VerificationFromToolState(msg.toolState); ok {
+				m.verificationState = uiverification.FromToolState(currentVerify)
 			}
 		}
 		cmds = append(cmds, m.input.Focus())
@@ -312,6 +326,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if text == "/runtime" {
 			m.input.Reset()
 			m.messages = append(m.messages, m.renderRuntimeSummaryMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/verify" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderVerificationSummaryMessage())
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
@@ -403,6 +423,7 @@ func (m *Model) clearSessionState() {
 	m.agent = nil
 	m.planState = plan.State{}
 	m.invariantState = uiinvariants.State{}
+	m.verificationState = uiverification.State{}
 	m.pendingMu.Lock()
 	m.pendingMsgs = nil
 	m.pendingMu.Unlock()
@@ -842,6 +863,12 @@ func (m *Model) renderStatusBar() string {
 		leftParts = append(leftParts, divider, queue)
 	}
 
+	if m.verificationState.HasEntries() {
+		verify := m.sty.StatusBar.Key.Render("verify ") +
+			m.sty.StatusBar.Value.Render(m.verificationState.Badge())
+		leftParts = append(leftParts, divider, verify)
+	}
+
 	if m.scroll > 0 {
 		scrolled := m.sty.StatusBar.Key.Render("scroll ") +
 			m.sty.StatusBar.Value.Render(fmt.Sprintf("+%d", m.scroll))
@@ -1047,5 +1074,16 @@ func (m *Model) activateSkill(name string) *chat.Message {
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
 		Content: fmt.Sprintf("Activated skill `%s`. The agent will now use this skill's instructions.%s", s.Name, pending),
+	}
+}
+
+// isMutatingToolName returns true for tools that modify repo files.
+// Used to auto-mark verification entries stale in the UI.
+func isMutatingToolName(name string) bool {
+	switch name {
+	case "edit", "multi_edit", "write":
+		return true
+	default:
+		return false
 	}
 }

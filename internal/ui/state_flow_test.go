@@ -6,10 +6,12 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/config"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
 	"github.com/fugue-labs/golem/internal/ui/styles"
+	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
 	"github.com/fugue-labs/gollem/core"
 )
 
@@ -124,14 +126,10 @@ func TestRenderRuntimeSummaryMessageListsToolSurfaces(t *testing.T) {
 			t.Fatalf("runtime summary missing %q\n%s", want, msg.Content)
 		}
 	}
-	if got := strings.Count(msg.Content, "Delegate:"); got != 1 {
-		t.Fatalf("delegate count=%d, want 1\n%s", got, msg.Content)
-	}
-	if got := strings.Count(msg.Content, "Execute code:"); got != 1 {
-		t.Fatalf("execute code count=%d, want 1\n%s", got, msg.Content)
-	}
-	if got := strings.Count(msg.Content, "Open image:"); got != 1 {
-		t.Fatalf("open image count=%d, want 1\n%s", got, msg.Content)
+	for _, label := range []string{"Delegate:", "Execute code:", "Open image:"} {
+		if got := strings.Count(msg.Content, label); got != 1 {
+			t.Fatalf("%s count=%d, want 1\n%s", label, got, msg.Content)
+		}
 	}
 }
 
@@ -167,6 +165,86 @@ func TestSteeringMiddlewareInjectsQueuedMessagesInOrder(t *testing.T) {
 	}
 	if got := m.pendingCount(); got != 0 {
 		t.Fatalf("pending count after drain=%d, want 0", got)
+	}
+}
+
+func TestToolResultMsgUpdatesVerificationState(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 5
+
+	toolState := map[string]any{
+		"verification": map[string]any{
+			"entries": []map[string]any{{
+				"id":        "V1",
+				"command":   "go test ./...",
+				"status":    "pass",
+				"freshness": "fresh",
+				"summary":   "ok all packages",
+			}},
+		},
+	}
+
+	updated, _ := m.Update(toolResultMsg{runID: 5, name: "verification", toolState: toolState})
+	model := updated.(*Model)
+
+	if !model.verificationState.HasEntries() {
+		t.Fatal("expected verification state to be updated")
+	}
+	if got := len(model.verificationState.Entries); got != 1 {
+		t.Fatalf("entries=%d, want 1", got)
+	}
+	entry := model.verificationState.Entries[0]
+	if entry.ID != "V1" || entry.Command != "go test ./..." || entry.Status != "pass" {
+		t.Fatalf("entry=%+v", entry)
+	}
+}
+
+func TestAgentDoneMsgUpdatesVerificationState(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 6
+	m.busy = true
+
+	toolState := map[string]any{
+		"verification": map[string]any{
+			"entries": []map[string]any{
+				{"id": "V1", "command": "go test ./...", "status": "pass", "freshness": "stale", "stale_by": "edit main.go"},
+				{"id": "V2", "command": "go build ./...", "status": "fail", "freshness": "fresh"},
+			},
+		},
+	}
+
+	updated, _ := m.Update(agentDoneMsg{runID: 6, toolState: toolState, messages: []core.ModelMessage{}})
+	model := updated.(*Model)
+
+	if model.busy {
+		t.Fatal("expected busy=false")
+	}
+	if got := len(model.verificationState.Entries); got != 2 {
+		t.Fatalf("entries=%d, want 2", got)
+	}
+	if model.verificationState.Entries[0].Freshness != "stale" {
+		t.Fatalf("V1 freshness=%q, want stale", model.verificationState.Entries[0].Freshness)
+	}
+	if model.verificationState.Entries[1].Status != "fail" {
+		t.Fatalf("V2 status=%q, want fail", model.verificationState.Entries[1].Status)
+	}
+}
+
+func TestVerificationStatePersistsAcrossPrompts(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.verificationState = uiverification.State{
+		Entries: []uiverification.Entry{{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"}},
+	}
+	m.input.SetValue("follow-up question")
+
+	updated, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model := updated.(*Model)
+
+	if !model.verificationState.HasEntries() {
+		t.Fatal("expected verification state to persist across new prompt")
+	}
+	if got := model.verificationState.Entries[0].Command; got != "go test ./..." {
+		t.Fatalf("verification command=%q", got)
 	}
 }
 
@@ -214,5 +292,104 @@ func TestStaleToolResultDoesNotMutateCurrentWorkflowState(t *testing.T) {
 	}
 	if got := model.invariantState.Items[0].ID; got != "I1" {
 		t.Fatalf("invariant state mutated by stale event: %q", got)
+	}
+}
+
+func TestStaleToolResultDoesNotMutateVerificationState(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 2
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
+
+	staleState := map[string]any{
+		"verification": map[string]any{
+			"entries": []map[string]any{{
+				"id": "OLD", "command": "old cmd", "status": "fail", "freshness": "stale",
+			}},
+		},
+	}
+
+	updated, _ := m.Update(toolResultMsg{runID: 1, name: "verification", toolState: staleState})
+	model := updated.(*Model)
+
+	if got := model.verificationState.Entries[0].ID; got != "V1" {
+		t.Fatalf("verification state mutated by stale event: %q", got)
+	}
+}
+
+func TestMutatingToolAutoMarksVerificationStale(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 7
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+		{ID: "V2", Command: "go build ./...", Status: "pass", Freshness: "fresh"},
+	}}
+
+	// A successful edit should auto-mark all fresh entries stale.
+	updated, _ := m.Update(toolResultMsg{runID: 7, name: "edit", toolState: map[string]any{}})
+	model := updated.(*Model)
+
+	for _, e := range model.verificationState.Entries {
+		if e.Freshness != "stale" {
+			t.Fatalf("entry %s freshness=%q after edit, want stale", e.ID, e.Freshness)
+		}
+		if e.StaleBy != "edit" {
+			t.Fatalf("entry %s StaleBy=%q, want edit", e.ID, e.StaleBy)
+		}
+	}
+}
+
+func TestFailedMutatingToolDoesNotMarkStale(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 8
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
+
+	// A failed edit should NOT mark entries stale.
+	updated, _ := m.Update(toolResultMsg{runID: 8, name: "edit", errText: "file not found", toolState: map[string]any{}})
+	model := updated.(*Model)
+
+	if model.verificationState.Entries[0].Freshness != "fresh" {
+		t.Fatal("expected freshness to remain fresh after failed edit")
+	}
+}
+
+func TestNonMutatingToolDoesNotMarkStale(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 9
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
+
+	// A non-mutating tool (e.g. grep) should NOT mark entries stale.
+	updated, _ := m.Update(toolResultMsg{runID: 9, name: "grep", toolState: map[string]any{}})
+	model := updated.(*Model)
+
+	if model.verificationState.Entries[0].Freshness != "fresh" {
+		t.Fatal("expected freshness to remain fresh after non-mutating tool")
+	}
+}
+
+func TestVerifyCommandRendersVerificationSummary(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
+	m.input.SetValue("/verify")
+
+	updated, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model := updated.(*Model)
+
+	if len(model.messages) == 0 {
+		t.Fatal("expected message to be appended")
+	}
+	last := model.messages[len(model.messages)-1]
+	if !strings.Contains(last.Content, "Verification summary") {
+		t.Fatalf("expected verification summary, got %q", last.Content)
+	}
+	if model.input.Value() != "" {
+		t.Fatal("expected input to be reset")
 	}
 }

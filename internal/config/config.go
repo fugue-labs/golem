@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fugue-labs/golem/internal/login"
 	openaiauth "github.com/fugue-labs/gollem/auth/openai"
 )
 
@@ -22,9 +23,20 @@ const (
 	ProviderOpenAICompatible Provider = "openai_compatible"
 )
 
+// ProviderSource describes where the provider selection came from.
+type ProviderSource string
+
+const (
+	SourceDefault  ProviderSource = "default"
+	SourceEnvVar   ProviderSource = "env"
+	SourceLogin    ProviderSource = "golem login"
+	SourceGolemEnv ProviderSource = "GOLEM_PROVIDER"
+)
+
 // Config holds the application configuration.
 type Config struct {
 	Provider        Provider
+	ProviderSource  ProviderSource
 	Model           string
 	RouterModel     string
 	APIKey          string
@@ -47,9 +59,17 @@ type Config struct {
 
 	// ChatGPT subscription auth (populated from ~/.golem/auth.json).
 	ChatGPTCreds *openaiauth.Credentials // nil when not using ChatGPT auth
+
+	// LoginProvider is the raw provider name from `golem login` (e.g. "chatgpt").
+	// Empty when login config wasn't used.
+	LoginProvider string
 }
 
-// Load reads configuration from environment variables and flags.
+// Load reads configuration with the following precedence:
+//  1. GOLEM_PROVIDER env var (explicit override, always wins)
+//  2. Saved config from `golem login` (~/.golem/config.json)
+//  3. Env var auto-detection (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
+//  4. Default (anthropic)
 func Load() (*Config, error) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -57,34 +77,43 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{WorkingDir: wd}
-	cfg.Provider = detectProvider()
+	savedKeys, _ := login.LoadAPIKeys()
+
+	// --- Determine provider (precedence: GOLEM_PROVIDER > golem login > env detection > default) ---
+
 	if p := strings.TrimSpace(os.Getenv("GOLEM_PROVIDER")); p != "" {
+		// 1. Explicit GOLEM_PROVIDER env var.
 		cfg.Provider = Provider(strings.ToLower(p))
+		cfg.ProviderSource = SourceGolemEnv
+	} else if sc := login.LoadConfig(); sc != nil {
+		// 2. Saved config from `golem login`.
+		cfg.LoginProvider = sc.Provider
+		cfg.ProviderSource = SourceLogin
+		switch sc.Provider {
+		case "chatgpt":
+			cfg.Provider = ProviderOpenAI
+			if creds, err := openaiauth.LoadCredentials(); err == nil && creds.AuthMode == "chatgpt" {
+				cfg.ChatGPTCreds = creds
+			}
+		case "openai":
+			cfg.Provider = ProviderOpenAI
+		case "anthropic":
+			cfg.Provider = ProviderAnthropic
+		case "xai":
+			cfg.Provider = ProviderOpenAICompatible
+		default:
+			cfg.Provider = Provider(sc.Provider)
+		}
+	} else {
+		// 3. Env var auto-detection / 4. Default.
+		cfg.Provider, cfg.ProviderSource = detectProvider(savedKeys)
 	}
 
-	// Auto-detect ChatGPT subscription credentials if no explicit API key is
-	// set. This lets users with ChatGPT Plus/Pro/Team subscriptions use OpenAI
-	// models without a separate API key.
-	//
-	// Only auto-detect when the provider was NOT explicitly set via
-	// GOLEM_PROVIDER (to avoid silently overriding the user's choice).
-	explicitProvider := hasNonEmptyEnv("GOLEM_PROVIDER")
-	if !explicitProvider && cfg.Provider == ProviderAnthropic && !hasNonEmptyEnv("ANTHROPIC_API_KEY") {
-		// No explicit provider or key — check for stored ChatGPT credentials.
-		if creds, err := openaiauth.LoadCredentials(); err == nil && creds.AuthMode == "chatgpt" {
-			cfg.Provider = ProviderOpenAI
-			cfg.ChatGPTCreds = creds
-		}
-	} else if cfg.Provider == ProviderOpenAI && !hasNonEmptyEnv("OPENAI_API_KEY") {
-		// OpenAI provider chosen (explicitly or by detection) but no API key.
-		if creds, err := openaiauth.LoadCredentials(); err == nil && creds.AuthMode == "chatgpt" {
-			cfg.ChatGPTCreds = creds
-		}
-	}
+	// --- Configure provider-specific settings ---
 
 	switch cfg.Provider {
 	case ProviderAnthropic:
-		cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
+		cfg.APIKey = firstNonEmpty(os.Getenv("ANTHROPIC_API_KEY"), savedKeys["anthropic"])
 		cfg.Model = envOr("GOLEM_MODEL", "claude-sonnet-4-20250514")
 		cfg.ThinkingBudget, err = intEnvOr("GOLEM_THINKING_BUDGET", 16000)
 		if err != nil {
@@ -94,7 +123,16 @@ func Load() (*Config, error) {
 		cfg.AutoContextKeepLastN = 12
 
 	case ProviderOpenAI:
-		cfg.APIKey = os.Getenv("OPENAI_API_KEY")
+		if cfg.ChatGPTCreds == nil {
+			// Prefer API keys when configured; otherwise fall back to ChatGPT
+			// subscription credentials from ~/.golem/auth.json.
+			cfg.APIKey = firstNonEmpty(os.Getenv("OPENAI_API_KEY"), savedKeys["openai"])
+			if cfg.APIKey == "" {
+				if creds, err := openaiauth.LoadCredentials(); err == nil && creds.AuthMode == "chatgpt" {
+					cfg.ChatGPTCreds = creds
+				}
+			}
+		}
 		cfg.BaseURL = firstNonEmpty(os.Getenv("GOLEM_BASE_URL"), os.Getenv("OPENAI_BASE_URL"))
 		cfg.Model = envOr("GOLEM_MODEL", "gpt-5.4")
 		cfg.ReasoningEffort = envOr("GOLEM_REASONING_EFFORT", "xhigh")
@@ -102,7 +140,7 @@ func Load() (*Config, error) {
 		cfg.AutoContextKeepLastN = 20
 
 	case ProviderOpenAICompatible:
-		cfg.APIKey = firstNonEmpty(os.Getenv("GOLEM_API_KEY"), os.Getenv("XAI_API_KEY"))
+		cfg.APIKey = firstNonEmpty(os.Getenv("GOLEM_API_KEY"), os.Getenv("XAI_API_KEY"), savedKeys["xai"])
 		cfg.BaseURL = firstNonEmpty(os.Getenv("GOLEM_BASE_URL"), os.Getenv("XAI_BASE_URL"), "https://api.x.ai/v1")
 		cfg.Model = envOr("GOLEM_MODEL", "grok-3")
 		cfg.AutoContextMaxTokens = 900000
@@ -149,19 +187,71 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-func detectProvider() Provider {
+// Status returns a human-readable summary of the current configuration.
+func Status() string {
+	cfg, err := Load()
+	if err != nil {
+		return fmt.Sprintf("Error loading config: %v", err)
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Provider:  %s", cfg.Provider))
+	if cfg.LoginProvider != "" {
+		b.WriteString(fmt.Sprintf(" (%s)", cfg.LoginProvider))
+	}
+	b.WriteString(fmt.Sprintf("\nSource:    %s", cfg.ProviderSource))
+	b.WriteString(fmt.Sprintf("\nModel:     %s", cfg.Model))
+
+	// Auth method.
+	switch {
+	case cfg.ChatGPTCreds != nil:
+		b.WriteString("\nAuth:      ChatGPT subscription (OAuth)")
+	case cfg.APIKey != "":
+		masked := cfg.APIKey
+		if len(masked) > 8 {
+			masked = masked[:4] + "..." + masked[len(masked)-4:]
+		}
+		b.WriteString(fmt.Sprintf("\nAuth:      API key (%s)", masked))
+	default:
+		b.WriteString("\nAuth:      none (will fail at runtime)")
+	}
+
+	if cfg.BaseURL != "" {
+		b.WriteString(fmt.Sprintf("\nBase URL:  %s", cfg.BaseURL))
+	}
+
+	return b.String()
+}
+
+func detectProvider(savedKeys map[string]string) (Provider, ProviderSource) {
+	// Check env vars.
 	switch {
 	case hasNonEmptyEnv("ANTHROPIC_API_KEY"):
-		return ProviderAnthropic
+		return ProviderAnthropic, SourceEnvVar
 	case hasNonEmptyEnv("OPENAI_API_KEY"):
-		return ProviderOpenAI
+		return ProviderOpenAI, SourceEnvVar
 	case hasNonEmptyEnv("XAI_API_KEY") || hasNonEmptyEnv("GOLEM_BASE_URL") || hasNonEmptyEnv("GOLEM_API_KEY"):
-		return ProviderOpenAICompatible
+		return ProviderOpenAICompatible, SourceEnvVar
 	case hasNonEmptyEnv("GOOGLE_APPLICATION_CREDENTIALS") || hasNonEmptyEnv("VERTEX_PROJECT"):
-		return ProviderVertexAI
-	default:
-		return ProviderAnthropic
+		return ProviderVertexAI, SourceEnvVar
 	}
+
+	// Check saved API keys.
+	switch {
+	case savedKeys["anthropic"] != "":
+		return ProviderAnthropic, SourceLogin
+	case savedKeys["openai"] != "":
+		return ProviderOpenAI, SourceLogin
+	case savedKeys["xai"] != "":
+		return ProviderOpenAICompatible, SourceLogin
+	}
+
+	// Check for ChatGPT OAuth creds on disk (legacy — before config.json was saved).
+	if creds, err := openaiauth.LoadCredentials(); err == nil && creds.AuthMode == "chatgpt" {
+		return ProviderOpenAI, SourceLogin
+	}
+
+	return ProviderAnthropic, SourceDefault
 }
 
 // ShortDir returns a display-friendly working directory path.

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -64,6 +66,44 @@ func TestLoadOpenAIConfigReadsBaseURLOverride(t *testing.T) {
 	}
 }
 
+func TestLoadOpenAIExplicitProviderFallsBackToChatGPTCreds(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GOLEM_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("GOLEM_API_KEY", "")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("GOLEM_BASE_URL", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+
+	golemDir := filepath.Join(home, ".golem")
+	if err := os.MkdirAll(golemDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(golemDir, "auth.json"), []byte(`{"access_token":"chatgpt-token","account_id":"acct-123","auth_mode":"chatgpt"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Provider != ProviderOpenAI {
+		t.Fatalf("provider = %q", cfg.Provider)
+	}
+	if cfg.APIKey != "" {
+		t.Fatalf("APIKey = %q, want empty when ChatGPT creds are used", cfg.APIKey)
+	}
+	if cfg.ChatGPTCreds == nil {
+		t.Fatal("expected ChatGPT credentials fallback")
+	}
+	if cfg.ChatGPTCreds.AccessToken != "chatgpt-token" {
+		t.Fatalf("access token = %q", cfg.ChatGPTCreds.AccessToken)
+	}
+}
+
 func TestLoadRejectsInvalidTimeout(t *testing.T) {
 	t.Setenv("GOLEM_PROVIDER", "anthropic")
 	t.Setenv("GOLEM_TIMEOUT", "definitely-not-a-duration")
@@ -81,7 +121,7 @@ func TestDetectProviderPrefersExplicitCompatibleSignals(t *testing.T) {
 	}
 
 	t.Setenv("GOLEM_API_KEY", "x")
-	if got := detectProvider(); got != ProviderOpenAICompatible {
+	if got, _ := detectProvider(nil); got != ProviderOpenAICompatible {
 		t.Fatalf("detectProvider() = %q", got)
 	}
 }

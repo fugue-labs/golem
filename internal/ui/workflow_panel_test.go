@@ -11,6 +11,7 @@ import (
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
 	"github.com/fugue-labs/golem/internal/ui/styles"
+	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
 	"github.com/fugue-labs/gollem/core"
 )
 
@@ -22,9 +23,15 @@ func TestCancelActiveRunClearsRunStateAndBumpsRunID(t *testing.T) {
 	m.runCtx = context.Background()
 	m.cancel = func() {}
 	m.agent = &core.Agent[string]{}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
 
 	m.cancelActiveRun(false)
 
+	if !m.verificationState.HasEntries() {
+		t.Fatal("expected verification state to survive cancellation")
+	}
 	if m.busy {
 		t.Fatal("expected busy=false after cancellation")
 	}
@@ -82,6 +89,9 @@ func TestClearSessionStateResetsWorkflowAndPendingState(t *testing.T) {
 	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "hi"}}
 	m.history = []core.ModelMessage{core.ModelRequest{}}
 	m.pendingMsgs = []string{"follow-up"}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
 	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "ship", Status: "in_progress"}}}
 	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "tests pass", Kind: "hard", Status: "pass"}}}
 
@@ -104,6 +114,9 @@ func TestClearSessionStateResetsWorkflowAndPendingState(t *testing.T) {
 	}
 	if m.agent != nil {
 		t.Fatal("expected agent cleared")
+	}
+	if m.verificationState.HasEntries() {
+		t.Fatal("expected verification state reset")
 	}
 	if m.runtime.CodeModeStatus == "" {
 		t.Fatal("expected runtime reset to initial state")
@@ -136,6 +149,108 @@ func TestHasWorkflowPanelIncludesInvariantOnlyState(t *testing.T) {
 	m.invariantState = uiinvariants.State{Extracted: true}
 	if !m.hasWorkflowPanel() {
 		t.Fatal("expected workflow panel when only invariants exist")
+	}
+}
+
+func TestHasWorkflowPanelIncludesVerificationOnlyState(t *testing.T) {
+	m := New(&config.Config{})
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
+	if !m.hasWorkflowPanel() {
+		t.Fatal("expected workflow panel when only verification entries exist")
+	}
+}
+
+func TestWorkflowPanelRendersVerificationOnlySection(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+		{ID: "V2", Command: "go build ./...", Status: "fail", Freshness: "stale"},
+	}}
+
+	rendered := stripANSI(m.renderWorkflowPanel(10, 38))
+
+	for _, want := range []string{"Workflow", "1✓ 1✗", "go test ./...", "go build ./..."} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("verification-only panel missing %q\n%s", want, rendered)
+		}
+	}
+}
+
+func TestWorkflowPanelRendersAllThreeSections(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.planState = plan.State{Tasks: []plan.Task{
+		{ID: "T1", Description: "implement feature", Status: "completed"},
+	}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{
+		{ID: "I1", Description: "tests pass", Kind: "hard", Status: "pass"},
+	}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
+
+	rendered := stripANSI(m.renderWorkflowPanel(20, 38))
+
+	for _, want := range []string{
+		"Workflow",
+		"Plan 1/1 completed",
+		"Inv 1✓ 0✗ 0?",
+		"Verify 1✓ 0✗ 0◐ 0*",
+		"implement feature",
+		"tests pass",
+		"go test ./...",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("three-section panel missing %q\n%s", want, rendered)
+		}
+	}
+
+	// Summary line is truncated at width=38, but should contain leading parts.
+	if !strings.Contains(rendered, "plan 1/1") {
+		t.Fatalf("summary missing plan part\n%s", rendered)
+	}
+}
+
+func TestWorkflowPanelRendersInProgressVerification(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "in_progress", Freshness: "fresh"},
+	}}
+
+	rendered := stripANSI(m.renderWorkflowPanel(10, 38))
+
+	for _, want := range []string{"Workflow", "1◐", "go test ./..."} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("in-progress panel missing %q\n%s", want, rendered)
+		}
+	}
+}
+
+func TestWorkflowPanelSummaryTruncatesAtProductionWidth(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.planState = plan.State{Tasks: []plan.Task{
+		{ID: "T1", Description: "task", Status: "completed"},
+	}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{
+		{ID: "I1", Description: "inv", Kind: "hard", Status: "pass"},
+	}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
+
+	rendered := stripANSI(m.renderWorkflowPanel(20, 38))
+
+	// Every line must fit within the panel width.
+	for i, line := range strings.Split(rendered, "\n") {
+		// Use rune count for width check (ANSI already stripped).
+		if w := len([]rune(line)); w > 38 {
+			t.Fatalf("line %d width=%d exceeds panel width 38: %q", i, w, line)
+		}
 	}
 }
 

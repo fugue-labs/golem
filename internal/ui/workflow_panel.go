@@ -56,7 +56,7 @@ func (m *Model) pendingCount() int {
 }
 
 func (m *Model) hasWorkflowPanel() bool {
-	return m.planState.HasTasks() || m.invariantState.HasItems()
+	return m.planState.HasTasks() || m.invariantState.HasItems() || m.verificationState.HasEntries()
 }
 
 func (m *Model) renderWorkflowPanel(height, width int) string {
@@ -71,6 +71,11 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	headerRightText := workflowPanelSummary(m)
 	headerRight := ""
 	if headerRightText != "" {
+		// Truncate summary if it would overflow the content area.
+		maxRight := contentWidth - lipgloss.Width(headerLeft) - 1
+		if maxRight > 0 {
+			headerRightText = string(ansi.Truncate(headerRightText, maxRight, "…"))
+		}
 		headerRight = m.sty.Panel.Progress.Render(headerRightText)
 	}
 	titleGap := contentWidth - lipgloss.Width(headerLeft) - lipgloss.Width(headerRight)
@@ -82,22 +87,61 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	var body []string
 	showPlan := m.planState.HasTasks()
 	showInv := m.invariantState.HasItems()
+	showVerify := m.verificationState.HasEntries()
 	bodyBudget := max(1, height-2)
 
-	switch {
-	case showPlan && showInv:
-		bodyBudget = max(2, height-3)
-		planBudget := max(1, bodyBudget/2)
-		invBudget := max(1, bodyBudget-planBudget)
-		body = append(body, m.renderPlanPanelLines(planBudget, contentWidth)...)
-		body = append(body, sep)
-		body = append(body, m.renderInvariantPanelLines(invBudget, contentWidth)...)
-	case showPlan:
-		body = append(body, m.renderPlanPanelLines(bodyBudget, contentWidth)...)
-	case showInv:
-		body = append(body, m.renderInvariantPanelLines(bodyBudget, contentWidth)...)
-	default:
+	// Count how many sections we need to render.
+	sections := 0
+	if showPlan {
+		sections++
+	}
+	if showInv {
+		sections++
+	}
+	if showVerify {
+		sections++
+	}
+
+	if sections == 0 {
 		body = append(body, m.sty.Muted.Render("No workflow state yet."))
+	} else {
+		// Subtract separator lines between sections.
+		if sections > 1 {
+			bodyBudget = max(sections, height-2-(sections-1))
+		}
+		perSection := max(1, bodyBudget/sections)
+		remainder := bodyBudget - perSection*sections
+
+		if showPlan {
+			budget := perSection
+			if remainder > 0 {
+				budget++
+				remainder--
+			}
+			body = append(body, m.renderPlanPanelLines(budget, contentWidth)...)
+		}
+		if showInv {
+			if len(body) > 0 {
+				body = append(body, sep)
+			}
+			budget := perSection
+			if remainder > 0 {
+				budget++
+				remainder--
+			}
+			body = append(body, m.renderInvariantPanelLines(budget, contentWidth)...)
+		}
+		if showVerify {
+			if len(body) > 0 {
+				body = append(body, sep)
+			}
+			budget := perSection
+			if remainder > 0 {
+				budget++
+				remainder--
+			}
+			body = append(body, m.renderVerificationPanelLines(budget, contentWidth)...)
+		}
 	}
 
 	allLines := append([]string{titleLine, sep}, body...)
@@ -125,6 +169,9 @@ func workflowPanelSummary(m *Model) string {
 	}
 	if hardTotal, hardPass, hardFail, hardUnresolved, _, _, _ := m.invariantState.Counts(); hardTotal > 0 || m.invariantState.Extracted {
 		parts = append(parts, fmt.Sprintf("inv %d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved))
+	}
+	if total, pass, fail, stale, inProgress := m.verificationState.Counts(); total > 0 {
+		parts = append(parts, fmt.Sprintf("verify %d✓ %d✗ %d◐ %d*", pass, fail, inProgress, stale))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -218,6 +265,54 @@ func (m *Model) renderInvariantPanelLines(limit, width int) []string {
 	remaining := len(m.invariantState.Items) - maxItems
 	if remaining > 0 && len(lines) < limit {
 		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("... +%d invariants", remaining)))
+	}
+	for len(lines) < limit {
+		lines = append(lines, "")
+	}
+	return lines[:limit]
+}
+
+func (m *Model) renderVerificationPanelLines(limit, width int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	_, pass, fail, stale, inProgress := m.verificationState.Counts()
+	header := fmt.Sprintf("Verify %d✓ %d✗ %d◐ %d*", pass, fail, inProgress, stale)
+	lines := []string{m.sty.Panel.Progress.Render(header)}
+	if limit == 1 {
+		return lines
+	}
+	itemBudget := limit - 1
+	maxItems := min(itemBudget, len(m.verificationState.Entries))
+	if len(m.verificationState.Entries) > itemBudget && itemBudget > 0 {
+		maxItems = itemBudget - 1
+	}
+	for i := 0; i < maxItems; i++ {
+		entry := m.verificationState.Entries[i]
+		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
+		switch entry.Status {
+		case "pass":
+			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+		case "fail":
+			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
+		case "in_progress":
+			icon = m.sty.Panel.IconInProgress.Render(styles.InProgressIcon)
+		}
+		label := entry.Command
+		if entry.Freshness == "stale" {
+			label += " *"
+		}
+		label = ansi.Truncate(strings.TrimSpace(label), max(1, width-4), "...")
+		if entry.Status == "pass" && entry.Freshness != "stale" {
+			label = m.sty.Panel.TaskDone.Render(label)
+		} else {
+			label = m.sty.Panel.TaskText.Render(label)
+		}
+		lines = append(lines, fmt.Sprintf(" %s %s", icon, label))
+	}
+	remaining := len(m.verificationState.Entries) - maxItems
+	if remaining > 0 && len(lines) < limit {
+		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("... +%d verifications", remaining)))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")

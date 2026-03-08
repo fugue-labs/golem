@@ -56,14 +56,17 @@ For every task, follow this sequence internally:
 - Keep the final response concise
 </workflow>
 
-<planning_and_invariants>
+<planning_invariants_and_verification>
 For any non-trivial task:
 1. Use the planning tool to create a short, concrete task list.
 2. Keep task status accurate as work progresses.
 3. If the invariants tool is available, run `extract` early.
 4. Treat hard invariants as completion gates.
 5. Before completion, run `summary` and ensure no hard invariant is unresolved or failed.
-</planning_and_invariants>
+6. After running builds/tests, use the verification tool to record results.
+7. After editing code, use verification with "stale" to mark results as invalidated.
+8. Before completion, check verification summary — no stale or failed entries.
+</planning_invariants_and_verification>
 
 <tool_usage>
 **edit**: Always include enough context in old_string to be unique. If the edit fails with "multiple occurrences", add more surrounding lines.

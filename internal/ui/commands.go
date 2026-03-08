@@ -15,6 +15,7 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/plan` — summarize the current tracked plan\n")
 	b.WriteString("- `/invariants` — summarize the tracked invariant checklist\n")
 	b.WriteString("- `/runtime` — show the effective runtime profile\n")
+	b.WriteString("- `/verify` — show the latest verification summary\n")
 	b.WriteString("- `/skills` — list detected skills\n")
 	b.WriteString("- `/skill <name>` — toggle a skill on or off\n")
 	b.WriteString("- `/quit` or `/exit` — quit the app\n\n")
@@ -118,7 +119,7 @@ func (m *Model) renderRuntimeSummaryMessage() *chat.Message {
 	b.WriteString(fmt.Sprintf("- Top-level personality: `%t`\n", m.cfg.TopLevelPersonality))
 	b.WriteString("\n**Tool surfaces**\n\n")
 	b.WriteString("- Guaranteed repo tools: `bash`, `bash_status`, `bash_kill`, `view`, `edit`, `write`, `multi_edit`, `glob`, `grep`, `ls`, `lsp`\n")
-	b.WriteString("- Guaranteed workflow tools: `planning`, `invariants`\n")
+	b.WriteString("- Guaranteed workflow tools: `planning`, `invariants`, `verification`\n")
 	b.WriteString(fmt.Sprintf("- Delegate: `%t`\n", !m.cfg.DisableDelegate))
 	b.WriteString(fmt.Sprintf("- Execute code: `%s`\n", m.runtime.CodeModeStatus))
 	if m.runtime.CodeModeError != "" {
@@ -128,5 +129,44 @@ func (m *Model) renderRuntimeSummaryMessage() *chat.Message {
 		b.WriteString(fmt.Sprintf("- Open image: `%s`\n", m.runtime.OpenImageStatus))
 	}
 	b.WriteString("- Optional environment-dependent tools should only be trusted when surfaced by the runtime/tool list.\n")
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) renderVerificationSummaryMessage() *chat.Message {
+	if !m.verificationState.HasEntries() {
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: "No verification results tracked yet. The verification tool will populate this once the agent records test/build outcomes.",
+		}
+	}
+
+	total, pass, fail, stale, inProgress := m.verificationState.Counts()
+	var b strings.Builder
+	b.WriteString("**Verification summary**\n\n")
+	b.WriteString(fmt.Sprintf("- Total: %d, Pass: %d, Fail: %d, In progress: %d, Stale: %d\n\n", total, pass, fail, inProgress, stale))
+	for _, entry := range m.verificationState.Entries {
+		icon := "○"
+		switch entry.Status {
+		case "pass":
+			icon = "✓"
+		case "fail":
+			icon = "✗"
+		case "in_progress":
+			icon = "◐"
+		}
+		freshLabel := ""
+		if entry.Freshness == "stale" {
+			freshLabel = " [stale"
+			if entry.StaleBy != "" {
+				freshLabel += ": " + entry.StaleBy
+			}
+			freshLabel += "]"
+		}
+		b.WriteString(fmt.Sprintf("- %s `%s` — `%s`%s", icon, entry.ID, entry.Command, freshLabel))
+		if entry.Summary != "" {
+			b.WriteString(fmt.Sprintf(" — %s", entry.Summary))
+		}
+		b.WriteString("\n")
+	}
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }

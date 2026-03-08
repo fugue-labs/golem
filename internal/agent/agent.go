@@ -252,8 +252,8 @@ func chatgptTokenRefresher(creds *openaiauth.Credentials) openai.TokenRefresher 
 			// still be valid even if refresh failed).
 			return creds.AccessToken, nil
 		}
-		if refreshed != creds {
-			// Update the shared credentials and persist to disk.
+		if refreshed.AccessToken != creds.AccessToken {
+			// Token was refreshed; update shared credentials and persist.
 			*creds = *refreshed
 			_ = openaiauth.SaveCredentials(creds)
 		}
@@ -280,21 +280,25 @@ func createModelWithName(cfg *config.Config, modelName string) (core.Model, erro
 		opts := []openai.Option{
 			openai.WithModel(modelName),
 			openai.WithMaxTokens(128000),
-			openai.WithPromptCacheRetention("24h"),
-			openai.WithPromptCacheKey("golem"),
 		}
 		if cfg.ChatGPTCreds != nil {
 			opts = append(opts, openai.WithChatGPTAuth(cfg.ChatGPTCreds.AccessToken, cfg.ChatGPTCreds.AccountID))
 			opts = append(opts, openai.WithTokenRefresher(chatgptTokenRefresher(cfg.ChatGPTCreds)))
+			// ChatGPT backend uses HTTP (not WebSocket).
+			opts = append(opts, openai.WithTransport("http"))
 		} else if cfg.APIKey != "" {
 			opts = append(opts, openai.WithAPIKey(cfg.APIKey))
+			opts = append(opts,
+				openai.WithPromptCacheRetention("24h"),
+				openai.WithPromptCacheKey("golem"),
+			)
 		}
 		if cfg.BaseURL != "" {
 			opts = append(opts,
 				openai.WithBaseURL(cfg.BaseURL),
 				openai.WithTransport("http"),
 			)
-		} else {
+		} else if cfg.ChatGPTCreds == nil {
 			opts = append(opts,
 				openai.WithTransport("websocket"),
 				openai.WithWebSocketHTTPFallback(true),

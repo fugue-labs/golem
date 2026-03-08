@@ -47,7 +47,7 @@ func TestBuildRuntimePromptListsToolSurfaces(t *testing.T) {
 	for _, want := range []string{
 		"## Tool surfaces",
 		"- guaranteed repo tools: bash, bash_status, bash_kill, view, edit, write, multi_edit, glob, grep, ls, lsp",
-		"- guaranteed workflow tools: planning, invariants",
+		"- guaranteed workflow tools: planning, invariants, verification",
 		"- delegate: on",
 		"- execute_code: on",
 		"- open_image: off",
