@@ -23,6 +23,8 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/plan"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	"github.com/fugue-labs/gollem/core"
+	"github.com/fugue-labs/gollem/ext/codetool"
+	"github.com/fugue-labs/gollem/ext/deep"
 )
 
 // Agent event messages sent to the TUI via p.Send from the goroutine.
@@ -30,12 +32,20 @@ type (
 	textDeltaMsg     struct{ runID int; text string }
 	thinkingDeltaMsg struct{ runID int; text string }
 	toolCallMsg      struct{ runID int; callID, name, args, rawArgs string }
-	toolResultMsg    struct{ runID int; callID, name, result, errText string }
+	toolResultMsg struct {
+		runID     int
+		callID    string
+		name      string
+		result    string
+		errText   string
+		toolState map[string]any
+	}
 	agentDoneMsg struct {
-		runID    int
-		usage    core.RunUsage
-		messages []core.ModelMessage
-		err      error
+		runID     int
+		usage     core.RunUsage
+		messages  []core.ModelMessage
+		toolState map[string]any
+		err       error
 	}
 )
 
@@ -165,12 +175,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			RawArgs:  msg.rawArgs,
 			Status:   chat.ToolRunning,
 		})
-		if msg.name == "planning" {
-			m.planState.HandleToolCall(msg.rawArgs)
-		}
-		if msg.name == "invariants" {
-			m.invariantState.HandleToolCall(msg.rawArgs)
-		}
 		m.scroll = 0
 		return m, nil
 
@@ -179,19 +183,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.finishLastTool(msg.callID, msg.name, msg.result, msg.errText)
-		if msg.name == "planning" {
-			if msg.errText != "" {
-				m.planState.HandleToolError()
-			} else {
-				m.planState.HandleToolResult(msg.result)
-			}
+		if currentPlan, ok := deep.PlanFromToolState(msg.toolState); ok {
+			m.planState = plan.FromDeepPlan(currentPlan)
 		}
-		if msg.name == "invariants" {
-			if msg.errText != "" {
-				m.invariantState.HandleToolError()
-			} else {
-				m.invariantState.HandleToolResult(msg.result)
-			}
+		if currentInv, ok := codetool.InvariantsFromToolState(msg.toolState); ok {
+			m.invariantState = uiinvariants.FromToolState(currentInv)
 		}
 		m.scroll = 0
 		return m, nil
@@ -210,6 +206,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		} else if msg.messages != nil {
 			m.history = msg.messages
+			if currentPlan, ok := deep.PlanFromToolState(msg.toolState); ok {
+				m.planState = plan.FromDeepPlan(currentPlan)
+			}
+			if currentInv, ok := codetool.InvariantsFromToolState(msg.toolState); ok {
+				m.invariantState = uiinvariants.FromToolState(currentInv)
+			}
 		}
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
@@ -459,14 +461,14 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 					p.Send(toolCallMsg{runID: rid, callID: toolCallID, name: toolName, args: argsJSON, rawArgs: argsJSON})
 				}
 			},
-			OnToolEnd: func(_ context.Context, _ *core.RunContext, toolCallID, toolName, result string, err error) {
+			OnToolEnd: func(_ context.Context, rc *core.RunContext, toolCallID, toolName, result string, err error) {
 				if p != nil {
 					rid := int(m.hookRID.Load())
 					errText := ""
 					if err != nil {
 						errText = err.Error()
 					}
-					p.Send(toolResultMsg{runID: rid, callID: toolCallID, name: toolName, result: result, errText: errText})
+					p.Send(toolResultMsg{runID: rid, callID: toolCallID, name: toolName, result: result, errText: errText, toolState: rc.ToolState()})
 				}
 			},
 		}
@@ -497,7 +499,7 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 		if err != nil {
 			return agentDoneMsg{runID: runID, err: err}
 		}
-		return agentDoneMsg{runID: runID, usage: result.Usage, messages: result.Messages}
+		return agentDoneMsg{runID: runID, usage: result.Usage, messages: result.Messages, toolState: result.ToolState}
 	}
 }
 

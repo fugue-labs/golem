@@ -1,27 +1,23 @@
 package invariants
 
-import "testing"
+import (
+	"testing"
 
-func TestHandleToolErrorRestoresExtractedState(t *testing.T) {
-	state := State{}
-	state.HandleToolCall(`{"command":"extract"}`)
-	state.HandleToolError()
+	"github.com/fugue-labs/gollem/ext/codetool"
+)
 
-	if state.Extracted {
-		t.Fatalf("expected Extracted=false after rollback")
-	}
-	if len(state.Items) != 0 {
-		t.Fatalf("expected no items after rollback, got %d", len(state.Items))
-	}
-}
-
-func TestHandleToolResultReplacesItemsAndMarksExtracted(t *testing.T) {
-	state := State{}
-	state.HandleToolCall(`{"command":"extract"}`)
-	state.HandleToolResult(`{"status":"ok","extracted":true,"items":[{"id":"I1","description":"Commit the work.","kind":"hard","status":"pass","evidence":"git commit abc123"},{"id":"I2","description":"Push the work.","kind":"hard","status":"unknown"},{"id":"I3","description":"Delight users.","kind":"soft","status":"pass"}]}`)
+func TestFromToolStateCopiesAndCountsItems(t *testing.T) {
+	state := FromToolState(codetool.InvariantsState{
+		Extracted: true,
+		Items: []codetool.InvariantItem{
+			{ID: "I1", Description: "Commit the work.", Kind: "hard", Status: "pass", Evidence: "git commit abc123"},
+			{ID: "I2", Description: "Push the work.", Kind: "hard", Status: "unknown"},
+			{ID: "I3", Description: "Delight users.", Kind: "soft", Status: "pass"},
+		},
+	})
 
 	if !state.Extracted {
-		t.Fatalf("expected Extracted=true after successful extract result")
+		t.Fatalf("expected Extracted=true")
 	}
 	if got := len(state.Items); got != 3 {
 		t.Fatalf("expected 3 items, got %d", got)
@@ -39,18 +35,9 @@ func TestHandleToolResultReplacesItemsAndMarksExtracted(t *testing.T) {
 	}
 }
 
-func TestHandleToolCallAddNormalizesItems(t *testing.T) {
-	state := State{}
-	state.HandleToolCall(`{"command":"add","items":[{"id":"I7","description":"Use planning","kind":"soft","status":"passed"},{"id":"I8","description":"Verify build","kind":"hard","status":"in-progress"}]}`)
-	state.HandleToolResult(`{"status":"ok"}`)
-
-	if got := len(state.Items); got != 2 {
-		t.Fatalf("expected 2 items, got %d", got)
-	}
-	if state.Items[0].Status != "pass" || state.Items[0].Kind != "soft" {
-		t.Fatalf("unexpected first item: %+v", state.Items[0])
-	}
-	if state.Items[1].Status != "in_progress" || state.Items[1].Kind != "hard" {
-		t.Fatalf("unexpected second item: %+v", state.Items[1])
+func TestFromToolStateHandlesEmptySnapshot(t *testing.T) {
+	state := FromToolState(codetool.InvariantsState{})
+	if state.HasItems() {
+		t.Fatal("expected no items")
 	}
 }

@@ -1,11 +1,17 @@
 package plan
 
-import "testing"
+import (
+	"testing"
 
-func TestHandleToolCallNormalizesStatuses(t *testing.T) {
-	state := State{}
-	state.HandleToolCall(`{"command":"create","tasks":[{"id":" T1 ","description":" First step ","status":"done"},{"id":"T2","description":"Second step","status":"in progress"},{"id":"T3","description":"Third step","status":""}]}`)
-	state.HandleToolResult(`{"status":"created"}`)
+	"github.com/fugue-labs/gollem/ext/deep"
+)
+
+func TestFromDeepPlanNormalizesStatuses(t *testing.T) {
+	state := FromDeepPlan(deep.Plan{Tasks: []deep.PlanTask{
+		{ID: " T1 ", Description: " First step ", Status: "done"},
+		{ID: "T2", Description: "Second step", Status: "in progress"},
+		{ID: "T3", Description: "Third step", Status: ""},
+	}})
 
 	if got := state.Tasks[0].Status; got != "completed" {
 		t.Fatalf("first task status = %q", got)
@@ -27,15 +33,9 @@ func TestHandleToolCallNormalizesStatuses(t *testing.T) {
 	}
 }
 
-func TestHandleToolResultGetNormalizesStatuses(t *testing.T) {
-	state := State{}
-	state.HandleToolCall(`{"command":"get"}`)
-	state.HandleToolResult(`{"tasks":[{"id":"A","description":"Alpha","status":"Finished"},{"id":"B","description":"Beta","status":"ACTIVE"}]}`)
-
-	if got := state.Tasks[0].Status; got != "completed" {
-		t.Fatalf("first task status = %q", got)
-	}
-	if got := state.Tasks[1].Status; got != "in_progress" {
-		t.Fatalf("second task status = %q", got)
+func TestFromDeepPlanKeepsEmptyState(t *testing.T) {
+	state := FromDeepPlan(deep.Plan{})
+	if state.HasTasks() {
+		t.Fatal("expected no tasks")
 	}
 }

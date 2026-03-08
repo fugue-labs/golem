@@ -1,11 +1,19 @@
 package invariants
 
-import "testing"
+import (
+	"testing"
 
-func TestHandleToolResultNormalizesItems(t *testing.T) {
-	state := State{}
-	state.HandleToolCall(`{"command":"extract"}`)
-	state.HandleToolResult(`{"status":"ok","extracted":true,"items":[{"id":" I1 ","description":" Check build ","kind":"SOFT","status":"Completed","evidence":" go test ./... "},{"id":"I2","description":"Review failures","kind":"hard","status":"UNMET"}]}`)
+	"github.com/fugue-labs/gollem/ext/codetool"
+)
+
+func TestFromToolStateNormalizesItems(t *testing.T) {
+	state := FromToolState(codetool.InvariantsState{
+	Extracted: true,
+		Items: []codetool.InvariantItem{
+			{ID: " I1 ", Description: " Check build ", Kind: "SOFT", Status: "Completed", Evidence: " go test ./... "},
+			{ID: "I2", Description: "Review failures", Kind: "hard", Status: "UNMET"},
+		},
+	})
 
 	if !state.Extracted {
 		t.Fatal("expected Extracted=true after extract result")
