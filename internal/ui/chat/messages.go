@@ -224,16 +224,20 @@ func renderViewResult(msg *Message, toolCall *Message, sty *styles.Styles, width
 	}
 
 	// Strip line number prefixes, highlight, then re-add.
+	// Gollem's view tool formats lines as "%6d\t%s" (6-wide number + tab).
 	var codeLines []string
 	var lineNums []string
 	for _, line := range rawLines {
-		if idx := strings.Index(line, "│ "); idx != -1 && idx < 8 {
-			lineNums = append(lineNums, strings.TrimSpace(line[:idx]))
-			codeLines = append(codeLines, line[idx+len("│ "):])
-		} else {
-			lineNums = append(lineNums, "")
-			codeLines = append(codeLines, line)
+		if idx := strings.IndexByte(line, '\t'); idx != -1 && idx <= 8 {
+			num := strings.TrimSpace(line[:idx])
+			if num != "" && num[0] >= '0' && num[0] <= '9' {
+				lineNums = append(lineNums, num)
+				codeLines = append(codeLines, line[idx+1:])
+				continue
+			}
 		}
+		lineNums = append(lineNums, "")
+		codeLines = append(codeLines, line)
 	}
 
 	// Highlight all code as a block for consistent tokenization.
