@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
+	"github.com/fugue-labs/golem/internal/eval"
 	"github.com/fugue-labs/golem/internal/skills"
 	"github.com/fugue-labs/golem/internal/ui/chat"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
@@ -84,21 +85,24 @@ type Model struct {
 	activeSkills []skills.Skill
 
 	// State.
-	messages  []*chat.Message
-	history   []core.ModelMessage // gollem conversation history across turns
-	scroll    int
-	width     int
-	height    int
-	busy      bool
-	usage     core.RunUsage
-	startTime time.Time
-	runID     int
-	hookRID   atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
+	messages   []*chat.Message
+	history    []core.ModelMessage // gollem conversation history across turns
+	scroll     int
+	width      int
+	height     int
+	busy       bool
+	usage      core.RunUsage
+	startTime  time.Time
+	runID      int
+	hookRID    atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
+	lastPrompt string
 
 	// Plan/invariant/verification state — mirrored from tool messages.
-	planState         plan.State
-	invariantState    uiinvariants.State
-	verificationState uiverification.State
+	planState          plan.State
+	invariantState     uiinvariants.State
+	verificationState  uiverification.State
+	lastRunSummary     *eval.RunSummary
+	currentRunMessages []*chat.Message
 
 	// Pending user messages queued while the agent is working.
 	// Drained by middleware before each model turn.
@@ -185,14 +189,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
-		m.messages = append(m.messages, &chat.Message{
+		toolMsg := &chat.Message{
 			Kind:     chat.KindToolCall,
 			CallID:   msg.callID,
 			ToolName: msg.name,
 			ToolArgs: extractMainParam(msg.args),
 			RawArgs:  msg.rawArgs,
 			Status:   chat.ToolRunning,
-		})
+		}
+		m.messages = append(m.messages, toolMsg)
+		m.currentRunMessages = append(m.currentRunMessages, toolMsg)
 		m.scroll = 0
 		return m, nil
 
@@ -235,10 +241,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agent = nil
 		m.usage = msg.usage
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
-			m.messages = append(m.messages, &chat.Message{
+			errMsg := &chat.Message{
 				Kind:    chat.KindError,
 				Content: msg.err.Error(),
-			})
+			}
+			m.messages = append(m.messages, errMsg)
+			m.currentRunMessages = append(m.currentRunMessages, errMsg)
 		} else if msg.messages != nil {
 			m.history = msg.messages
 			if currentPlan, ok := deep.PlanFromToolState(msg.toolState); ok {
@@ -251,6 +259,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.verificationState = uiverification.FromToolState(currentVerify)
 			}
 		}
+		validation := config.ValidationResult{}
+		if m.cfg != nil {
+			validation = m.cfg.Validate()
+		}
+		summary := eval.BuildRunSummary(
+			m.lastPrompt,
+			agent.BuildRuntimeReport(m.cfg, m.runtime, validation, msg.err),
+			m.currentRunMessages,
+			m.verificationState,
+			msg.usage,
+			msg.err,
+		)
+		m.lastRunSummary = &summary
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	}
@@ -352,10 +373,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input.SetHeight(1)
 		m.scroll = 0
 
-		m.messages = append(m.messages, &chat.Message{
+		userMsg := &chat.Message{
 			Kind:    chat.KindUser,
 			Content: text,
-		})
+		}
+		m.messages = append(m.messages, userMsg)
 
 		if m.busy {
 			// Queue the message — middleware will inject it before the next model turn.
@@ -367,6 +389,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		m.busy = true
 		m.startTime = time.Now()
+		m.lastPrompt = text
+		m.currentRunMessages = []*chat.Message{userMsg}
 		m.runID++
 		m.hookRID.Store(int64(m.runID))
 		m.runCtx, m.cancel = context.WithCancel(context.Background())
@@ -424,6 +448,9 @@ func (m *Model) clearSessionState() {
 	m.planState = plan.State{}
 	m.invariantState = uiinvariants.State{}
 	m.verificationState = uiverification.State{}
+	m.lastPrompt = ""
+	m.lastRunSummary = nil
+	m.currentRunMessages = nil
 	m.pendingMu.Lock()
 	m.pendingMsgs = nil
 	m.pendingMu.Unlock()
@@ -569,6 +596,8 @@ func (m *Model) appendOrUpdateAssistant(delta string) {
 		Kind:    chat.KindAssistant,
 		Content: delta,
 	})
+	msg := m.messages[len(m.messages)-1]
+	m.currentRunMessages = append(m.currentRunMessages, msg)
 }
 
 func (m *Model) appendOrUpdateThinking(delta string) {
@@ -585,6 +614,8 @@ func (m *Model) appendOrUpdateThinking(delta string) {
 		Kind:    chat.KindThinking,
 		Content: delta,
 	})
+	msg := m.messages[len(m.messages)-1]
+	m.currentRunMessages = append(m.currentRunMessages, msg)
 }
 
 func (m *Model) finishLastTool(callID, name, result, errText string) {
@@ -613,10 +644,12 @@ func (m *Model) finishLastTool(callID, name, result, errText string) {
 		break
 	}
 	if errText != "" {
-		m.messages = append(m.messages, &chat.Message{
+		errMsg := &chat.Message{
 			Kind:    chat.KindError,
 			Content: fmt.Sprintf("%s: %s", name, errText),
-		})
+		}
+		m.messages = append(m.messages, errMsg)
+		m.currentRunMessages = append(m.currentRunMessages, errMsg)
 	}
 }
 

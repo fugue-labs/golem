@@ -115,13 +115,13 @@ func TestViewShowsWorkflowPanelForInvariantOnlyState(t *testing.T) {
 }
 
 func TestRenderRuntimeSummaryMessageListsToolSurfaces(t *testing.T) {
-	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", TeamMode: "auto", RouterModel: "router-mini"})
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", APIKey: "test-key", Timeout: time.Minute, TeamMode: "auto", RouterModel: "router-mini"})
 	m.runtime.CodeModeStatus = "on"
 	m.runtime.OpenImageStatus = "off"
 	m.runtime.RouterModelName = "router-resolved"
 
 	msg := m.renderRuntimeSummaryMessage()
-	for _, want := range []string{"Effective router model:", "**Tool surfaces**", "Guaranteed repo tools:", "Guaranteed workflow tools:", "Execute code: `on`", "Open image: `off`"} {
+	for _, want := range []string{"Effective router model:", "**Tool surfaces**", "Guaranteed repo tools:", "Guaranteed workflow tools:", "Delegate: `off`", "Execute code: `on`", "Open image: `off`", "Team mode: `auto` (effective: `off`)"} {
 		if !strings.Contains(msg.Content, want) {
 			t.Fatalf("runtime summary missing %q\n%s", want, msg.Content)
 		}
@@ -130,6 +130,20 @@ func TestRenderRuntimeSummaryMessageListsToolSurfaces(t *testing.T) {
 		if got := strings.Count(msg.Content, label); got != 1 {
 			t.Fatalf("%s count=%d, want 1\n%s", label, got, msg.Content)
 		}
+	}
+}
+
+func TestRenderRuntimeSummaryMessageIncludesValidationWarnings(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", APIKey: "test-key", Timeout: time.Minute, TeamMode: "on", DisableDelegate: true})
+	m.runtime.CodeModeStatus = "off"
+	m.runtime.OpenImageStatus = "off"
+
+	msg := m.renderRuntimeSummaryMessage()
+	if !strings.Contains(msg.Content, "**Validation warnings**") {
+		t.Fatalf("expected validation warnings section\n%s", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "delegate is disabled") {
+		t.Fatalf("expected delegate warning\n%s", msg.Content)
 	}
 }
 
@@ -280,7 +294,7 @@ func TestStaleToolResultDoesNotMutateCurrentWorkflowState(t *testing.T) {
 	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "current invariant", Kind: "hard", Status: "pass"}}}
 
 	state := map[string]any{
-		"planning": map[string]any{"tasks": []map[string]any{{"id": "OLD", "description": "stale", "status": "pending"}}},
+		"planning":   map[string]any{"tasks": []map[string]any{{"id": "OLD", "description": "stale", "status": "pending"}}},
 		"invariants": map[string]any{"extracted": true, "items": []map[string]any{{"id": "OLD", "description": "stale invariant", "kind": "hard", "status": "fail"}}},
 	}
 

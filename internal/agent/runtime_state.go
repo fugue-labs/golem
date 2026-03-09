@@ -57,6 +57,7 @@ func PrepareRuntime(ctx context.Context, cfg *config.Config, prompt string) (Run
 	}
 
 	state = buildRuntimeState(ctx, cfg, prompt, routerModel)
+	state.CodeModeStatus, state.CodeModeError = resolveCodeModeStatus(cfg)
 	state.OpenImageStatus = openImageStatus
 	if routerFallback != "" && strings.HasPrefix(state.TeamModeReason, "auto router") {
 		state.TeamModeReason += routerFallback
@@ -88,4 +89,18 @@ func buildRuntimeState(ctx context.Context, cfg *config.Config, prompt string, r
 	}
 	state.EffectiveTeamMode, state.TeamModeReason = decideTeamMode(ctx, cfg, prompt, routerModel)
 	return state
+}
+
+func resolveCodeModeStatus(cfg *config.Config) (string, string) {
+	if cfg == nil || cfg.DisableCodeMode {
+		return "off", ""
+	}
+	runner, err := maybeCodeRunner(cfg)
+	if err != nil {
+		return "unavailable", err.Error()
+	}
+	if runner != nil {
+		return "on", ""
+	}
+	return "off", ""
 }

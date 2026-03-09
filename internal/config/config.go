@@ -49,6 +49,7 @@ type Config struct {
 	ThinkingBudget  int    // for Anthropic and Gemini thinking-capable models
 	Timeout         time.Duration
 
+	RawTeamMode                   string
 	TeamMode                      string // auto, on, off
 	DisableDelegate               bool
 	DisableCodeMode               bool
@@ -64,6 +65,17 @@ type Config struct {
 	// LoginProvider is the raw provider name from `golem login` (e.g. "chatgpt").
 	// Empty when login config wasn't used.
 	LoginProvider string
+}
+
+// ValidationResult captures fatal config errors and non-fatal warnings.
+type ValidationResult struct {
+	Errors   []string `json:"errors,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// HasErrors reports whether validation found fatal issues.
+func (r ValidationResult) HasErrors() bool {
+	return len(r.Errors) > 0
 }
 
 // Load reads configuration with the following precedence:
@@ -179,6 +191,7 @@ func Load() (*Config, error) {
 	}
 	cfg.Timeout = timeout
 	cfg.RouterModel = firstNonEmpty(os.Getenv("GOLEM_ROUTER_MODEL"), os.Getenv("GOLEM_CHEAP_MODEL"))
+	cfg.RawTeamMode = strings.TrimSpace(os.Getenv("GOLEM_TEAM_MODE"))
 	cfg.TeamMode = teamModeEnvOr("GOLEM_TEAM_MODE", "auto")
 	cfg.DisableDelegate = isTruthyEnv("GOLEM_DISABLE_DELEGATE")
 	cfg.DisableCodeMode = isTruthyEnv("GOLEM_DISABLE_CODE_MODE") || isTruthyEnv("GOLEM_NO_CODE_MODE")
@@ -186,6 +199,64 @@ func Load() (*Config, error) {
 	cfg.DisableGreedyThinkingPressure = isTruthyEnv("GOLEM_DISABLE_GREEDY_THINKING_PRESSURE")
 
 	return cfg, nil
+}
+
+// Validate reports fatal config errors and non-fatal warnings.
+func (c *Config) Validate() ValidationResult {
+	if c == nil {
+		return ValidationResult{Errors: []string{"config is nil"}}
+	}
+
+	var result ValidationResult
+
+	if raw := strings.ToLower(strings.TrimSpace(c.RawTeamMode)); raw != "" && !isValidTeamMode(raw) {
+		result.Errors = append(result.Errors, fmt.Sprintf("invalid GOLEM_TEAM_MODE %q: must be one of auto, on, off", c.RawTeamMode))
+	}
+
+	switch c.Provider {
+	case ProviderAnthropic:
+		if strings.TrimSpace(c.APIKey) == "" {
+			result.Errors = append(result.Errors, "ANTHROPIC_API_KEY is required for anthropic provider")
+		}
+	case ProviderOpenAI:
+		if strings.TrimSpace(c.APIKey) == "" && c.ChatGPTCreds == nil {
+			result.Errors = append(result.Errors, "OPENAI_API_KEY or ChatGPT subscription credentials are required for openai provider")
+		}
+	case ProviderOpenAICompatible:
+		if strings.TrimSpace(c.APIKey) == "" {
+			result.Errors = append(result.Errors, "GOLEM_API_KEY or XAI_API_KEY is required for openai_compatible provider")
+		}
+		if strings.TrimSpace(c.BaseURL) == "" {
+			result.Errors = append(result.Errors, "GOLEM_BASE_URL or XAI_BASE_URL is required for openai_compatible provider")
+		}
+	case ProviderVertexAI, ProviderVertexAnthropic:
+		if strings.TrimSpace(c.ProjectID) == "" {
+			result.Errors = append(result.Errors, "VERTEX_PROJECT is required for vertex providers")
+		}
+		if strings.TrimSpace(c.Region) == "" {
+			result.Errors = append(result.Errors, "VERTEX_REGION is required for vertex providers")
+		}
+	default:
+		result.Errors = append(result.Errors, fmt.Sprintf("unsupported provider: %s", c.Provider))
+	}
+
+	if c.Timeout <= 0 {
+		result.Errors = append(result.Errors, "GOLEM_TIMEOUT must be greater than zero")
+	}
+	if c.AutoContextMaxTokens < 0 {
+		result.Errors = append(result.Errors, "auto-context max tokens must be non-negative")
+	}
+	if c.AutoContextKeepLastN < 0 {
+		result.Errors = append(result.Errors, "auto-context keep-last turns must be non-negative")
+	}
+	if c.AutoContextMaxTokens > 0 && c.AutoContextKeepLastN == 0 {
+		result.Errors = append(result.Errors, "auto-context keep-last turns must be greater than zero when auto-context is enabled")
+	}
+	if c.DisableDelegate && c.TeamMode == "on" {
+		result.Warnings = append(result.Warnings, "team mode is forced on but delegate is disabled, so team mode will remain off at runtime")
+	}
+
+	return result
 }
 
 // Status returns a human-readable summary of the current configuration.
@@ -204,24 +275,28 @@ func Status() string {
 	fmt.Fprintf(&b, "\nModel:     %s", cfg.Model)
 
 	// Auth method.
-	switch {
-	case cfg.ChatGPTCreds != nil:
-		b.WriteString("\nAuth:      ChatGPT subscription (OAuth)")
-	case cfg.APIKey != "":
-		masked := cfg.APIKey
-		if len(masked) > 8 {
-			masked = masked[:4] + "..." + masked[len(masked)-4:]
-		}
-		fmt.Fprintf(&b, "\nAuth:      API key (%s)", masked)
-	default:
-		b.WriteString("\nAuth:      none (will fail at runtime)")
-	}
+	_, authSummary := cfg.AuthStatus()
+	fmt.Fprintf(&b, "\nAuth:      %s", authSummary)
 
 	if cfg.BaseURL != "" {
 		fmt.Fprintf(&b, "\nBase URL:  %s", cfg.BaseURL)
 	}
 
 	return b.String()
+}
+
+// AuthStatus returns the auth mode and a human-readable summary.
+func (c *Config) AuthStatus() (string, string) {
+	switch {
+	case c == nil:
+		return "missing", "none"
+	case c.ChatGPTCreds != nil:
+		return "chatgpt_oauth", "ChatGPT subscription (OAuth)"
+	case strings.TrimSpace(c.APIKey) != "":
+		return "api_key", fmt.Sprintf("API key (%s)", maskedSecret(c.APIKey))
+	default:
+		return "missing", "none (will fail at runtime)"
+	}
 }
 
 func detectProvider(savedKeys map[string]string) (Provider, ProviderSource) {
@@ -306,12 +381,34 @@ func intEnvOr(key string, fallback int) (int, error) {
 
 func teamModeEnvOr(key, fallback string) string {
 	v := strings.ToLower(strings.TrimSpace(envOr(key, fallback)))
+	return normalizeTeamMode(v, fallback)
+}
+
+func normalizeTeamMode(value, fallback string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
 	switch v {
 	case "on", "off", "auto":
 		return v
 	default:
 		return fallback
 	}
+}
+
+func isValidTeamMode(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "on", "off", "auto":
+		return true
+	default:
+		return false
+	}
+}
+
+func maskedSecret(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) <= 8 {
+		return trimmed
+	}
+	return trimmed[:4] + "..." + trimmed[len(trimmed)-4:]
 }
 
 func hasNonEmptyEnv(key string) bool {

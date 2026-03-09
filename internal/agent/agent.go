@@ -89,12 +89,8 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 	if sandwichCfg, ok := reasoningSandwichConfig(cfg); ok {
 		toolOpts = append(toolOpts, codetool.WithReasoningSandwichConfig(sandwichCfg))
 	}
-	if runner, err := maybeCodeRunner(cfg); err != nil {
-		runtime.CodeModeStatus = "unavailable"
-		runtime.CodeModeError = err.Error()
-	} else if runner != nil {
+	if runner, err := maybeCodeRunner(cfg); err == nil && runner != nil {
 		toolOpts = append(toolOpts, codetool.WithCodeMode(runner))
-		runtime.CodeModeStatus = "on"
 	}
 
 	opts := codetool.AgentOptions(cfg.WorkingDir, toolOpts...)
@@ -158,42 +154,7 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 
 func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills []skills.Skill) string {
 	var b strings.Builder
-	b.WriteString("# Golem Runtime Profile\n\n")
-	b.WriteString("## Effective runtime\n")
-	fmt.Fprintf(&b, "- provider/model: %s/%s\n", cfg.Provider, cfg.Model)
-	if cfg.RouterModel != "" {
-		fmt.Fprintf(&b, "- router model: %s\n", cfg.RouterModel)
-	}
-	fmt.Fprintf(&b, "- timeout: %s\n", cfg.Timeout)
-	fmt.Fprintf(&b, "- team mode: %s (effective: %s)\n", cfg.TeamMode, onOff(runtime.EffectiveTeamMode))
-	if runtime.RouterModelName != "" {
-		fmt.Fprintf(&b, "- effective router model: %s\n", runtime.RouterModelName)
-	}
-	if runtime.TeamModeReason != "" {
-		fmt.Fprintf(&b, "- team mode note: %s\n", runtime.TeamModeReason)
-	}
-	fmt.Fprintf(&b, "- delegate: %s\n", onOff(!cfg.DisableDelegate))
-	fmt.Fprintf(&b, "- code mode: %s\n", runtime.CodeModeStatus)
-	if runtime.CodeModeError != "" {
-		fmt.Fprintf(&b, "- code mode note: %s\n", runtime.CodeModeError)
-	}
-	if cfg.ReasoningEffort != "" {
-		fmt.Fprintf(&b, "- reasoning effort: %s\n", cfg.ReasoningEffort)
-	}
-	if cfg.ThinkingBudget > 0 {
-		fmt.Fprintf(&b, "- thinking budget: %d\n", cfg.ThinkingBudget)
-	}
-	if cfg.AutoContextMaxTokens > 0 {
-		fmt.Fprintf(&b, "- auto-context: %d tokens, keep last %d turns\n", cfg.AutoContextMaxTokens, cfg.AutoContextKeepLastN)
-	}
-	fmt.Fprintf(&b, "- top-level personality: %s\n", onOff(cfg.TopLevelPersonality))
-	b.WriteString("\n## Tool surfaces\n")
-	b.WriteString("- guaranteed repo tools: bash, bash_status, bash_kill, view, edit, write, multi_edit, glob, grep, ls, lsp\n")
-	b.WriteString("- guaranteed workflow tools: planning, invariants, verification\n")
-	fmt.Fprintf(&b, "- delegate: %s\n", onOff(!cfg.DisableDelegate))
-	fmt.Fprintf(&b, "- execute_code: %s\n", runtime.CodeModeStatus)
-	fmt.Fprintf(&b, "- open_image: %s\n", runtime.OpenImageStatus)
-	b.WriteString("- note: environment/toolchain-dependent capabilities should be trusted only when they appear in the active tool list.\n")
+	b.WriteString(RenderRuntimePrompt(BuildRuntimeReport(cfg, runtime, cfg.Validate(), nil)))
 	if len(activeSkills) > 0 {
 		b.WriteString("\n## Active skills\n")
 		for _, s := range activeSkills {

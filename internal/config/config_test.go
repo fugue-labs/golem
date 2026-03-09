@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -123,5 +124,71 @@ func TestDetectProviderPrefersExplicitCompatibleSignals(t *testing.T) {
 	t.Setenv("GOLEM_API_KEY", "x")
 	if got, _ := detectProvider(nil); got != ProviderOpenAICompatible {
 		t.Fatalf("detectProvider() = %q", got)
+	}
+}
+
+func TestValidateRejectsInvalidRawTeamMode(t *testing.T) {
+	cfg := &Config{
+		Provider:             ProviderOpenAI,
+		Model:                "gpt-5.4",
+		APIKey:               "test-key",
+		Timeout:              time.Minute,
+		RawTeamMode:          "sometimes",
+		TeamMode:             "auto",
+		AutoContextMaxTokens: 1,
+		AutoContextKeepLastN: 1,
+	}
+
+	result := cfg.Validate()
+	if !result.HasErrors() {
+		t.Fatal("expected invalid GOLEM_TEAM_MODE to be rejected")
+	}
+	if got := result.Errors[0]; got == "" || got == "config is nil" {
+		t.Fatalf("unexpected validation error: %+v", result.Errors)
+	}
+}
+
+func TestValidateRequiresProviderCredentials(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{name: "anthropic", cfg: Config{Provider: ProviderAnthropic, Model: "claude", Timeout: time.Minute, AutoContextMaxTokens: 1, AutoContextKeepLastN: 1}},
+		{name: "openai", cfg: Config{Provider: ProviderOpenAI, Model: "gpt-5.4", Timeout: time.Minute, AutoContextMaxTokens: 1, AutoContextKeepLastN: 1}},
+		{name: "openai compatible", cfg: Config{Provider: ProviderOpenAICompatible, Model: "grok", Timeout: time.Minute, BaseURL: "https://example.test/v1", AutoContextMaxTokens: 1, AutoContextKeepLastN: 1}},
+		{name: "vertex", cfg: Config{Provider: ProviderVertexAI, Model: "gemini", Timeout: time.Minute, Region: "us-central1", AutoContextMaxTokens: 1, AutoContextKeepLastN: 1}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.cfg.Validate()
+			if !result.HasErrors() {
+				t.Fatalf("expected missing credentials/settings error for %+v", tt.cfg)
+			}
+		})
+	}
+}
+
+func TestValidateWarnsWhenTeamModeForcedOnButDelegateDisabled(t *testing.T) {
+	cfg := &Config{
+		Provider:             ProviderOpenAI,
+		Model:                "gpt-5.4",
+		APIKey:               "test-key",
+		Timeout:              time.Minute,
+		TeamMode:             "on",
+		DisableDelegate:      true,
+		AutoContextMaxTokens: 1,
+		AutoContextKeepLastN: 1,
+	}
+
+	result := cfg.Validate()
+	if result.HasErrors() {
+		t.Fatalf("unexpected validation errors: %+v", result.Errors)
+	}
+	if len(result.Warnings) != 1 {
+		t.Fatalf("warnings=%v, want 1", result.Warnings)
+	}
+	if got := result.Warnings[0]; got == "" || !strings.Contains(got, "delegate") {
+		t.Fatalf("unexpected warning: %q", got)
 	}
 }

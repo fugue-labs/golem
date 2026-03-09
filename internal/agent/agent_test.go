@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/gollem/core"
@@ -30,7 +31,7 @@ func TestInitialRuntimeStateSeparatesConfigFromRuntime(t *testing.T) {
 }
 
 func TestBuildRuntimePromptAvoidsRedundantShowcaseBullets(t *testing.T) {
-	cfg := &config.Config{Provider: config.ProviderOpenAI, Model: "gpt-test", TeamMode: "auto"}
+	cfg := &config.Config{Provider: config.ProviderOpenAI, Model: "gpt-test", TeamMode: "auto", APIKey: "test-key", Timeout: time.Minute}
 	state := RuntimeState{CodeModeStatus: "pending"}
 
 	prompt := buildRuntimePrompt(cfg, state, nil)
@@ -40,22 +41,45 @@ func TestBuildRuntimePromptAvoidsRedundantShowcaseBullets(t *testing.T) {
 }
 
 func TestBuildRuntimePromptListsToolSurfaces(t *testing.T) {
-	cfg := &config.Config{Provider: config.ProviderOpenAI, Model: "gpt-test", TeamMode: "auto"}
-	state := RuntimeState{CodeModeStatus: "on", OpenImageStatus: "off", RouterModelName: "router-mini"}
+	cfg := &config.Config{Provider: config.ProviderOpenAI, Model: "gpt-test", TeamMode: "auto", APIKey: "test-key", Timeout: time.Minute}
+	state := RuntimeState{CodeModeStatus: "on", OpenImageStatus: "off", RouterModelName: "router-mini", EffectiveTeamMode: true}
 
 	prompt := buildRuntimePrompt(cfg, state, nil)
 	for _, want := range []string{
 		"## Tool surfaces",
-		"- guaranteed repo tools: bash, bash_status, bash_kill, view, edit, write, multi_edit, glob, grep, ls, lsp",
-		"- guaranteed workflow tools: planning, invariants, verification",
-		"- delegate: on",
-		"- execute_code: on",
-		"- open_image: off",
-		"- effective router model: router-mini",
+		"- Guaranteed repo tools: `bash`, `bash_status`, `bash_kill`, `view`, `edit`, `write`, `multi_edit`, `glob`, `grep`, `ls`, `lsp`",
+		"- Guaranteed workflow tools: `planning`, `invariants`, `verification`",
+		"- Delegate: `on`",
+		"- Execute code: `on`",
+		"- Open image: `off`",
+		"- Effective router model: `router-mini`",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("runtime prompt missing %q\n%s", want, prompt)
 		}
+	}
+	for _, label := range []string{"Delegate:", "Execute code:", "Open image:"} {
+		if got := strings.Count(prompt, label); got != 1 {
+			t.Fatalf("%s count=%d, want 1\n%s", label, got, prompt)
+		}
+	}
+}
+
+func TestBuildRuntimePromptIncludesValidationWarnings(t *testing.T) {
+	cfg := &config.Config{
+		Provider:        config.ProviderOpenAI,
+		Model:           "gpt-test",
+		APIKey:          "test-key",
+		Timeout:         time.Minute,
+		TeamMode:        "on",
+		DisableDelegate: true,
+	}
+	prompt := buildRuntimePrompt(cfg, RuntimeState{CodeModeStatus: "off", OpenImageStatus: "off"}, nil)
+	if !strings.Contains(prompt, "## Validation warnings") {
+		t.Fatalf("runtime prompt missing validation warnings section\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "delegate is disabled") {
+		t.Fatalf("runtime prompt missing delegate warning\n%s", prompt)
 	}
 }
 
