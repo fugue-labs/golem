@@ -141,7 +141,7 @@ func buildPromptRouterPrompt(prompt string) string {
 
 func supportsNativeRouterOutput(cfg *config.Config) bool {
 	switch cfg.Provider {
-	case config.ProviderOpenAI, config.ProviderVertexAI:
+	case config.ProviderVertexAI:
 		return true
 	default:
 		return false

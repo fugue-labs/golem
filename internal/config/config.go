@@ -53,6 +53,7 @@ type Config struct {
 	TeamMode                      string // auto, on, off
 	DisableDelegate               bool
 	DisableCodeMode               bool
+	EnableFetchURL                bool
 	TopLevelPersonality           bool
 	DisableGreedyThinkingPressure bool
 
@@ -195,6 +196,7 @@ func Load() (*Config, error) {
 	cfg.TeamMode = teamModeEnvOr("GOLEM_TEAM_MODE", "auto")
 	cfg.DisableDelegate = isTruthyEnv("GOLEM_DISABLE_DELEGATE")
 	cfg.DisableCodeMode = isTruthyEnv("GOLEM_DISABLE_CODE_MODE") || isTruthyEnv("GOLEM_NO_CODE_MODE")
+	cfg.EnableFetchURL = isTruthyEnv("GOLEM_ENABLE_FETCH_URL")
 	cfg.TopLevelPersonality = isTruthyEnv("GOLEM_TOP_LEVEL_PERSONALITY")
 	cfg.DisableGreedyThinkingPressure = isTruthyEnv("GOLEM_DISABLE_GREEDY_THINKING_PRESSURE")
 

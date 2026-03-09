@@ -21,6 +21,10 @@ type RuntimeState struct {
 	CodeModeStatus    string
 	CodeModeError     string
 	OpenImageStatus   string
+	WebSearchStatus   string
+	FetchURLStatus    string
+	AskUserStatus     string
+	AskUserFunc       codetool.AskUserFunc
 
 	// Session holds the persistent session handle for interactive TUIs.
 	// Call Session.Cleanup() when the session ends (e.g., /clear).
@@ -79,6 +83,12 @@ func baselineRuntimeState(cfg *config.Config) RuntimeState {
 		state.CodeModeStatus = "pending"
 	}
 	state.OpenImageStatus = "pending"
+	state.WebSearchStatus = "off"
+	state.FetchURLStatus = onOff(cfg != nil && cfg.EnableFetchURL)
+	state.AskUserStatus = "off"
+	if cfg != nil && cfg.TeamMode != "off" {
+		state.AskUserStatus = "pending"
+	}
 	return state
 }
 
@@ -88,6 +98,11 @@ func buildRuntimeState(ctx context.Context, cfg *config.Config, prompt string, r
 		state.RouterModelName = strings.TrimSpace(routerModel.ModelName())
 	}
 	state.EffectiveTeamMode, state.TeamModeReason = decideTeamMode(ctx, cfg, prompt, routerModel)
+	if cfg != nil && cfg.TeamMode == "auto" && strings.TrimSpace(prompt) == "" {
+		state.AskUserStatus = "pending"
+	} else {
+		state.AskUserStatus = onOff(state.EffectiveTeamMode)
+	}
 	return state
 }
 

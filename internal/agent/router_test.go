@@ -87,6 +87,15 @@ func TestPrepareRuntimeFallsBackWhenRouterModelResolutionFails(t *testing.T) {
 	}
 }
 
+func TestSupportsNativeRouterOutput(t *testing.T) {
+	if !supportsNativeRouterOutput(&config.Config{Provider: config.ProviderVertexAI}) {
+		t.Fatal("expected vertexai native router output to be enabled")
+	}
+	if supportsNativeRouterOutput(&config.Config{Provider: config.ProviderOpenAI}) {
+		t.Fatal("expected openai native router output to be disabled for router compatibility")
+	}
+}
+
 func TestResolveRouterModelUsesOverrideWhenConfigured(t *testing.T) {
 	cfg := &config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", RouterModel: "gpt-5.4-mini"}
 

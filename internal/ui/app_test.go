@@ -26,6 +26,7 @@ func TestHandleRuntimePreparedReusesSessionAndPreparesFreshAgent(t *testing.T) {
 			EffectiveTeamMode: false,
 			TeamModeReason:    "auto router model=test-model complexity=simple confidence=high",
 			CodeModeStatus:    "pending",
+			AskUserStatus:     "off",
 		},
 	}
 	m.runID = 1
@@ -38,6 +39,12 @@ func TestHandleRuntimePreparedReusesSessionAndPreparesFreshAgent(t *testing.T) {
 	}
 	if model.runtime.Session != oldSession {
 		t.Fatal("expected session reuse across runtime refresh")
+	}
+	if model.runtime.AskUserStatus != "off" {
+		t.Fatalf("AskUserStatus = %q, want off", model.runtime.AskUserStatus)
+	}
+	if model.runtime.AskUserFunc != nil {
+		t.Fatal("expected ask_user callback to remain disabled when team mode is off")
 	}
 	if model.agent == nil {
 		t.Fatal("expected fresh agent to be constructed")
@@ -121,6 +128,24 @@ func TestHandleRuntimePreparedErrorReturnsAgentDoneError(t *testing.T) {
 	}
 	if done.runID != 3 || done.err == nil || !strings.Contains(done.err.Error(), "deadline") {
 		t.Fatalf("unexpected agentDoneMsg: %+v", done)
+	}
+}
+
+func TestHandleKeyQuitShutsDownAskLoop(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+
+	updated, cmd := m.handleKey(tea.KeyPressMsg{Text: "ctrl+c", Code: tea.KeyEscape, Mod: tea.ModCtrl})
+	model := updated.(*Model)
+	if cmd == nil {
+		t.Fatal("expected quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("cmd() did not return tea.QuitMsg")
+	}
+	select {
+	case <-model.askDone:
+	default:
+		t.Fatal("expected ask loop shutdown channel to be closed")
 	}
 }
 

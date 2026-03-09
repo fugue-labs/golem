@@ -17,6 +17,7 @@ func TestLoadOpenAICompatibleConfig(t *testing.T) {
 	t.Setenv("GOLEM_TIMEOUT", "45s")
 	t.Setenv("GOLEM_TEAM_MODE", "on")
 	t.Setenv("GOLEM_DISABLE_CODE_MODE", "true")
+	t.Setenv("GOLEM_ENABLE_FETCH_URL", "1")
 	t.Setenv("GOLEM_TOP_LEVEL_PERSONALITY", "1")
 	t.Setenv("GOLEM_DISABLE_GREEDY_THINKING_PRESSURE", "yes")
 
@@ -40,8 +41,8 @@ func TestLoadOpenAICompatibleConfig(t *testing.T) {
 	if cfg.TeamMode != "on" || cfg.DisableCodeMode != true {
 		t.Fatalf("unexpected team/code mode fields: %+v", cfg)
 	}
-	if !cfg.TopLevelPersonality || !cfg.DisableGreedyThinkingPressure {
-		t.Fatalf("expected personality and greedy-thinking flags to be enabled")
+	if !cfg.TopLevelPersonality || !cfg.DisableGreedyThinkingPressure || !cfg.EnableFetchURL {
+		t.Fatalf("expected personality, greedy-thinking, and fetch-url flags to be enabled")
 	}
 	if cfg.AutoContextMaxTokens != 900000 || cfg.AutoContextKeepLastN != 20 {
 		t.Fatalf("unexpected auto-context config: %d/%d", cfg.AutoContextMaxTokens, cfg.AutoContextKeepLastN)

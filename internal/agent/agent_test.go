@@ -42,7 +42,7 @@ func TestBuildRuntimePromptAvoidsRedundantShowcaseBullets(t *testing.T) {
 
 func TestBuildRuntimePromptListsToolSurfaces(t *testing.T) {
 	cfg := &config.Config{Provider: config.ProviderOpenAI, Model: "gpt-test", TeamMode: "auto", APIKey: "test-key", Timeout: time.Minute}
-	state := RuntimeState{CodeModeStatus: "on", OpenImageStatus: "off", RouterModelName: "router-mini", EffectiveTeamMode: true}
+	state := RuntimeState{CodeModeStatus: "on", OpenImageStatus: "off", WebSearchStatus: "off", FetchURLStatus: "off", AskUserStatus: "on", RouterModelName: "router-mini", EffectiveTeamMode: true}
 
 	prompt := buildRuntimePrompt(cfg, state, nil)
 	for _, want := range []string{
@@ -52,13 +52,14 @@ func TestBuildRuntimePromptListsToolSurfaces(t *testing.T) {
 		"- Delegate: `on`",
 		"- Execute code: `on`",
 		"- Open image: `off`",
+		"- Ask user: `on`",
 		"- Effective router model: `router-mini`",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("runtime prompt missing %q\n%s", want, prompt)
 		}
 	}
-	for _, label := range []string{"Delegate:", "Execute code:", "Open image:"} {
+	for _, label := range []string{"Delegate:", "Execute code:", "Open image:", "Ask user:"} {
 		if got := strings.Count(prompt, label); got != 1 {
 			t.Fatalf("%s count=%d, want 1\n%s", label, got, prompt)
 		}
@@ -90,6 +91,16 @@ func TestBuildRuntimeStateUsesResolvedRouterModelName(t *testing.T) {
 	state := buildRuntimeState(context.Background(), cfg, "", model)
 	if state.RouterModelName != "router-resolved" {
 		t.Fatalf("router model name = %q", state.RouterModelName)
+	}
+}
+
+func TestBuildRuntimeStateLeavesAskUserPendingBeforeAutoRouting(t *testing.T) {
+	cfg := &config.Config{TeamMode: "auto", Model: "leader"}
+	model := core.NewTestModel(core.TextResponse("unused"))
+	model.SetName("router-resolved")
+	state := buildRuntimeState(context.Background(), cfg, "", model)
+	if state.AskUserStatus != "pending" {
+		t.Fatalf("ask user status = %q, want pending", state.AskUserStatus)
 	}
 }
 

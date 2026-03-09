@@ -4,8 +4,13 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"html"
+	"io"
+	"net/http"
+	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	montygo "github.com/fugue-labs/monty-go"
 
@@ -85,6 +90,12 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 	}
 	if cfg.DisableGreedyThinkingPressure {
 		toolOpts = append(toolOpts, codetool.WithDisableGreedyThinkingPressure())
+	}
+	if cfg.EnableFetchURL {
+		toolOpts = append(toolOpts, codetool.WithFetchURL(defaultFetchURL()))
+	}
+	if runtime.EffectiveTeamMode && runtime.AskUserFunc != nil {
+		toolOpts = append(toolOpts, codetool.WithAskUser(runtime.AskUserFunc))
 	}
 	if sandwichCfg, ok := reasoningSandwichConfig(cfg); ok {
 		toolOpts = append(toolOpts, codetool.WithReasoningSandwichConfig(sandwichCfg))
@@ -190,6 +201,58 @@ func maybeCodeRunner(cfg *config.Config) (*montygo.Runner, error) {
 		codeRunner, codeRunnerErr = montygo.New()
 	})
 	return codeRunner, codeRunnerErr
+}
+
+var (
+	htmlTagPattern = regexp.MustCompile(`(?s)<[^>]+>`)
+	htmlWhitespace = regexp.MustCompile(`\s+`)
+	htmlScriptBlock = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>`)
+	htmlStyleBlock  = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`)
+	htmlHeadBlock   = regexp.MustCompile(`(?is)<head\b[^>]*>.*?</head>`)
+)
+
+func defaultFetchURL() codetool.FetchURLFunc {
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			return codetool.ValidateFetchURLSafety(req.URL.String())
+		},
+	}
+	return func(ctx context.Context, rawURL string) (string, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("User-Agent", "Golem/1.0")
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 200*1024))
+		if err != nil {
+			return "", err
+		}
+		content := stripHTML(string(body))
+		if strings.TrimSpace(content) == "" {
+			content = strings.TrimSpace(string(body))
+		}
+		return content, nil
+	}
+}
+
+func stripHTML(raw string) string {
+	cleaned := htmlScriptBlock.ReplaceAllString(raw, " ")
+	cleaned = htmlStyleBlock.ReplaceAllString(cleaned, " ")
+	cleaned = htmlHeadBlock.ReplaceAllString(cleaned, " ")
+	cleaned = htmlTagPattern.ReplaceAllString(cleaned, " ")
+	cleaned = html.UnescapeString(cleaned)
+	cleaned = strings.ReplaceAll(cleaned, "\u00a0", " ")
+	cleaned = htmlWhitespace.ReplaceAllString(cleaned, " ")
+	return strings.TrimSpace(cleaned)
 }
 
 func onOff(v bool) string {

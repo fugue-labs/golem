@@ -18,4 +18,7 @@
 - Delegate: `off`
 - Execute code: `on`
 - Open image: `off`
+- Web search: `off`
+- Fetch URL: `off`
+- Ask user: `pending`
 - Environment-dependent capabilities should only be trusted when surfaced by the active runtime/tool list.

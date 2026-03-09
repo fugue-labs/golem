@@ -64,6 +64,12 @@ type (
 		toolState map[string]any
 		err       error
 	}
+	askUserRequest struct {
+		runID     int
+		questions []codetool.AskUserQuestion
+		response  chan<- []codetool.AskUserAnswer
+	}
+	askUserShutdownMsg struct{}
 )
 
 // Model is the main BubbleTea model.
@@ -77,8 +83,9 @@ type Model struct {
 	prog    *tea.Program
 
 	// UI components.
-	input   textarea.Model
-	spinner spinner.Model
+	input     textarea.Model
+	spinner   spinner.Model
+	askUserCh chan askUserRequest
 
 	// Skills.
 	allSkills    []skills.Skill
@@ -101,6 +108,7 @@ type Model struct {
 	planState          plan.State
 	invariantState     uiinvariants.State
 	verificationState  uiverification.State
+	toolState          map[string]any // raw tool state for restoration across runs
 	lastRunSummary     *eval.RunSummary
 	currentRunMessages []*chat.Message
 
@@ -108,6 +116,13 @@ type Model struct {
 	// Drained by middleware before each model turn.
 	pendingMu   sync.Mutex
 	pendingMsgs []string
+
+	askMode      bool
+	askQuestions []codetool.AskUserQuestion
+	askAnswers   []codetool.AskUserAnswer
+	askCurrent   int
+	askRespCh    chan<- []codetool.AskUserAnswer
+	askDone      chan struct{}
 }
 
 // New creates the initial app model.
@@ -128,6 +143,8 @@ func New(cfg *config.Config) *Model {
 		runtime:   agent.InitialRuntimeState(cfg),
 		input:     ti,
 		spinner:   sp,
+		askUserCh: make(chan askUserRequest, 1),
+		askDone:   make(chan struct{}),
 		allSkills: allSkills,
 	}
 }
@@ -142,6 +159,7 @@ func (m *Model) Init() tea.Cmd {
 		tea.RequestBackgroundColor,
 		m.input.Focus(),
 		m.spinner.Tick,
+		m.waitForAskUser(),
 	)
 }
 
@@ -167,6 +185,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+
+	case askUserRequest:
+		if msg.runID != m.runID {
+			return m, m.waitForAskUser()
+		}
+		m.beginAskMode(msg)
+		return m, tea.Batch(m.input.Focus(), m.waitForAskUser())
+
+	case askUserShutdownMsg:
+		return m, nil
 
 	// Agent streaming events.
 	case textDeltaMsg:
@@ -235,6 +263,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		m.resetAskState()
 		m.busy = false
 		m.runCtx = nil
 		m.cancel = nil
@@ -249,6 +278,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentRunMessages = append(m.currentRunMessages, errMsg)
 		} else if msg.messages != nil {
 			m.history = msg.messages
+			m.toolState = msg.toolState
 			if currentPlan, ok := deep.PlanFromToolState(msg.toolState); ok {
 				m.planState = plan.FromDeepPlan(currentPlan)
 			}
@@ -285,6 +315,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.askMode {
+		return m.handleAskKey(msg)
+	}
 	key := msg.String()
 
 	switch key {
@@ -293,6 +326,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.cancelActiveRun(true)
 			return m, m.input.Focus()
 		}
+		m.shutdownAskLoop()
 		m.cleanupSession()
 		return m, tea.Quit
 
@@ -318,6 +352,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.busy && m.cancel != nil {
 				m.cancelActiveRun(false)
 			}
+			m.shutdownAskLoop()
 			m.cleanupSession()
 			return m, tea.Quit
 		}
@@ -431,6 +466,7 @@ func (m *Model) drainPending() []string {
 
 func (m *Model) clearSessionState() {
 	m.cancelActiveRun(false)
+	m.resetAskState()
 	m.busy = false
 	m.messages = nil
 	m.history = nil
@@ -448,6 +484,7 @@ func (m *Model) clearSessionState() {
 	m.planState = plan.State{}
 	m.invariantState = uiinvariants.State{}
 	m.verificationState = uiverification.State{}
+	m.toolState = nil
 	m.lastPrompt = ""
 	m.lastRunSummary = nil
 	m.currentRunMessages = nil
@@ -501,6 +538,9 @@ func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cm
 	}
 
 	msg.runtime.Session = m.runtime.Session
+	if msg.runtime.EffectiveTeamMode {
+		msg.runtime.AskUserFunc = makeAskUserFunc(msg.runID, m.askUserCh)
+	}
 	a, err := agent.NewWithRuntime(
 		m.cfg,
 		&msg.runtime,
@@ -563,6 +603,7 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 	runID := m.runID
 	a := m.agent
 	history := m.history
+	toolState := m.toolState
 	ctx := m.runCtx
 	if ctx == nil {
 		ctx = context.Background()
@@ -572,6 +613,9 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 		var runOpts []core.RunOption
 		if len(history) > 0 {
 			runOpts = append(runOpts, core.WithMessages(history...))
+		}
+		if len(toolState) > 0 {
+			runOpts = append(runOpts, core.WithToolState(toolState))
 		}
 		result, err := a.Run(ctx, prompt, runOpts...)
 		if err != nil {
@@ -681,13 +725,7 @@ func (m *Model) View() tea.View {
 	sections = append(sections, m.renderHeader())
 
 	// Chat messages area (header=2 + input + status=1 + padding).
-	inputHeight := strings.Count(m.input.Value(), "\n") + 2
-	if inputHeight > 6 {
-		inputHeight = 6
-	}
-	if m.busy {
-		inputHeight++ // spinner status line above the textarea
-	}
+	inputHeight := m.currentInputHeight()
 	chatHeight := m.height - 3 - inputHeight
 	if chatHeight < 1 {
 		chatHeight = 1
@@ -834,6 +872,13 @@ func (m *Model) renderChat(height, width int) string {
 }
 
 func (m *Model) renderInput() string {
+	if m.askMode {
+		return m.renderAskInput()
+	}
+	return m.renderInputBusyOrIdle()
+}
+
+func (m *Model) renderInputBusyOrIdle() string {
 	if m.busy {
 		elapsed := time.Since(m.startTime).Truncate(time.Second)
 		sp := m.spinner.View()
@@ -915,7 +960,11 @@ func (m *Model) renderStatusBar() string {
 
 	// Help hints on the right.
 	var hints string
-	if m.busy {
+	if m.askMode {
+		hints = m.sty.StatusBar.Key.Render("enter ") + m.sty.StatusBar.Value.Render("answer") +
+			m.sty.StatusBar.Divider.Render(" │ ") +
+			m.sty.StatusBar.Key.Render("esc ") + m.sty.StatusBar.Value.Render("cancel")
+	} else if m.busy {
 		hints = m.sty.StatusBar.Key.Render("enter ") + m.sty.StatusBar.Value.Render("steer") +
 			m.sty.StatusBar.Divider.Render(" │ ") +
 			m.sty.StatusBar.Key.Render("esc ") + m.sty.StatusBar.Value.Render("cancel")

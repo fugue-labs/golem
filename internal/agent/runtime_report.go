@@ -19,6 +19,9 @@ type ToolSurfaceReport struct {
 	ExecuteCode      string   `json:"execute_code"`
 	ExecuteCodeNote  string   `json:"execute_code_note,omitempty"`
 	OpenImage        string   `json:"open_image"`
+	WebSearch        string   `json:"web_search"`
+	FetchURL         string   `json:"fetch_url"`
+	AskUser          string   `json:"ask_user"`
 	AvailabilityNote string   `json:"availability_note,omitempty"`
 }
 
@@ -55,6 +58,9 @@ func BuildRuntimeReport(cfg *config.Config, runtime RuntimeState, validation con
 			ExecuteCode:      fallbackStatus(runtime.CodeModeStatus),
 			ExecuteCodeNote:  strings.TrimSpace(runtime.CodeModeError),
 			OpenImage:        fallbackStatus(runtime.OpenImageStatus),
+			WebSearch:        fallbackStatus(runtime.WebSearchStatus),
+			FetchURL:         fallbackStatus(runtime.FetchURLStatus),
+			AskUser:          fallbackStatus(runtime.AskUserStatus),
 			AvailabilityNote: "Environment-dependent capabilities should only be trusted when surfaced by the active runtime/tool list.",
 		},
 	}
@@ -185,7 +191,12 @@ func toolSurfaceLines(report RuntimeReport) []string {
 	if report.ToolSurfaces.ExecuteCodeNote != "" {
 		lines = append(lines, "Execute code note: "+report.ToolSurfaces.ExecuteCodeNote)
 	}
-	lines = append(lines, fmt.Sprintf("Open image: `%s`", report.ToolSurfaces.OpenImage))
+	lines = append(lines,
+		fmt.Sprintf("Open image: `%s`", report.ToolSurfaces.OpenImage),
+		fmt.Sprintf("Web search: `%s`", report.ToolSurfaces.WebSearch),
+		fmt.Sprintf("Fetch URL: `%s`", report.ToolSurfaces.FetchURL),
+		fmt.Sprintf("Ask user: `%s`", report.ToolSurfaces.AskUser),
+	)
 	if report.ToolSurfaces.AvailabilityNote != "" {
 		lines = append(lines, report.ToolSurfaces.AvailabilityNote)
 	}

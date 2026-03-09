@@ -29,6 +29,9 @@ func TestRuntimePromptGolden(t *testing.T) {
 		TeamModeReason:    "auto router pending",
 		CodeModeStatus:    "on",
 		OpenImageStatus:   "off",
+		WebSearchStatus:   "off",
+		FetchURLStatus:    "off",
+		AskUserStatus:     "pending",
 		EffectiveTeamMode: false,
 	}
 

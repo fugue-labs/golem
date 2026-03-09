@@ -17,6 +17,7 @@ func (m *Model) cancelActiveRun(asyncCleanup bool) {
 	m.cancel = nil
 	m.runCtx = nil
 	m.busy = false
+	m.resetAskState()
 	m.runID++
 	m.hookRID.Store(int64(m.runID))
 	m.agent = nil
