@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -29,7 +30,7 @@ func BashTool(workingDir string) core.Tool {
 			"Commands run in a non-interactive shell. Avoid interactive commands (vim, less, etc.).",
 		func(ctx context.Context, rc *core.RunContext, params BashParams) (string, error) {
 			if params.Command == "" {
-				return "", fmt.Errorf("command is required")
+				return "", errors.New("command is required")
 			}
 
 			dir := workingDir
@@ -68,7 +69,8 @@ func BashTool(workingDir string) core.Tool {
 
 			if err != nil {
 				exitCode := -1
-				if exitErr, ok := err.(*exec.ExitError); ok {
+				var exitErr *exec.ExitError
+				if errors.As(err, &exitErr) {
 					exitCode = exitErr.ExitCode()
 				}
 				return fmt.Sprintf("exit code: %d\n%s", exitCode, strings.TrimSpace(output)), nil

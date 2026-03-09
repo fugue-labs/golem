@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +25,7 @@ func GlobTool(workingDir string) core.Tool {
 			"Use to discover project structure and find files by name.",
 		func(ctx context.Context, params GlobParams) (string, error) {
 			if params.Pattern == "" {
-				return "", fmt.Errorf("pattern is required")
+				return "", errors.New("pattern is required")
 			}
 
 			dir := workingDir
@@ -33,9 +34,9 @@ func GlobTool(workingDir string) core.Tool {
 			}
 
 			var matches []string
-			err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-				if err != nil {
-					return nil // skip errors
+			err := filepath.WalkDir(dir, func(path string, d os.DirEntry, _ error) error {
+				if d == nil {
+					return nil
 				}
 				if d.IsDir() {
 					name := d.Name()
@@ -45,10 +46,7 @@ func GlobTool(workingDir string) core.Tool {
 					return nil
 				}
 
-				rel, err := filepath.Rel(dir, path)
-				if err != nil {
-					return nil
-				}
+				rel, _ := filepath.Rel(dir, path)
 
 				matched, err := filepath.Match(params.Pattern, filepath.Base(rel))
 				if err != nil {

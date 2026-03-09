@@ -10,9 +10,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	openaiauth "github.com/fugue-labs/gollem/auth/openai"
@@ -74,13 +76,13 @@ func pickProvider() (string, error) {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {
-		return "", fmt.Errorf("no input")
+		return "", errors.New("no input")
 	}
 	input := strings.TrimSpace(scanner.Text())
 
 	// Accept either the number or the name.
 	for i, p := range supportedProviders {
-		if input == fmt.Sprintf("%d", i+1) || strings.EqualFold(input, p.Name) {
+		if input == strconv.Itoa(i+1) || strings.EqualFold(input, p.Name) {
 			return p.Name, nil
 		}
 	}
@@ -117,11 +119,11 @@ func loginAPIKey(provider string) error {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {
-		return fmt.Errorf("no input")
+		return errors.New("no input")
 	}
 	key := strings.TrimSpace(scanner.Text())
 	if key == "" {
-		return fmt.Errorf("empty API key")
+		return errors.New("empty API key")
 	}
 
 	if err := SaveAPIKey(provider, key); err != nil {

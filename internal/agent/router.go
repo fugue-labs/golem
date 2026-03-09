@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -79,7 +80,7 @@ func decideTeamMode(ctx context.Context, cfg *config.Config, prompt string, rout
 func runPromptRouter(ctx context.Context, cfg *config.Config, model core.Model, prompt string) (promptRoute, error) {
 	var zero promptRoute
 	if model == nil {
-		return zero, fmt.Errorf("model unavailable")
+		return zero, errors.New("model unavailable")
 	}
 
 	classifierCtx, cancel := context.WithTimeout(ctx, routerTimeout(cfg))

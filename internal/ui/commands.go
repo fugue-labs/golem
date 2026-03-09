@@ -37,7 +37,7 @@ func (m *Model) renderPlanSummaryMessage() *chat.Message {
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("**Current plan** — %d/%d completed\n\n", completed, total))
+	fmt.Fprintf(&b, "**Current plan** — %d/%d completed\n\n", completed, total)
 	for _, task := range m.planState.Tasks {
 		icon := "○"
 		switch task.Status {
@@ -48,7 +48,7 @@ func (m *Model) renderPlanSummaryMessage() *chat.Message {
 		case "blocked":
 			icon = "✗"
 		}
-		b.WriteString(fmt.Sprintf("- %s `%s` — %s", icon, task.ID, task.Description))
+		fmt.Fprintf(&b, "- %s `%s` — %s", icon, task.ID, task.Description)
 		if task.Notes != "" {
 			b.WriteString(" — ")
 			b.WriteString(task.Notes)
@@ -70,8 +70,8 @@ func (m *Model) renderInvariantSummaryMessage() *chat.Message {
 
 	var b strings.Builder
 	b.WriteString("**Invariant checklist**\n\n")
-	b.WriteString(fmt.Sprintf("- Hard: %d pass, %d fail, %d unresolved (%d total)\n", hardPass, hardFail, hardUnresolved, hardTotal))
-	b.WriteString(fmt.Sprintf("- Soft: %d pass, %d fail (%d total)\n\n", softPass, softFail, softTotal))
+	fmt.Fprintf(&b, "- Hard: %d pass, %d fail, %d unresolved (%d total)\n", hardPass, hardFail, hardUnresolved, hardTotal)
+	fmt.Fprintf(&b, "- Soft: %d pass, %d fail (%d total)\n\n", softPass, softFail, softTotal)
 	for _, item := range m.invariantState.Items {
 		kind := item.Kind
 		if kind == "" {
@@ -81,7 +81,7 @@ func (m *Model) renderInvariantSummaryMessage() *chat.Message {
 		if status == "" {
 			status = "unknown"
 		}
-		b.WriteString(fmt.Sprintf("- `%s` [%s/%s] %s", item.ID, kind, status, item.Description))
+		fmt.Fprintf(&b, "- `%s` [%s/%s] %s", item.ID, kind, status, item.Description)
 		if item.Evidence != "" {
 			b.WriteString(" — ")
 			b.WriteString(item.Evidence)
@@ -95,38 +95,38 @@ func (m *Model) renderInvariantSummaryMessage() *chat.Message {
 func (m *Model) renderRuntimeSummaryMessage() *chat.Message {
 	var b strings.Builder
 	b.WriteString("**Runtime profile**\n\n")
-	b.WriteString(fmt.Sprintf("- Provider/model: `%s/%s`\n", m.cfg.Provider, m.cfg.Model))
+	fmt.Fprintf(&b, "- Provider/model: `%s/%s`\n", m.cfg.Provider, m.cfg.Model)
 	if m.cfg.RouterModel != "" {
-		b.WriteString(fmt.Sprintf("- Router model: `%s`\n", m.cfg.RouterModel))
+		fmt.Fprintf(&b, "- Router model: `%s`\n", m.cfg.RouterModel)
 	}
-	b.WriteString(fmt.Sprintf("- Timeout: `%s`\n", m.cfg.Timeout))
-	b.WriteString(fmt.Sprintf("- Team mode: `%s` (effective: `%t`)\n", m.cfg.TeamMode, m.runtime.EffectiveTeamMode))
+	fmt.Fprintf(&b, "- Timeout: `%s`\n", m.cfg.Timeout)
+	fmt.Fprintf(&b, "- Team mode: `%s` (effective: `%t`)\n", m.cfg.TeamMode, m.runtime.EffectiveTeamMode)
 	if m.runtime.RouterModelName != "" {
-		b.WriteString(fmt.Sprintf("- Effective router model: `%s`\n", m.runtime.RouterModelName))
+		fmt.Fprintf(&b, "- Effective router model: `%s`\n", m.runtime.RouterModelName)
 	}
 	if m.runtime.TeamModeReason != "" {
-		b.WriteString(fmt.Sprintf("- Team mode reason: %s\n", m.runtime.TeamModeReason))
+		fmt.Fprintf(&b, "- Team mode reason: %s\n", m.runtime.TeamModeReason)
 	}
 	if m.cfg.ReasoningEffort != "" {
-		b.WriteString(fmt.Sprintf("- Reasoning effort: `%s`\n", m.cfg.ReasoningEffort))
+		fmt.Fprintf(&b, "- Reasoning effort: `%s`\n", m.cfg.ReasoningEffort)
 	}
 	if m.cfg.ThinkingBudget > 0 {
-		b.WriteString(fmt.Sprintf("- Thinking budget: `%d`\n", m.cfg.ThinkingBudget))
+		fmt.Fprintf(&b, "- Thinking budget: `%d`\n", m.cfg.ThinkingBudget)
 	}
 	if m.cfg.AutoContextMaxTokens > 0 {
-		b.WriteString(fmt.Sprintf("- Auto-context: `%d` tokens, keep last `%d` turns\n", m.cfg.AutoContextMaxTokens, m.cfg.AutoContextKeepLastN))
+		fmt.Fprintf(&b, "- Auto-context: `%d` tokens, keep last `%d` turns\n", m.cfg.AutoContextMaxTokens, m.cfg.AutoContextKeepLastN)
 	}
-	b.WriteString(fmt.Sprintf("- Top-level personality: `%t`\n", m.cfg.TopLevelPersonality))
+	fmt.Fprintf(&b, "- Top-level personality: `%t`\n", m.cfg.TopLevelPersonality)
 	b.WriteString("\n**Tool surfaces**\n\n")
 	b.WriteString("- Guaranteed repo tools: `bash`, `bash_status`, `bash_kill`, `view`, `edit`, `write`, `multi_edit`, `glob`, `grep`, `ls`, `lsp`\n")
 	b.WriteString("- Guaranteed workflow tools: `planning`, `invariants`, `verification`\n")
-	b.WriteString(fmt.Sprintf("- Delegate: `%t`\n", !m.cfg.DisableDelegate))
-	b.WriteString(fmt.Sprintf("- Execute code: `%s`\n", m.runtime.CodeModeStatus))
+	fmt.Fprintf(&b, "- Delegate: `%t`\n", !m.cfg.DisableDelegate)
+	fmt.Fprintf(&b, "- Execute code: `%s`\n", m.runtime.CodeModeStatus)
 	if m.runtime.CodeModeError != "" {
-		b.WriteString(fmt.Sprintf("- Execute code note: %s\n", m.runtime.CodeModeError))
+		fmt.Fprintf(&b, "- Execute code note: %s\n", m.runtime.CodeModeError)
 	}
 	if m.runtime.OpenImageStatus != "" {
-		b.WriteString(fmt.Sprintf("- Open image: `%s`\n", m.runtime.OpenImageStatus))
+		fmt.Fprintf(&b, "- Open image: `%s`\n", m.runtime.OpenImageStatus)
 	}
 	b.WriteString("- Optional environment-dependent tools should only be trusted when surfaced by the runtime/tool list.\n")
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
@@ -143,7 +143,7 @@ func (m *Model) renderVerificationSummaryMessage() *chat.Message {
 	total, pass, fail, stale, inProgress := m.verificationState.Counts()
 	var b strings.Builder
 	b.WriteString("**Verification summary**\n\n")
-	b.WriteString(fmt.Sprintf("- Total: %d, Pass: %d, Fail: %d, In progress: %d, Stale: %d\n\n", total, pass, fail, inProgress, stale))
+	fmt.Fprintf(&b, "- Total: %d, Pass: %d, Fail: %d, In progress: %d, Stale: %d\n\n", total, pass, fail, inProgress, stale)
 	for _, entry := range m.verificationState.Entries {
 		icon := "○"
 		switch entry.Status {
@@ -162,9 +162,10 @@ func (m *Model) renderVerificationSummaryMessage() *chat.Message {
 			}
 			freshLabel += "]"
 		}
-		b.WriteString(fmt.Sprintf("- %s `%s` — `%s`%s", icon, entry.ID, entry.Command, freshLabel))
+		fmt.Fprintf(&b, "- %s `%s` — `%s`%s", icon, entry.ID, entry.Command, freshLabel)
 		if entry.Summary != "" {
-			b.WriteString(fmt.Sprintf(" — %s", entry.Summary))
+			b.WriteString(" — ")
+			b.WriteString(entry.Summary)
 		}
 		b.WriteString("\n")
 	}

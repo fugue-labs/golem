@@ -18,7 +18,7 @@ func (m *Model) cancelActiveRun(asyncCleanup bool) {
 	m.runCtx = nil
 	m.busy = false
 	m.runID++
-	m.hookRID.Store(int32(m.runID))
+	m.hookRID.Store(int64(m.runID))
 	m.agent = nil
 
 	dropped := 0
@@ -74,7 +74,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 		// Truncate summary if it would overflow the content area.
 		maxRight := contentWidth - lipgloss.Width(headerLeft) - 1
 		if maxRight > 0 {
-			headerRightText = string(ansi.Truncate(headerRightText, maxRight, "…"))
+			headerRightText = ansi.Truncate(headerRightText, maxRight, "…")
 		}
 		headerRight = m.sty.Panel.Progress.Render(headerRightText)
 	}
@@ -138,7 +138,6 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 			budget := perSection
 			if remainder > 0 {
 				budget++
-				remainder--
 			}
 			body = append(body, m.renderVerificationPanelLines(budget, contentWidth)...)
 		}
@@ -190,7 +189,7 @@ func (m *Model) renderPlanPanelLines(limit, width int) []string {
 	if len(m.planState.Tasks) > itemBudget && itemBudget > 0 {
 		maxItems = itemBudget - 1
 	}
-	for i := 0; i < maxItems; i++ {
+	for i := range maxItems {
 		t := m.planState.Tasks[i]
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
 		switch t.Status {
@@ -236,7 +235,7 @@ func (m *Model) renderInvariantPanelLines(limit, width int) []string {
 	if len(m.invariantState.Items) > itemBudget && itemBudget > 0 {
 		maxItems = itemBudget - 1
 	}
-	for i := 0; i < maxItems; i++ {
+	for i := range maxItems {
 		item := m.invariantState.Items[i]
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
 		switch item.Status {
@@ -287,7 +286,7 @@ func (m *Model) renderVerificationPanelLines(limit, width int) []string {
 	if len(m.verificationState.Entries) > itemBudget && itemBudget > 0 {
 		maxItems = itemBudget - 1
 	}
-	for i := 0; i < maxItems; i++ {
+	for i := range maxItems {
 		entry := m.verificationState.Entries[i]
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
 		switch entry.Status {

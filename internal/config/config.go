@@ -35,10 +35,11 @@ const (
 
 // Config holds the application configuration.
 type Config struct {
-	Provider        Provider
-	ProviderSource  ProviderSource
-	Model           string
-	RouterModel     string
+	Provider       Provider
+	ProviderSource ProviderSource
+	Model          string
+	RouterModel    string
+	//nolint:gosec // Provider auth is stored in memory for runtime use and masked in user-facing status output.
 	APIKey          string
 	BaseURL         string // for custom OpenAI/OpenAI-compatible endpoints (xAI, Groq, proxies, etc.)
 	WorkingDir      string
@@ -195,12 +196,12 @@ func Status() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Provider:  %s", cfg.Provider))
+	fmt.Fprintf(&b, "Provider:  %s", cfg.Provider)
 	if cfg.LoginProvider != "" {
-		b.WriteString(fmt.Sprintf(" (%s)", cfg.LoginProvider))
+		fmt.Fprintf(&b, " (%s)", cfg.LoginProvider)
 	}
-	b.WriteString(fmt.Sprintf("\nSource:    %s", cfg.ProviderSource))
-	b.WriteString(fmt.Sprintf("\nModel:     %s", cfg.Model))
+	fmt.Fprintf(&b, "\nSource:    %s", cfg.ProviderSource)
+	fmt.Fprintf(&b, "\nModel:     %s", cfg.Model)
 
 	// Auth method.
 	switch {
@@ -211,13 +212,13 @@ func Status() string {
 		if len(masked) > 8 {
 			masked = masked[:4] + "..." + masked[len(masked)-4:]
 		}
-		b.WriteString(fmt.Sprintf("\nAuth:      API key (%s)", masked))
+		fmt.Fprintf(&b, "\nAuth:      API key (%s)", masked)
 	default:
 		b.WriteString("\nAuth:      none (will fail at runtime)")
 	}
 
 	if cfg.BaseURL != "" {
-		b.WriteString(fmt.Sprintf("\nBase URL:  %s", cfg.BaseURL))
+		fmt.Fprintf(&b, "\nBase URL:  %s", cfg.BaseURL)
 	}
 
 	return b.String()

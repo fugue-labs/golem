@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,7 +15,6 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/skills"
@@ -93,7 +93,7 @@ type Model struct {
 	usage     core.RunUsage
 	startTime time.Time
 	runID     int
-	hookRID   atomic.Int32 // hook-visible runID; read atomically by hooks from agent goroutine
+	hookRID   atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
 
 	// Plan/invariant/verification state — mirrored from tool messages.
 	planState         plan.State
@@ -266,8 +266,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	switch {
-	case key == "ctrl+c":
+	switch key {
+	case "ctrl+c":
 		if m.busy && m.cancel != nil {
 			m.cancelActiveRun(true)
 			return m, m.input.Focus()
@@ -275,20 +275,20 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cleanupSession()
 		return m, tea.Quit
 
-	case key == "escape":
+	case "escape":
 		if m.busy && m.cancel != nil {
 			m.cancelActiveRun(true)
 			return m, m.input.Focus()
 		}
 
-	case key == "shift+enter":
+	case "shift+enter":
 		// Insert newline for multiline input.
 		m.input.InsertString("\n")
 		h := min(5, strings.Count(m.input.Value(), "\n")+2)
 		m.input.SetHeight(h)
 		return m, nil
 
-	case key == "enter":
+	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		if text == "" {
 			return m, nil
@@ -368,22 +368,22 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.startTime = time.Now()
 		m.runID++
-		m.hookRID.Store(int32(m.runID))
+		m.hookRID.Store(int64(m.runID))
 		m.runCtx, m.cancel = context.WithCancel(context.Background())
 		return m, m.prepareRun(text)
 
-	case key == "up":
+	case "up":
 		m.scroll++
 
-	case key == "down":
+	case "down":
 		if m.scroll > 0 {
 			m.scroll--
 		}
 
-	case key == "pgup":
+	case "pgup":
 		m.scroll += 10
 
-	case key == "pgdown":
+	case "pgdown":
 		m.scroll = max(0, m.scroll-10)
 	}
 
@@ -804,9 +804,9 @@ func (m *Model) renderInput() string {
 	if m.busy {
 		elapsed := time.Since(m.startTime).Truncate(time.Second)
 		sp := m.spinner.View()
-		statusText := fmt.Sprintf("%s", elapsed)
+		statusText := elapsed.String()
 		if queued := m.pendingCount(); queued > 0 {
-			statusText += fmt.Sprintf(" · %d queued", queued)
+			statusText += " · " + strconv.Itoa(queued) + " queued"
 		}
 		status := m.sty.Muted.Render(fmt.Sprintf(" %s %s", sp, statusText))
 		prompt := m.sty.Input.Prompt.Render(" > ")
@@ -835,13 +835,13 @@ func (m *Model) renderStatusBar() string {
 		}
 
 		tools := m.sty.StatusBar.Key.Render("tools ") +
-			m.sty.StatusBar.Value.Render(fmt.Sprintf("%d", m.usage.ToolCalls))
+			m.sty.StatusBar.Value.Render(strconv.Itoa(m.usage.ToolCalls))
 		leftParts = append(leftParts, divider, tools)
 	}
 
 	if len(m.activeSkills) > 0 {
 		skills := m.sty.StatusBar.Key.Render("skills ") +
-			m.sty.StatusBar.Value.Render(fmt.Sprintf("%d", len(m.activeSkills)))
+			m.sty.StatusBar.Value.Render(strconv.Itoa(len(m.activeSkills)))
 		leftParts = append(leftParts, divider, skills)
 	}
 
@@ -859,7 +859,7 @@ func (m *Model) renderStatusBar() string {
 
 	if queued := m.pendingCount(); queued > 0 {
 		queue := m.sty.StatusBar.Key.Render("queued ") +
-			m.sty.StatusBar.Value.Render(fmt.Sprintf("%d", queued))
+			m.sty.StatusBar.Value.Render(strconv.Itoa(queued))
 		leftParts = append(leftParts, divider, queue)
 	}
 
@@ -905,97 +905,6 @@ func (m *Model) renderStatusBar() string {
 
 	content := left + strings.Repeat(" ", gap) + hints
 	return m.sty.StatusBar.Base.Width(m.width).Render(content)
-}
-
-func (m *Model) renderPlanPanel(height, width int) string {
-	completed, total := m.planState.Progress()
-	contentWidth := width - 2 // border (1) + space (1)
-
-	// Border prefix for each line: "│ " in the border color.
-	borderStr := lipgloss.NewStyle().Foreground(m.sty.BgSubtle).Render(styles.BorderThin) + " "
-
-	// Title line with progress.
-	title := m.sty.Panel.Title.Render("Plan")
-	progress := m.sty.Panel.Progress.Render(fmt.Sprintf("%d/%d %s", completed, total, styles.CheckIcon))
-	titleGap := contentWidth - lipgloss.Width(title) - lipgloss.Width(progress)
-	if titleGap < 1 {
-		titleGap = 1
-	}
-	titleLine := title + strings.Repeat(" ", titleGap) + progress
-
-	sep := m.sty.Panel.Separator.Render(strings.Repeat(styles.Separator, contentWidth))
-
-	// Task lines.
-	maxTasks := height - 2 // title + separator
-	if maxTasks < 1 {
-		maxTasks = 1
-	}
-
-	var taskLines []string
-	for i, t := range m.planState.Tasks {
-		if total > maxTasks && i >= maxTasks-1 {
-			remaining := total - i
-			taskLines = append(taskLines, m.sty.Muted.Render(
-				fmt.Sprintf("... +%d more", remaining)))
-			break
-		}
-
-		var icon string
-		switch t.Status {
-		case "completed":
-			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
-		case "in_progress":
-			icon = m.sty.Panel.IconInProgress.Render(styles.InProgressIcon)
-		case "blocked":
-			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
-		default:
-			icon = m.sty.Panel.IconPending.Render(styles.HollowIcon)
-		}
-
-		desc := t.Description
-		maxDesc := contentWidth - 4 // space + icon + space + breathing
-		if maxDesc > 0 {
-			desc = ansi.Truncate(desc, maxDesc, "...")
-		}
-
-		if t.Status == "completed" {
-			desc = m.sty.Panel.TaskDone.Render(desc)
-		} else {
-			desc = m.sty.Panel.TaskText.Render(desc)
-		}
-
-		taskLines = append(taskLines, fmt.Sprintf(" %s %s", icon, desc))
-	}
-
-	// Pad to exactly maxTasks lines.
-	for len(taskLines) < maxTasks {
-		taskLines = append(taskLines, "")
-	}
-
-	// Assemble all content lines, then apply border prefix and pad to width.
-	allLines := make([]string, 0, height)
-	allLines = append(allLines, titleLine)
-	allLines = append(allLines, sep)
-	allLines = append(allLines, taskLines...)
-
-	// Ensure exactly height lines.
-	for len(allLines) < height {
-		allLines = append(allLines, "")
-	}
-	if len(allLines) > height {
-		allLines = allLines[:height]
-	}
-
-	// Prepend border, pad each line to exact width.
-	for i, line := range allLines {
-		full := borderStr + line
-		if w := lipgloss.Width(full); w < width {
-			full += strings.Repeat(" ", width-w)
-		}
-		allLines[i] = full
-	}
-
-	return strings.Join(allLines, "\n")
 }
 
 func (m *Model) renderSkillsList() []*chat.Message {

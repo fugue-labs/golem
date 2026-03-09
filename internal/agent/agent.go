@@ -124,10 +124,10 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 					"workdir":  cfg.ShortDir(),
 				},
 			})
-			if err != nil {
-				return "", nil
+			if err == nil {
+				return generated, nil
 			}
-			return generated, nil
+			return "", nil
 		}))
 	}
 

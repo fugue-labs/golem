@@ -3,6 +3,7 @@ package tools
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,7 +30,7 @@ func ViewTool(workingDir string) core.Tool {
 			"Use offset and limit for large files. Supports all text file formats.",
 		func(ctx context.Context, params ViewParams) (string, error) {
 			if params.FilePath == "" {
-				return "", fmt.Errorf("file_path is required")
+				return "", errors.New("file_path is required")
 			}
 
 			path := resolvePath(workingDir, params.FilePath)

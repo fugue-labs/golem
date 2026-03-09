@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ func WriteTool(workingDir string) core.Tool {
 			"For targeted edits to existing files, use the edit tool instead.",
 		func(ctx context.Context, params WriteParams) (string, error) {
 			if params.FilePath == "" {
-				return "", fmt.Errorf("file_path is required")
+				return "", errors.New("file_path is required")
 			}
 
 			path := resolvePath(workingDir, params.FilePath)
@@ -33,7 +34,7 @@ func WriteTool(workingDir string) core.Tool {
 				return "", fmt.Errorf("creating directories: %w", err)
 			}
 
-			if err := os.WriteFile(path, []byte(params.Content), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(params.Content), writableMode(path)); err != nil {
 				return "", fmt.Errorf("writing file: %w", err)
 			}
 

@@ -3,6 +3,7 @@ package tools
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,7 +28,7 @@ func GrepTool(workingDir string) core.Tool {
 			"Use glob parameter to filter by file type.",
 		func(ctx context.Context, params GrepParams) (string, error) {
 			if params.Pattern == "" {
-				return "", fmt.Errorf("pattern is required")
+				return "", errors.New("pattern is required")
 			}
 
 			re, err := regexp.Compile(params.Pattern)

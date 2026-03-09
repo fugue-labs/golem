@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"os"
+
 	"github.com/fugue-labs/gollem/core"
 )
 
@@ -15,4 +17,12 @@ func CodingTools(workingDir string) []core.Tool {
 		GrepTool(workingDir),
 		LsTool(workingDir),
 	}
+}
+
+func writableMode(path string) os.FileMode {
+	info, err := os.Stat(path)
+	if err == nil {
+		return info.Mode().Perm()
+	}
+	return 0o600
 }

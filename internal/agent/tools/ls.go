@@ -55,7 +55,7 @@ func LsTool(workingDir string) core.Tool {
 			}
 
 			if len(lines) == 0 {
-				return fmt.Sprintf("%s/ (empty)", rel), nil
+				return rel + "/ (empty)", nil
 			}
 
 			return fmt.Sprintf("%s/\n%s", rel, strings.Join(lines, "\n")), nil
