@@ -464,6 +464,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.messages = append(m.messages, usageMsg)
 
+		// Warn when approaching context window limits.
+		if ctxPct >= 80 {
+			warnMsg := &chat.Message{
+				Kind:    chat.KindSystem,
+				Content: fmt.Sprintf("Context window %d%% full — consider running /compact", ctxPct),
+			}
+			m.messages = append(m.messages, warnMsg)
+		}
+
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	}
