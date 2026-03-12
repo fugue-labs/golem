@@ -609,15 +609,25 @@ func renderPlainResult(content string, sty *styles.Styles, width int) string {
 
 func renderThinking(msg *Message, sty *styles.Styles, width int) string {
 	content := msg.Content
+	words := len(strings.Fields(content))
 	lines := strings.Split(content, "\n")
-	maxLines := 10
+	maxLines := 8
+	truncated := false
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
-		content = "... " + strings.Join(lines, "\n")
+		content = strings.Join(lines, "\n")
+		truncated = true
 	}
 
 	rendered := sty.Chat.Thinking.Width(width - 4).Render(content)
-	footer := sty.Chat.ThinkingFooter.Render("Thinking...")
+	label := "Thinking"
+	if words > 0 {
+		label = fmt.Sprintf("Thinking (%d words)", words)
+	}
+	if truncated {
+		label += " — showing last lines"
+	}
+	footer := sty.Chat.ThinkingFooter.Render(label)
 	return rendered + "\n" + footer
 }
 

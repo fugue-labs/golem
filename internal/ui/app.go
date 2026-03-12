@@ -1055,7 +1055,11 @@ func (m *Model) renderChat(height, width int) string {
 		var lines []string
 		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  %s/%s", m.cfg.Provider, m.cfg.Model)))
 		if m.runtime.Git != nil && m.runtime.Git.IsRepo {
-			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  git: %s", m.runtime.Git.BranchDisplay())))
+			gitInfo := m.runtime.Git.BranchDisplay()
+			if m.runtime.Git.IsDirty {
+				gitInfo += " (dirty)"
+			}
+			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  git: %s", gitInfo)))
 		}
 		if len(m.runtime.Instructions) > 0 {
 			names := make([]string, len(m.runtime.Instructions))
@@ -1066,6 +1070,19 @@ func (m *Model) renderChat(height, width int) string {
 		}
 		if len(m.runtime.MCPServers) > 0 {
 			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  mcp: %s", strings.Join(m.runtime.MCPServers, ", "))))
+		}
+		if m.runtime.MemoryStore != nil {
+			lines = append(lines, m.sty.Muted.Render("  memory: on"))
+		}
+		if m.cfg.PermissionMode != "" && m.cfg.PermissionMode != "auto" {
+			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  permissions: %s", m.cfg.PermissionMode)))
+		}
+		if len(m.activeSkills) > 0 {
+			skillNames := make([]string, len(m.activeSkills))
+			for i, s := range m.activeSkills {
+				skillNames[i] = s.Name
+			}
+			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  skills: %s", strings.Join(skillNames, ", "))))
 		}
 		lines = append(lines, "")
 		lines = append(lines, m.sty.Muted.Render("  Ask anything, or try /help for commands."))

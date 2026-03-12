@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -246,60 +247,51 @@ func (m *Model) handleUndo(text string) *chat.Message {
 		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot undo while agent is running."}
 	}
 
-	// Parse optional file path: /undo [path]
-	arg := strings.TrimSpace(strings.TrimPrefix(text, "/undo"))
-
-	if arg != "" {
-		// Undo a specific file.
-		cmd := exec.Command("git", "diff", "--name-only", "--", arg)
-		cmd.Dir = dir
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git failed: %v", err)}
-		}
-		if strings.TrimSpace(out.String()) == "" {
-			return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("No unstaged changes in `%s`.", arg)}
-		}
-		cmd2 := exec.Command("git", "checkout", "--", arg)
-		cmd2.Dir = dir
-		var out2 bytes.Buffer
-		cmd2.Stdout = &out2
-		cmd2.Stderr = &out2
-		if err := cmd2.Run(); err != nil {
-			return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git checkout failed: %v\n%s", err, out2.String())}
-		}
-		return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("Reverted `%s` to last committed state.", arg)}
+	pathArg := strings.TrimSpace(strings.TrimPrefix(text, "/undo"))
+	if pathArg == "" {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Usage: `/undo <path>` reverts unstaged changes for one tracked file."}
+	}
+	if filepath.IsAbs(pathArg) {
+		return &chat.Message{Kind: chat.KindError, Content: "`/undo` requires a repo-relative path."}
+	}
+	cleanPath := filepath.Clean(pathArg)
+	if cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
+		return &chat.Message{Kind: chat.KindError, Content: "`/undo` only accepts paths inside the repository."}
 	}
 
-	// Undo all unstaged changes.
-	cmd := exec.Command("git", "diff", "--name-only")
+	tracked := exec.Command("git", "ls-files", "--error-unmatch", "--", cleanPath)
+	tracked.Dir = dir
+	var trackedOut bytes.Buffer
+	tracked.Stdout = &trackedOut
+	tracked.Stderr = &trackedOut
+	if err := tracked.Run(); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("%q is not a tracked file. Only tracked files can be undone.", cleanPath)}
+	}
+
+	cmd := exec.Command("git", "diff", "--name-only", "--", cleanPath)
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git failed: %v", err)}
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git diff failed: %v\n%s", err, out.String())}
 	}
-	files := strings.TrimSpace(out.String())
-	if files == "" {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No uncommitted changes to undo."}
-	}
-
-	cmd2 := exec.Command("git", "checkout", "--", ".")
-	cmd2.Dir = dir
-	var out2 bytes.Buffer
-	cmd2.Stdout = &out2
-	cmd2.Stderr = &out2
-	if err := cmd2.Run(); err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git checkout failed: %v\n%s", err, out2.String())}
+	if strings.TrimSpace(out.String()) == "" {
+		return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("No unstaged changes to undo for `%s`.", cleanPath)}
 	}
 
-	count := len(strings.Split(files, "\n"))
+	restore := exec.Command("git", "restore", "--worktree", "--", cleanPath)
+	restore.Dir = dir
+	var restoreOut bytes.Buffer
+	restore.Stdout = &restoreOut
+	restore.Stderr = &restoreOut
+	if err := restore.Run(); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git restore failed: %v\n%s", err, restoreOut.String())}
+	}
+
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Reverted %d file(s) to last committed state:\n```\n%s\n```", count, files),
+		Content: fmt.Sprintf("Reverted unstaged changes in `%s`.", cleanPath),
 	}
 }
 
