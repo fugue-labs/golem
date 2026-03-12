@@ -59,6 +59,34 @@ func modelPricing() map[string]core.ModelPricing {
 	}
 }
 
+// modelContextWindow returns the context window size (in tokens) for known models.
+func modelContextWindow(model string) int {
+	windows := map[string]int{
+		"claude-sonnet-4-20250514": 200000,
+		"claude-sonnet-4":          200000,
+		"claude-sonnet-4-6":        200000,
+		"claude-opus-4-20250514":   200000,
+		"claude-opus-4":            200000,
+		"claude-opus-4-6":          200000,
+		"claude-haiku-4-5":         200000,
+		"claude-haiku-3.5":         200000,
+		"gpt-5.4":                  200000,
+		"gpt-4o":                   128000,
+		"gpt-4o-mini":              128000,
+		"o3":                       200000,
+		"o4-mini":                  200000,
+		"grok-3":                   131072,
+		"grok-4-0709":              131072,
+		"grok-code-fast-1":         131072,
+		"gemini-2.5-pro":           1048576,
+		"gemini-2.5-flash":         1048576,
+	}
+	if w, ok := windows[model]; ok {
+		return w
+	}
+	return 200000 // default
+}
+
 // Agent event messages sent to the TUI via p.Send from the goroutine.
 type (
 	textDeltaMsg struct {
@@ -166,7 +194,8 @@ type Model struct {
 
 	// Cost tracking across the session.
 	costTracker  *core.CostTracker
-	sessionUsage core.RunUsage // accumulated across all runs
+	sessionUsage core.RunUsage  // accumulated across all runs
+	lastCost     float64        // cost at end of previous run (for per-request delta)
 
 	// Tool approval state.
 	approvalCh     chan toolApprovalRequest
@@ -406,6 +435,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.err,
 		)
 		m.lastRunSummary = &summary
+
+		// Show per-request usage summary.
+		elapsed := time.Since(m.startTime)
+		usageParts := []string{
+			fmt.Sprintf("%d↓ %d↑", msg.usage.InputTokens, msg.usage.OutputTokens),
+			fmt.Sprintf("%d tools", msg.usage.ToolCalls),
+			formatDuration(elapsed),
+		}
+		if cost := m.costTracker.TotalCost() - m.lastCost; cost > 0 {
+			if cost < 0.01 {
+				usageParts = append(usageParts, fmt.Sprintf("$%.4f", cost))
+			} else {
+				usageParts = append(usageParts, fmt.Sprintf("$%.2f", cost))
+			}
+		}
+		m.lastCost = m.costTracker.TotalCost()
+		ctxPct := 0
+		if ctxWindow := modelContextWindow(m.cfg.Model); ctxWindow > 0 {
+			ctxPct = msg.usage.InputTokens * 100 / ctxWindow
+		}
+		if ctxPct > 0 {
+			usageParts = append(usageParts, fmt.Sprintf("ctx %d%%", ctxPct))
+		}
+		usageMsg := &chat.Message{
+			Kind:    chat.KindSystem,
+			Content: strings.Join(usageParts, " · "),
+		}
+		m.messages = append(m.messages, usageMsg)
+
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	}
@@ -1227,12 +1285,20 @@ func (m *Model) renderStatusBar() string {
 		leftParts = append(leftParts, divider, scrolled)
 	}
 
-	// Session cumulative tokens.
+	// Session cumulative tokens + context window usage.
 	if m.sessionUsage.Requests > 0 {
 		sessionTokens := m.sty.StatusBar.Key.Render("session ") +
 			m.sty.StatusBar.Value.Render(fmt.Sprintf("%dk↓ %dk↑",
 				m.sessionUsage.InputTokens/1000, m.sessionUsage.OutputTokens/1000))
 		leftParts = append(leftParts, divider, sessionTokens)
+
+		if ctxWindow := modelContextWindow(m.cfg.Model); ctxWindow > 0 && m.usage.InputTokens > 0 {
+			pct := m.usage.InputTokens * 100 / ctxWindow
+			ctxLabel := fmt.Sprintf("%d%%", pct)
+			ctxPart := m.sty.StatusBar.Key.Render("ctx ") +
+				m.sty.StatusBar.Value.Render(ctxLabel)
+			leftParts = append(leftParts, divider, ctxPart)
+		}
 	}
 
 	if cost := m.costTracker.TotalCost(); cost > 0 {
@@ -1362,6 +1428,16 @@ func (m *Model) activateSkill(name string) *chat.Message {
 
 // isMutatingToolName returns true for tools that modify repo files.
 // Used to auto-mark verification entries stale in the UI.
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+
 func isMutatingToolName(name string) bool {
 	switch name {
 	case "edit", "multi_edit", "write":

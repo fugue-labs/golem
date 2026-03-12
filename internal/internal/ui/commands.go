@@ -237,7 +237,7 @@ func (m *Model) renderDiffMessage() *chat.Message {
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
 
-func (m *Model) handleUndo() *chat.Message {
+func (m *Model) handleUndo(text string) *chat.Message {
 	dir := m.cfg.WorkingDir
 	if dir == "" {
 		dir = "."
@@ -246,6 +246,34 @@ func (m *Model) handleUndo() *chat.Message {
 		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot undo while agent is running."}
 	}
 
+	// Parse optional file path: /undo [path]
+	arg := strings.TrimSpace(strings.TrimPrefix(text, "/undo"))
+
+	if arg != "" {
+		// Undo a specific file.
+		cmd := exec.Command("git", "diff", "--name-only", "--", arg)
+		cmd.Dir = dir
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git failed: %v", err)}
+		}
+		if strings.TrimSpace(out.String()) == "" {
+			return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("No unstaged changes in `%s`.", arg)}
+		}
+		cmd2 := exec.Command("git", "checkout", "--", arg)
+		cmd2.Dir = dir
+		var out2 bytes.Buffer
+		cmd2.Stdout = &out2
+		cmd2.Stderr = &out2
+		if err := cmd2.Run(); err != nil {
+			return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git checkout failed: %v\n%s", err, out2.String())}
+		}
+		return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("Reverted `%s` to last committed state.", arg)}
+	}
+
+	// Undo all unstaged changes.
 	cmd := exec.Command("git", "diff", "--name-only")
 	cmd.Dir = dir
 	var out bytes.Buffer

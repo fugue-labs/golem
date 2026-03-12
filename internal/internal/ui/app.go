@@ -503,6 +503,36 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
+		if text == "/model" || strings.HasPrefix(text, "/model ") {
+			m.input.Reset()
+			m.messages = append(m.messages, m.handleModelCommand(text))
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/diff" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderDiffMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/undo" || strings.HasPrefix(text, "/undo ") {
+			m.input.Reset()
+			m.messages = append(m.messages, m.handleUndo(text))
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/doctor" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderDoctorMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/config" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderConfigMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
 		m.input.Reset()
 		m.input.SetHeight(1)
 		m.scroll = 0

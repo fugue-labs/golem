@@ -22,6 +22,7 @@ const (
 	KindToolResult
 	KindThinking
 	KindError
+	KindSystem // system info (e.g., usage summaries)
 )
 
 // Message is a displayable chat entry.
@@ -101,6 +102,8 @@ func RenderMessage(msg *Message, sty *styles.Styles, width int, allMessages []*M
 		return renderThinking(msg, sty, contentWidth)
 	case KindError:
 		return renderError(msg, sty, contentWidth)
+	case KindSystem:
+		return renderSystem(msg, sty, contentWidth)
 	default:
 		return msg.Content
 	}
@@ -616,6 +619,10 @@ func renderThinking(msg *Message, sty *styles.Styles, width int) string {
 	rendered := sty.Chat.Thinking.Width(width - 4).Render(content)
 	footer := sty.Chat.ThinkingFooter.Render("Thinking...")
 	return rendered + "\n" + footer
+}
+
+func renderSystem(msg *Message, sty *styles.Styles, _ int) string {
+	return "  " + sty.Muted.Render(msg.Content)
 }
 
 func renderError(msg *Message, sty *styles.Styles, width int) string {
