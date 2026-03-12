@@ -342,12 +342,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		toolMsg := &chat.Message{
-			Kind:     chat.KindToolCall,
-			CallID:   msg.callID,
-			ToolName: msg.name,
-			ToolArgs: extractMainParam(msg.args),
-			RawArgs:  msg.rawArgs,
-			Status:   chat.ToolRunning,
+			Kind:      chat.KindToolCall,
+			CallID:    msg.callID,
+			ToolName:  msg.name,
+			ToolArgs:  extractMainParam(msg.args),
+			RawArgs:   msg.rawArgs,
+			Status:    chat.ToolRunning,
+			StartedAt: time.Now(),
 		}
 		m.messages = append(m.messages, toolMsg)
 		m.currentRunMessages = append(m.currentRunMessages, toolMsg)
@@ -938,6 +939,9 @@ func (m *Model) finishLastTool(callID, name, result, errText string) {
 			msg.Status = chat.ToolError
 		} else {
 			msg.Status = chat.ToolSuccess
+		}
+		if !msg.StartedAt.IsZero() {
+			msg.Duration = time.Since(msg.StartedAt)
 		}
 		// Store result content inline on the tool call message so
 		// it renders directly below its header.
