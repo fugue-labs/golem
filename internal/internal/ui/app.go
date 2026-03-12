@@ -354,7 +354,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agent = nil
 		m.usage = msg.usage
 		m.sessionUsage.IncrRun(msg.usage)
-		m.costTracker.Record(m.cfg.Model, msg.usage)
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			errMsg := &chat.Message{
 				Kind:    chat.KindError,

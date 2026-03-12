@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/mcp"
@@ -75,8 +76,7 @@ func ConnectMCPServers(ctx context.Context, config *MCPConfig) (*mcp.Manager, []
 	var errs []string
 
 	for _, spec := range config.Servers {
-		args := spec.Args
-		client, err := mcp.NewStdioClient(ctx, spec.Command, args...)
+		client, err := newMCPClient(ctx, spec)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", spec.Name, err))
 			continue

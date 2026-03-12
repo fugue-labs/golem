@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -27,8 +28,9 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/resume` — restore the last saved session\n")
 	b.WriteString("- `/model [name]` — show or switch the active model\n")
 	b.WriteString("- `/diff` — show git diff of uncommitted changes\n")
-	b.WriteString("- `/undo` — revert the last git-tracked file change\n")
+	b.WriteString("- `/undo [path]` — revert one unstaged git-tracked file change\n")
 	b.WriteString("- `/doctor` — diagnose setup issues\n")
+	b.WriteString("- `/config` — show effective configuration\n")
 	b.WriteString("- `/skills` — list detected skills\n")
 	b.WriteString("- `/skill <name>` — toggle a skill on or off\n")
 	b.WriteString("- `/quit` or `/exit` — quit the app\n\n")
@@ -36,7 +38,8 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `Enter` — send\n")
 	b.WriteString("- `Shift+Enter` — insert newline\n")
 	b.WriteString("- `Esc` — cancel the active run\n")
-	b.WriteString("- `↑/↓` and `PgUp/PgDn` — scroll the transcript\n")
+	b.WriteString("- `↑/↓` — recall input history\n")
+	b.WriteString("- `PgUp/PgDn` — scroll the transcript\n")
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
 
@@ -367,6 +370,54 @@ func (m *Model) renderDoctorMessage() *chat.Message {
 			}
 			fmt.Fprintf(&b, "- `%s`: %s\n", tc.name, ver)
 		}
+	}
+
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) renderConfigMessage() *chat.Message {
+	var b strings.Builder
+	b.WriteString("**Effective configuration**\n\n")
+	cfg := m.cfg
+	fmt.Fprintf(&b, "- Provider: `%s`\n", cfg.Provider)
+	fmt.Fprintf(&b, "- Model: `%s`\n", cfg.Model)
+	if cfg.BaseURL != "" {
+		fmt.Fprintf(&b, "- Base URL: `%s`\n", cfg.BaseURL)
+	}
+	fmt.Fprintf(&b, "- Timeout: `%s`\n", cfg.Timeout)
+	fmt.Fprintf(&b, "- Working dir: `%s`\n", cfg.WorkingDir)
+	fmt.Fprintf(&b, "- Permission mode: `%s`\n", cfg.PermissionMode)
+	fmt.Fprintf(&b, "- Team mode: `%s`\n", cfg.TeamMode)
+	if cfg.RouterModel != "" {
+		fmt.Fprintf(&b, "- Router model: `%s`\n", cfg.RouterModel)
+	}
+	if cfg.ReasoningEffort != "" {
+		fmt.Fprintf(&b, "- Reasoning effort: `%s`\n", cfg.ReasoningEffort)
+	}
+	if cfg.ThinkingBudget > 0 {
+		fmt.Fprintf(&b, "- Thinking budget: `%d`\n", cfg.ThinkingBudget)
+	}
+	if cfg.AutoContextMaxTokens > 0 {
+		fmt.Fprintf(&b, "- Auto-context: `%d` tokens, keep last `%d` turns\n", cfg.AutoContextMaxTokens, cfg.AutoContextKeepLastN)
+	}
+	fmt.Fprintf(&b, "- Top-level personality: `%t`\n", cfg.TopLevelPersonality)
+	fmt.Fprintf(&b, "- Disable delegate: `%t`\n", cfg.DisableDelegate)
+	fmt.Fprintf(&b, "- Disable code mode: `%t`\n", cfg.DisableCodeMode)
+
+	b.WriteString("\n**Environment**\n\n")
+	envVars := []string{"GOLEM_PROVIDER", "GOLEM_MODEL", "GOLEM_API_KEY", "GOLEM_TIMEOUT", "GOLEM_TEAM_MODE", "GOLEM_PERMISSION_MODE", "GOLEM_MCP_SERVERS"}
+	for _, env := range envVars {
+		val := os.Getenv(env)
+		if val == "" {
+			continue
+		}
+		display := val
+		if strings.Contains(strings.ToLower(env), "key") || strings.Contains(strings.ToLower(env), "secret") {
+			if len(display) > 8 {
+				display = display[:4] + "..." + display[len(display)-4:]
+			}
+		}
+		fmt.Fprintf(&b, "- `%s`: `%s`\n", env, display)
 	}
 
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}

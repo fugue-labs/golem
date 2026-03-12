@@ -34,13 +34,17 @@ import (
 // Rates are cost-per-token (e.g., $3/1M input = 0.000003).
 func modelPricing() map[string]core.ModelPricing {
 	return map[string]core.ModelPricing{
-		// Anthropic
+		// Anthropic — Claude 4.x family
 		"claude-sonnet-4-20250514": {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
-		"claude-sonnet-4":         {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
-		"claude-opus-4-20250514":  {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
-		"claude-opus-4":          {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
-		"claude-haiku-3.5":       {InputTokenCost: 0.0000008, OutputTokenCost: 0.000004, CachedInputCost: 0.00000008, CacheWriteCost: 0.000001},
+		"claude-sonnet-4":          {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
+		"claude-sonnet-4-6":        {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
+		"claude-opus-4-20250514":   {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
+		"claude-opus-4":            {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
+		"claude-opus-4-6":          {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
+		"claude-haiku-4-5":         {InputTokenCost: 0.0000008, OutputTokenCost: 0.000004, CachedInputCost: 0.00000008, CacheWriteCost: 0.000001},
+		"claude-haiku-3.5":         {InputTokenCost: 0.0000008, OutputTokenCost: 0.000004, CachedInputCost: 0.00000008, CacheWriteCost: 0.000001},
 		// OpenAI
+		"gpt-5.4":               {InputTokenCost: 0.000002, OutputTokenCost: 0.000008},
 		"gpt-4o":                {InputTokenCost: 0.0000025, OutputTokenCost: 0.00001},
 		"gpt-4o-mini":           {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
 		"o3":                    {InputTokenCost: 0.00001, OutputTokenCost: 0.00004},
@@ -48,6 +52,7 @@ func modelPricing() map[string]core.ModelPricing {
 		// xAI
 		"grok-3":                {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
 		"grok-4-0709":           {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
+		"grok-code-fast-1":      {InputTokenCost: 0.000001, OutputTokenCost: 0.000005},
 		// Google
 		"gemini-2.5-pro":        {InputTokenCost: 0.00000125, OutputTokenCost: 0.00001},
 		"gemini-2.5-flash":      {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
@@ -155,6 +160,10 @@ type Model struct {
 	askRespCh    chan<- []codetool.AskUserAnswer
 	askDone      chan struct{}
 
+	// Input history for arrow-up recall.
+	inputHistory []string
+	historyIdx   int // -1 = current input, 0..N = browsing history
+
 	// Cost tracking across the session.
 	costTracker  *core.CostTracker
 	sessionUsage core.RunUsage // accumulated across all runs
@@ -193,6 +202,7 @@ func New(cfg *config.Config) *Model {
 		approvalDone:   make(chan struct{}),
 		approvalAlways: make(map[string]bool),
 		costTracker:    core.NewCostTracker(modelPricing()),
+		historyIdx:     -1,
 		allSkills:      allSkills,
 	}
 }
@@ -348,6 +358,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		// Ring terminal bell if the task took >5 seconds.
+		if time.Since(m.startTime) > 5*time.Second {
+			fmt.Print("\a")
+		}
 		m.resetAskState()
 		m.busy = false
 		m.runCtx = nil
@@ -355,7 +369,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agent = nil
 		m.usage = msg.usage
 		m.sessionUsage.IncrRun(msg.usage)
-		m.costTracker.Record(m.cfg.Model, msg.usage)
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			errMsg := &chat.Message{
 				Kind:    chat.KindError,
@@ -528,9 +541,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
-		if text == "/undo" {
+		if text == "/undo" || strings.HasPrefix(text, "/undo ") {
 			m.input.Reset()
-			m.messages = append(m.messages, m.handleUndo())
+			m.messages = append(m.messages, m.handleUndo(text))
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
@@ -540,9 +553,19 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
+		if text == "/config" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderConfigMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
 		m.input.Reset()
 		m.input.SetHeight(1)
 		m.scroll = 0
+
+		// Push to input history for arrow-up recall.
+		m.inputHistory = append(m.inputHistory, text)
+		m.historyIdx = -1
 
 		userMsg := &chat.Message{
 			Kind:    chat.KindUser,
@@ -568,9 +591,31 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.prepareRun(text)
 
 	case "up":
+		// Recall input history when idle; scroll when busy.
+		if !m.busy && len(m.inputHistory) > 0 {
+			if m.historyIdx == -1 {
+				m.historyIdx = len(m.inputHistory) - 1
+			} else if m.historyIdx > 0 {
+				m.historyIdx--
+			}
+			m.input.Reset()
+			m.input.InsertString(m.inputHistory[m.historyIdx])
+			return m, nil
+		}
 		m.scroll++
 
 	case "down":
+		if !m.busy && m.historyIdx >= 0 {
+			if m.historyIdx < len(m.inputHistory)-1 {
+				m.historyIdx++
+				m.input.Reset()
+				m.input.InsertString(m.inputHistory[m.historyIdx])
+			} else {
+				m.historyIdx = -1
+				m.input.Reset()
+			}
+			return m, nil
+		}
 		if m.scroll > 0 {
 			m.scroll--
 		}
@@ -1180,6 +1225,14 @@ func (m *Model) renderStatusBar() string {
 		scrolled := m.sty.StatusBar.Key.Render("scroll ") +
 			m.sty.StatusBar.Value.Render(fmt.Sprintf("+%d", m.scroll))
 		leftParts = append(leftParts, divider, scrolled)
+	}
+
+	// Session cumulative tokens.
+	if m.sessionUsage.Requests > 0 {
+		sessionTokens := m.sty.StatusBar.Key.Render("session ") +
+			m.sty.StatusBar.Value.Render(fmt.Sprintf("%dk↓ %dk↑",
+				m.sessionUsage.InputTokens/1000, m.sessionUsage.OutputTokens/1000))
+		leftParts = append(leftParts, divider, sessionTokens)
 	}
 
 	if cost := m.costTracker.TotalCost(); cost > 0 {

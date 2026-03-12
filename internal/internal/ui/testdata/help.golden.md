@@ -11,8 +11,9 @@
 - `/resume` — restore the last saved session
 - `/model [name]` — show or switch the active model
 - `/diff` — show git diff of uncommitted changes
-- `/undo` — revert the last git-tracked file change
+- `/undo [path]` — revert one unstaged git-tracked file change
 - `/doctor` — diagnose setup issues
+- `/config` — show effective configuration
 - `/skills` — list detected skills
 - `/skill <name>` — toggle a skill on or off
 - `/quit` or `/exit` — quit the app
@@ -22,4 +23,5 @@
 - `Enter` — send
 - `Shift+Enter` — insert newline
 - `Esc` — cancel the active run
-- `↑/↓` and `PgUp/PgDn` — scroll the transcript
+- `↑/↓` — recall input history
+- `PgUp/PgDn` — scroll the transcript
