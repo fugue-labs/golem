@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -35,14 +36,17 @@ type Message struct {
 	ToolName string
 	ToolArgs string
 	RawArgs  string // Full JSON args for rich rendering (diffs, etc.)
-	Status   ToolStatus
+	Status    ToolStatus
+	StartedAt time.Time     // when the tool call started
+	Duration  time.Duration // elapsed time for completed tool calls
 
 	// Render cache — avoids re-rendering unchanged messages every frame.
-	cachedRender  string
-	cachedWidth   int
-	cachedContent string
-	cachedStatus  ToolStatus
-	cachedLines   int // number of lines in cachedRender
+	cachedRender   string
+	cachedWidth    int
+	cachedContent  string
+	cachedStatus   ToolStatus
+	cachedDuration time.Duration
+	cachedLines    int // number of lines in cachedRender
 }
 
 // Render returns the rendered string for this message, using a cache to avoid
@@ -50,7 +54,8 @@ type Message struct {
 // content, status, or rendering width changes.
 func (msg *Message) Render(sty *styles.Styles, width int, allMessages []*Message) string {
 	if msg.cachedRender != "" && msg.cachedWidth == width &&
-		msg.cachedContent == msg.Content && msg.cachedStatus == msg.Status {
+		msg.cachedContent == msg.Content && msg.cachedStatus == msg.Status &&
+		msg.cachedDuration == msg.Duration {
 		return msg.cachedRender
 	}
 	rendered := RenderMessage(msg, sty, width, allMessages)
@@ -58,6 +63,7 @@ func (msg *Message) Render(sty *styles.Styles, width int, allMessages []*Message
 	msg.cachedWidth = width
 	msg.cachedContent = msg.Content
 	msg.cachedStatus = msg.Status
+	msg.cachedDuration = msg.Duration
 	msg.cachedLines = strings.Count(rendered, "\n") + 1
 	if rendered == "" {
 		msg.cachedLines = 0
@@ -166,6 +172,18 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 			param := ansi.Truncate(msg.ToolArgs, available, "...")
 			header += " " + sty.Tool.ParamMain.Render(param)
 		}
+	}
+
+	// Show duration for completed tool calls.
+	if msg.Duration > 0 {
+		dur := msg.Duration
+		var durStr string
+		if dur < time.Second {
+			durStr = fmt.Sprintf("%dms", dur.Milliseconds())
+		} else {
+			durStr = fmt.Sprintf("%.1fs", dur.Seconds())
+		}
+		header += " " + sty.Muted.Render(durStr)
 	}
 
 	// If the result has been stored inline, render it below the header.
@@ -609,15 +627,25 @@ func renderPlainResult(content string, sty *styles.Styles, width int) string {
 
 func renderThinking(msg *Message, sty *styles.Styles, width int) string {
 	content := msg.Content
+	words := len(strings.Fields(content))
 	lines := strings.Split(content, "\n")
-	maxLines := 10
+	maxLines := 8
+	truncated := false
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
-		content = "... " + strings.Join(lines, "\n")
+		content = strings.Join(lines, "\n")
+		truncated = true
 	}
 
 	rendered := sty.Chat.Thinking.Width(width - 4).Render(content)
-	footer := sty.Chat.ThinkingFooter.Render("Thinking...")
+	label := "Thinking"
+	if words > 0 {
+		label = fmt.Sprintf("Thinking (%d words)", words)
+	}
+	if truncated {
+		label += " — showing last lines"
+	}
+	footer := sty.Chat.ThinkingFooter.Render(label)
 	return rendered + "\n" + footer
 }
 
