@@ -2,6 +2,8 @@ package agent
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fugue-labs/golem/internal/config"
@@ -44,6 +46,7 @@ type RuntimeReport struct {
 	AutoContextMaxTokens int                     `json:"auto_context_max_tokens,omitempty"`
 	AutoContextKeepLastN int                     `json:"auto_context_keep_last_n,omitempty"`
 	TopLevelPersonality  bool                    `json:"top_level_personality"`
+	GitRepo              string                  `json:"git_repo"`
 	RuntimeError         string                  `json:"runtime_error,omitempty"`
 	ToolSurfaces         ToolSurfaceReport       `json:"tool_surfaces"`
 	Validation           config.ValidationResult `json:"validation,omitempty"`
@@ -90,6 +93,7 @@ func BuildRuntimeReport(cfg *config.Config, runtime RuntimeState, validation con
 	report.AutoContextMaxTokens = cfg.AutoContextMaxTokens
 	report.AutoContextKeepLastN = cfg.AutoContextKeepLastN
 	report.TopLevelPersonality = cfg.TopLevelPersonality
+	report.GitRepo = onOff(isGitRepo(cfg.WorkingDir))
 	report.ToolSurfaces.Delegate = onOff(!cfg.DisableDelegate && runtime.EffectiveTeamMode)
 	return report
 }
@@ -178,6 +182,7 @@ func runtimeProfileLines(report RuntimeReport) []string {
 		lines = append(lines, fmt.Sprintf("Auto-context: `%d` tokens, keep last `%d` turns", report.AutoContextMaxTokens, report.AutoContextKeepLastN))
 	}
 	lines = append(lines, fmt.Sprintf("Top-level personality: `%t`", report.TopLevelPersonality))
+	lines = append(lines, fmt.Sprintf("Git repo: `%s`", report.GitRepo))
 	return lines
 }
 
@@ -245,6 +250,11 @@ func fallbackStatus(value string) string {
 		return "pending"
 	}
 	return trimmed
+}
+
+func isGitRepo(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }
 
 func firstNonEmptyString(values ...string) string {

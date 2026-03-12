@@ -7,7 +7,7 @@
 - **Document purpose**: implementation-ready product requirements for a state-of-the-art multi-agent mission system
 - **Scope**: v1 local-first, single-host mission orchestration for repository work
 - **Audience**: implementation agents, maintainers, reviewers
-- **Quality bar**: the system must feel competitive with the best terminal coding agents in reliability, sophistication, and operator trust while remaining materially simpler in architecture than a daemon-first platform
+- **Quality bar**: the system must feel competitive with the best terminal coding agents in reliability, sophistication, and operator trust while remaining simpler and more elegant than a daemon-first platform
 - **Decision rule**: if implementation behavior differs from this document, the implementation is wrong unless this document is updated first
 
 ---
@@ -395,6 +395,42 @@ The planner must:
 3. Avoid creating “meta” tasks that only restate the mission.
 4. Express acceptance criteria in observable terms.
 5. Make dependencies explicit only when real.
+6. Size tasks so that a strong worker can usually complete one in a single focused run.
+
+## 11.2.1 Task sizing heuristics
+
+Task sizing is a product-quality concern, not a minor planner detail.
+
+A well-sized v1 task usually has:
+
+- one clear objective
+- one primary writable scope
+- at most one conceptual reason for failure
+- a reviewable diff size
+- deterministic acceptance checks
+- no hidden dependency on another still-unknown task
+
+The planner should generally prefer a split when a proposed task would:
+
+- touch multiple unrelated subsystems
+- require both broad refactoring and behavioral verification
+- span code, tests, and docs across unrelated scopes
+- produce a diff so large that review becomes shallow
+- combine investigation and implementation when investigation may invalidate the implementation plan
+
+The planner should generally avoid splitting when:
+
+- the split would create fake dependency edges with no real safety gain
+- the resulting subtasks would each be too trivial to justify worker overhead
+- the work must remain atomic to preserve correctness or review clarity
+
+Strong default heuristics for v1:
+
+- prefer 3–12 initial tasks for a non-trivial mission
+- avoid more than 20 initial tasks without explicit structural-replan approval
+- prefer one writable scope per task
+- prefer one review run per completed worker task
+- prefer follow-up tasks over speculative front-loading
 
 ## 11.3 Replanning triggers
 
@@ -651,6 +687,8 @@ Artifacts on disk are the source of truth for large evidence blobs.
 
 ## 15.2 Tables
 
+The SQL below is normative for v1 shape, though column names may vary slightly if equivalent semantics are preserved.
+
 ### `missions`
 
 ```sql
@@ -670,8 +708,14 @@ CREATE TABLE missions (
   updated_at TIMESTAMP NOT NULL,
   started_at TIMESTAMP,
   ended_at TIMESTAMP,
-  last_replan_at TIMESTAMP
+  last_replan_at TIMESTAMP,
+  CHECK (status IN (
+    'draft','planning','awaiting_approval','running','paused','blocked','completing','completed','failed','cancelled'
+  ))
 );
+
+CREATE INDEX idx_missions_status ON missions(status);
+CREATE INDEX idx_missions_updated_at ON missions(updated_at DESC);
 ```
 
 ### `tasks`
@@ -694,8 +738,15 @@ CREATE TABLE tasks (
   blocking_reason TEXT,
   created_at TIMESTAMP NOT NULL,
   updated_at TIMESTAMP NOT NULL,
-  FOREIGN KEY (mission_id) REFERENCES missions(id)
+  FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+  CHECK (status IN (
+    'pending','ready','leased','running','awaiting_review','accepted','integrated','done','rejected','failed','blocked','superseded'
+  )),
+  CHECK (priority >= 0)
 );
+
+CREATE INDEX idx_tasks_mission_status ON tasks(mission_id, status);
+CREATE INDEX idx_tasks_mission_priority ON tasks(mission_id, priority DESC, created_at ASC);
 ```
 
 ### `task_dependencies`
@@ -704,8 +755,13 @@ CREATE TABLE tasks (
 CREATE TABLE task_dependencies (
   task_id TEXT NOT NULL,
   depends_on_task_id TEXT NOT NULL,
-  PRIMARY KEY (task_id, depends_on_task_id)
+  PRIMARY KEY (task_id, depends_on_task_id),
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+  CHECK (task_id != depends_on_task_id)
 );
+
+CREATE INDEX idx_task_dependencies_depends_on ON task_dependencies(depends_on_task_id);
 ```
 
 ### `runs`
@@ -725,9 +781,15 @@ CREATE TABLE runs (
   ended_at TIMESTAMP,
   summary TEXT,
   error_text TEXT,
-  FOREIGN KEY (mission_id) REFERENCES missions(id),
-  FOREIGN KEY (task_id) REFERENCES tasks(id)
+  FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+  CHECK (mode IN ('planner','worker','review','integration')),
+  CHECK (status IN ('queued','running','succeeded','failed','timed_out','cancelled','lease_lost'))
 );
+
+CREATE INDEX idx_runs_mission_status ON runs(mission_id, status);
+CREATE INDEX idx_runs_task_id ON runs(task_id);
+CREATE INDEX idx_runs_lease_expires_at ON runs(lease_expires_at);
 ```
 
 ### `artifacts`
@@ -741,8 +803,16 @@ CREATE TABLE artifacts (
   type TEXT NOT NULL,
   relative_path TEXT NOT NULL,
   sha256 TEXT NOT NULL,
-  created_at TIMESTAMP NOT NULL
+  created_at TIMESTAMP NOT NULL,
+  FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE SET NULL,
+  UNIQUE (run_id, type, relative_path)
 );
+
+CREATE INDEX idx_artifacts_mission_id ON artifacts(mission_id);
+CREATE INDEX idx_artifacts_task_id ON artifacts(task_id);
+CREATE INDEX idx_artifacts_run_id ON artifacts(run_id);
 ```
 
 ### `approvals`
@@ -758,8 +828,14 @@ CREATE TABLE approvals (
   request_json TEXT NOT NULL,
   response_json TEXT,
   created_at TIMESTAMP NOT NULL,
-  resolved_at TIMESTAMP
+  resolved_at TIMESTAMP,
+  FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE SET NULL,
+  CHECK (status IN ('pending','approved','rejected','superseded','expired'))
 );
+
+CREATE INDEX idx_approvals_mission_status ON approvals(mission_id, status);
 ```
 
 ### `events`
@@ -772,9 +848,103 @@ CREATE TABLE events (
   run_id TEXT,
   type TEXT NOT NULL,
   payload_json TEXT NOT NULL,
-  created_at TIMESTAMP NOT NULL
+  created_at TIMESTAMP NOT NULL,
+  FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE SET NULL
 );
+
+CREATE INDEX idx_events_mission_id_id ON events(mission_id, id);
+CREATE INDEX idx_events_task_id ON events(task_id);
+CREATE INDEX idx_events_run_id ON events(run_id);
 ```
+
+## 15.2.1 Persistence rules
+
+The store layer must guarantee:
+
+1. task leasing is transactional
+2. structural replan application is transactional
+3. accepted-to-integrated transitions are transactional
+4. event append happens in the same transaction as the state change it represents where practical
+5. artifact file writes happen before the DB row is committed, or the row must be rolled back
+6. recovery never depends on in-memory-only state
+
+## 15.2.2 Event taxonomy
+
+The event log is not a dumping ground. Event types must be explicit and low-cardinality.
+
+Recommended event families:
+
+### Mission lifecycle events
+- `mission_created`
+- `mission_planning_started`
+- `mission_planning_completed`
+- `mission_started`
+- `mission_paused`
+- `mission_resumed`
+- `mission_blocked`
+- `mission_completing`
+- `mission_completed`
+- `mission_failed`
+- `mission_cancelled`
+
+### Plan and replan events
+- `replan_requested`
+- `replan_proposed`
+- `replan_approved`
+- `replan_rejected`
+- `replan_applied`
+- `replan_superseded`
+
+### Task lifecycle events
+- `task_created`
+- `task_ready`
+- `task_blocked`
+- `task_leased`
+- `task_requeued`
+- `task_awaiting_review`
+- `task_accepted`
+- `task_rejected`
+- `task_integrated`
+- `task_done`
+- `task_superseded`
+
+### Run lifecycle events
+- `run_created`
+- `run_started`
+- `run_heartbeat`
+- `run_succeeded`
+- `run_failed`
+- `run_cancelled`
+- `run_timed_out`
+- `run_lease_lost`
+
+### Approval events
+- `approval_created`
+- `approval_superseded`
+- `approval_approved`
+- `approval_rejected`
+- `approval_expired`
+
+### Artifact events
+- `artifact_recorded`
+- `artifact_missing`
+- `artifact_validation_failed`
+
+### Recovery and integration events
+- `recovery_started`
+- `recovery_reconciled_run`
+- `recovery_completed`
+- `integration_started`
+- `integration_succeeded`
+- `integration_failed`
+
+Event payload rules:
+
+1. every event payload must be schema-stable within a schema version
+2. event names must describe facts, not UI actions
+3. replaying the event stream should explain mission history without requiring hidden runtime context
 
 ## 15.3 State machines
 
@@ -904,7 +1074,146 @@ Required fields:
 - `followup_tasks[]`
 - `conflicts[]`
 
-## 16.2 Artifact generation requirements
+## 16.2.1 Artifact JSON schema expectations
+
+The implementation should validate artifact structure at write time.
+
+Minimum schema expectations:
+
+### `task_spec.json`
+- `mission_id`: string
+- `task_id`: string
+- `title`: string
+- `objective`: string
+- `constraints`: array[string]
+- `scope`: object
+- `acceptance_criteria`: array[string]
+- `review_requirements`: array[string]
+- `verification_commands`: array[string]
+- `policy`: object
+- `context_summary`: string
+
+### `run_summary.json`
+- `mission_id`: string
+- `task_id`: string
+- `run_id`: string
+- `mode`: string
+- `final_summary`: string
+- `claims`: array[string]
+- `files_changed`: array[string]
+- `commands_run`: array[string]
+- `verification_commands_run`: array[string]
+- `risks`: array[string]
+- `blockers`: array[string]
+- `suggested_followups`: array[string]
+
+### `verification.json`
+- `commands`: array[string]
+- `results`: array[object]
+- `overall_result`: string
+- `stdout_refs`: array[string]
+- `stderr_refs`: array[string]
+
+### `review.json`
+- `task_id`: string
+- `run_id`: string
+- `result`: `pass|fail|partial`
+- `checks`: array[object]
+- `evidence`: array[object|string]
+- `rejection_reasons`: array[string]
+- `recommended_followups`: array[string]
+
+### `integration.json`
+- `task_id`: string
+- `result`: string
+- `apply_method`: string
+- `post_apply_checks`: array[object|string]
+- `followup_tasks`: array[object|string]
+- `conflicts`: array[object|string]
+
+Validation policy:
+
+1. malformed required artifact JSON must fail the associated run stage
+2. schema-valid but semantically insufficient artifacts must fail review, not persistence
+3. artifact schema validation errors must be visible in mission state and event log
+
+## 16.2.2 Artifact naming conventions
+
+Recommended stable names per run:
+
+- `task_spec.json`
+- `run_summary.json`
+- `diff.patch`
+- `verification.json`
+- `review.json`
+- `integration.json`
+- `replan.json` (when applicable)
+
+## 16.2.3 Concrete artifact examples
+
+The documentation should include representative artifact examples so implementers and reviewers can align on shape.
+
+### Example `task_spec.json`
+
+```json
+{
+  "mission_id": "m_auth_oauth2",
+  "task_id": "t_callback_handler",
+  "title": "Implement OAuth callback handler",
+  "objective": "Add the server-side callback endpoint and token exchange flow.",
+  "constraints": [
+    "Do not widen scope beyond internal/auth and related tests.",
+    "Do not modify frontend login UI in this task."
+  ],
+  "scope": {
+    "paths": ["internal/auth/**", "internal/auth_test/**"]
+  },
+  "acceptance_criteria": [
+    "Callback endpoint exists.",
+    "Token exchange path is covered by tests.",
+    "go test ./... passes."
+  ],
+  "review_requirements": [
+    "Confirm no writes outside scope.",
+    "Confirm tests cited by the worker actually ran."
+  ],
+  "verification_commands": [
+    "go test ./internal/auth/...",
+    "go test ./..."
+  ],
+  "policy": {
+    "network": false,
+    "shell": true
+  },
+  "context_summary": "Mission is splitting auth migration into narrow backend-first tasks."
+}
+```
+
+### Example `review.json`
+
+```json
+{
+  "task_id": "t_callback_handler",
+  "run_id": "r_review_17",
+  "result": "fail",
+  "checks": [
+    {"name": "scope adherence", "result": "pass"},
+    {"name": "tests pass", "result": "fail"}
+  ],
+  "evidence": [
+    {"kind": "command", "value": "go test ./..."},
+    {"kind": "stderr_ref", "value": "artifacts/r_review_17/go-test.stderr.txt"}
+  ],
+  "rejection_reasons": [
+    "Worker claimed end-to-end success but repository-wide tests still fail."
+  ],
+  "recommended_followups": [
+    "Fix remaining test failure in auth token refresh path."
+  ]
+}
+```
+
+## 16.3 Artifact generation requirements
 
 1. Artifact generation must be deterministic when possible.
 2. Missing required artifacts must block task acceptance.
@@ -1054,7 +1363,80 @@ Approval UX must also satisfy:
 
 If the approval UI cannot explain the decision surface clearly, the product design is wrong.
 
----
+## 18.5.1 Concrete approval decision-surface example
+
+Representative `decision_surface_json` for a structural replan:
+
+```json
+{
+  "kind": "structural_replan",
+  "mission_id": "m_auth_oauth2",
+  "task_id": "t_auth_refactor",
+  "reason": "Review failure revealed a hidden dependency between token persistence and callback handling.",
+  "requested_action": "Replace 2 active planned tasks with 3 narrower tasks and supersede 1 blocked task.",
+  "paused_work": [
+    "No new leases will be issued until decision is made."
+  ],
+  "blast_radius": {
+    "scope_delta": ["internal/auth/**"],
+    "budget_delta": {"estimated_extra_runs": 2}
+  },
+  "approve_consequences": [
+    "Current task graph is replaced transactionally.",
+    "Superseded tasks are marked superseded."
+  ],
+  "reject_consequences": [
+    "Existing graph remains active.",
+    "Mission resumes from current plan."
+  ],
+  "evidence_refs": [
+    "artifacts/m_auth_oauth2/r_review_17/review.json",
+    "artifacts/m_auth_oauth2/r_plan_9/replan.json"
+  ]
+}
+```
+
+## 18.6 Failure and retry policy matrix
+
+The controller must treat failures explicitly rather than burying them in generic retry logic.
+
+| Failure case | Default action | Auto-retry? | Replan? | Approval? |
+|---|---|---:|---:|---:|
+| worker tool/runtime error | requeue task if retry budget remains | yes | no | no |
+| worker exceeded task budget | block task or requeue with tighter scope | limited | maybe | no |
+| review `fail` with clear fix path | create retry or follow-up task | no direct blind retry | maybe | no |
+| review `partial` | create follow-up task(s) | no | yes | no |
+| integration deterministic conflict | create integration follow-up task | no | maybe | no |
+| integration semantic conflict | stop integration path | no | yes | maybe |
+| lease lost / worker disappeared | reclaim task and requeue after reconciliation | yes | no | no |
+| repeated same-task failures beyond threshold | block task | no | yes | maybe |
+| structural replan proposal | pause new leases until decision | n/a | yes | yes |
+| writable scope escalation | halt that task path | no | no | yes |
+
+Required retry rules:
+
+1. retries must increment visible attempt counters
+2. retries must preserve prior evidence/artifacts
+3. repeated identical failures must push the mission toward replan/block, not infinite retry loops
+4. retry budget exhaustion must be visible in the task state
+
+## 18.7 Human approval decision matrix
+
+The implementation must make approval policy explicit enough that a coding agent can encode it directly.
+
+| Decision surface | Default | Rationale |
+|---|---|---|
+| initial plan | approval required unless auto-start policy enabled | operator should confirm mission framing |
+| local replan | auto-approve if policy allows | keeps operator out of low-risk bookkeeping |
+| structural replan | approval required | graph meaning changes materially |
+| scope escalation to `repo_wide` | approval required | blast radius increases sharply |
+| high-risk shell/network escalation | approval required | operational/safety risk |
+| deterministic integration into mission branch/worktree | configurable | some teams want review before integration |
+| final mission completion | configurable | some teams require sign-off on success claim |
+
+UI requirement:
+
+The approval queue should show the decision surface kind as a first-class label so the operator can tell whether they are approving a plan, a replan, an escalation, or final completion.
 
 ## 19. Prompting and Role Contracts
 
@@ -1081,6 +1463,42 @@ A worker run must:
 - report blockers explicitly
 - never claim that the work is accepted or merged
 
+### Worker prompt template
+
+The implementation should use a stable prompt shape similar to:
+
+```text
+You are a mission worker operating inside Golem Mission Control.
+
+You own exactly one task.
+Your task is not complete until the task-local acceptance criteria are satisfied and the required evidence artifacts exist.
+
+Task:
+- id: {{task_id}}
+- title: {{title}}
+- objective: {{objective}}
+- writable scope: {{scope}}
+- acceptance criteria:
+{{acceptance_criteria}}
+- review requirements:
+{{review_requirements}}
+
+Rules:
+1. Stay within writable scope unless explicitly escalated.
+2. Read before editing.
+3. Keep a short task-local plan.
+4. Run the required verification commands.
+5. Make no unsupported claims.
+6. Do not say the work is accepted, merged, or complete for the mission.
+7. If blocked, stop and report the blocker with concrete evidence.
+
+Required outputs:
+- updated task-local plan state
+- diff or no-op proof
+- run summary
+- verification evidence
+```
+
 ## 19.3 Review contract
 
 A review run must:
@@ -1091,6 +1509,35 @@ A review run must:
 - produce explicit pass/fail evidence
 - recommend next action when rejecting
 
+### Review prompt template
+
+```text
+You are an independent mission reviewer.
+
+Your job is not to continue the worker's implementation.
+Your job is to decide whether the submitted result satisfies the task contract.
+
+Inputs:
+- task spec
+- worker summary
+- diff / no-op proof
+- verification evidence
+- current repository state
+
+Rules:
+1. Treat the worker summary as untrusted input.
+2. Prefer deterministic evidence over narration.
+3. Reject unsupported claims.
+4. If the result is insufficient, explain exactly why.
+5. Do not silently repair the work during review.
+
+Required outputs:
+- review result: pass | fail | partial
+- checks performed
+- evidence
+- rejection reasons or follow-up recommendations
+```
+
 ## 19.4 Planning contract
 
 A planning run must:
@@ -1100,6 +1547,35 @@ A planning run must:
 - avoid unnecessary task explosion
 - separate execution from review concerns
 - explain any structural replan
+
+### Planner prompt template
+
+```text
+You are the mission planner.
+
+Produce a bounded task graph for the mission.
+Favor clarity, ownership boundaries, and reviewability over exhaustive decomposition.
+
+Mission goal:
+{{mission_goal}}
+
+Constraints:
+{{mission_constraints}}
+
+Rules:
+1. Prefer fewer, clearer tasks.
+2. Keep writable scopes narrow.
+3. Make dependencies explicit only when real.
+4. Separate implementation, review, and follow-up work.
+5. If proposing a structural replan, explain the delta from the current graph.
+6. Avoid speculative tasks without clear evidence.
+
+Required outputs:
+- task graph
+- task scopes
+- acceptance criteria per task
+- replan explanation when applicable
+```
 
 ---
 
@@ -1131,6 +1607,88 @@ golem mission replay <mission-id>
 golem mission artifacts <task-id|run-id>
 ```
 
+## 20.1.1 CLI JSON output contracts
+
+All `--json` mission commands must emit stable top-level envelopes.
+
+Minimum envelope:
+
+```json
+{
+  "version": "1",
+  "command": "mission status",
+  "data": {}
+}
+```
+
+Required command contracts:
+
+### `golem mission status <mission-id> --json`
+
+```json
+{
+  "version": "1",
+  "command": "mission status",
+  "data": {
+    "mission": {
+      "id": "m_auth_oauth2",
+      "title": "OAuth2 migration",
+      "status": "running",
+      "budget": {"max_concurrent_workers": 3},
+      "success_criteria": ["tests pass"]
+    },
+    "counts": {
+      "ready_tasks": 2,
+      "running_tasks": 1,
+      "pending_approvals": 0
+    }
+  }
+}
+```
+
+### `golem mission tasks <mission-id> --json`
+
+```json
+{
+  "version": "1",
+  "command": "mission tasks",
+  "data": {
+    "mission_id": "m_auth_oauth2",
+    "tasks": [
+      {
+        "id": "t_callback_handler",
+        "title": "Implement OAuth callback handler",
+        "status": "awaiting_review",
+        "priority": 90
+      }
+    ]
+  }
+}
+```
+
+### `golem mission approval show <approval-id> --json`
+
+```json
+{
+  "version": "1",
+  "command": "mission approval show",
+  "data": {
+    "approval": {
+      "id": "a_replan_3",
+      "kind": "structural_replan",
+      "status": "pending",
+      "decision_surface": {}
+    }
+  }
+}
+```
+
+JSON contract rules:
+
+1. command output must not silently change field meaning across minor revisions
+2. omitted fields must mean truly unavailable, not implicitly false
+3. human-readable CLI output may evolve freely, but `--json` must stay stable enough for tests and tooling
+
 ## 20.2 TUI mission board
 
 The TUI must provide:
@@ -1145,6 +1703,58 @@ The TUI must provide:
 - selected task detail
 - selected run artifact detail
 
+## 20.2.1 Primary mission screens
+
+The mission UX should be implemented as a small set of stable screens/panels, not a maze of modal states.
+
+Required primary views:
+
+1. **Mission overview**
+   - mission title, status, budget, active phase, success criteria summary
+2. **Task board**
+   - task columns by state with dependency hints and ownership/scope visibility
+3. **Run inspector**
+   - active and recent runs with lease status, timestamps, and summaries
+4. **Approval view**
+   - one explicit decision surface with evidence and consequences
+5. **Artifact inspector**
+   - diff, summary, test evidence, review evidence, replan delta
+6. **Event timeline**
+   - append-only replayable mission history
+
+## 20.2.2 Key interaction flows
+
+### Create mission flow
+1. capture goal/title/policy
+2. validate repo preconditions
+3. create draft mission
+4. move into planning state and then overview/approval flow
+
+### Review rejection flow
+1. operator sees rejected task in board and review queue
+2. selecting the task opens worker summary, diff, and review evidence
+3. operator can choose retry, force replan, or cancel mission path
+
+### Approval flow
+1. approval queue highlights blocking request
+2. approval detail screen shows requested action, evidence, paused work, and consequences
+3. operator can approve or reject without losing surrounding mission context
+
+### Completion flow
+1. overview shows mission in completing/completed state
+2. artifact inspector exposes final integration evidence
+3. event timeline makes the mission auditable end-to-end
+
+## 20.2.3 Interaction quality requirements
+
+The TUI must:
+
+- preserve operator context while moving between board, run detail, and approval detail
+- make the currently blocking condition visually obvious
+- allow the user to inspect evidence before making approval decisions
+- avoid hiding essential mission status behind nested modal stacks
+- remain usable during high event throughput
+
 ## 20.3 Required operator actions
 
 From the TUI, the user must be able to:
@@ -1157,6 +1767,67 @@ From the TUI, the user must be able to:
 - force a replan
 - approve/reject escalation
 - inspect final completion evidence
+
+## 20.4 TUI state model
+
+The TUI mission surface should use a small explicit state model.
+
+Illustrative view state:
+
+```go
+type MissionScreen string
+
+const (
+    MissionScreenBoard      MissionScreen = "board"
+    MissionScreenTaskDetail MissionScreen = "task_detail"
+    MissionScreenRunDetail  MissionScreen = "run_detail"
+    MissionScreenApproval   MissionScreen = "approval"
+    MissionScreenArtifacts  MissionScreen = "artifacts"
+    MissionScreenTimeline   MissionScreen = "timeline"
+)
+
+type MissionUIState struct {
+    MissionID          string
+    ActiveScreen       MissionScreen
+    SelectedTaskID     string
+    SelectedRunID      string
+    SelectedApprovalID string
+    BoardFilter        string
+    TaskCursor         int
+    RunCursor          int
+    TimelineCursor     int
+    PendingAction      string
+    LastError          string
+}
+```
+
+## 20.5 TUI message/event contracts
+
+The mission UI should react to explicit messages rather than inferring transitions from render state.
+
+Minimum message families:
+
+```go
+type MissionLoadedMsg struct{ Mission MissionViewModel }
+type MissionEventAppendedMsg struct{ Event MissionEventViewModel }
+type TaskSelectedMsg struct{ TaskID string }
+type RunSelectedMsg struct{ RunID string }
+type ApprovalSelectedMsg struct{ ApprovalID string }
+type ApprovalResolvedMsg struct{ ApprovalID string; Status string }
+type MissionActionRequestedMsg struct{ Action string; MissionID string }
+type MissionActionCompletedMsg struct{ Action string; MissionID string; Err error }
+type MissionScreenChangedMsg struct{ Screen MissionScreen }
+```
+
+## 20.6 TUI state machine requirements
+
+The TUI must obey these rules:
+
+1. a blocking approval should automatically surface in the approval queue and be reachable in one action from the board
+2. task selection should remain stable across unrelated event updates when possible
+3. switching between board/detail views must preserve selection context
+4. destructive actions must require confirmation or use an approval-style decision surface
+5. render state must derive from canonical mission data, not mutate canonical mission state directly
 
 ---
 
@@ -1234,6 +1905,147 @@ type WorktreeManager interface {
 }
 ```
 
+## 21.4.1 Core Go data types
+
+The implementation should use explicit typed models rather than map-heavy orchestration code.
+
+Illustrative shapes:
+
+```go
+type Mission struct {
+    ID              string
+    Title           string
+    Goal            string
+    RepoRoot        string
+    BaseCommit      string
+    BaseBranch      string
+    Status          MissionStatus
+    Policy          MissionPolicy
+    Budget          MissionBudget
+    SuccessCriteria []string
+    IntegrationRef  string
+    CreatedAt       time.Time
+    UpdatedAt       time.Time
+    StartedAt       *time.Time
+    EndedAt         *time.Time
+    LastReplanAt    *time.Time
+}
+
+type Task struct {
+    ID                 string
+    MissionID          string
+    Title              string
+    Kind               TaskKind
+    Objective          string
+    Status             TaskStatus
+    Priority           int
+    Scope              TaskScope
+    AcceptanceCriteria []string
+    ReviewRequirements []string
+    EstimatedEffort    string
+    RiskLevel          RiskLevel
+    AttemptCount       int
+    BlockingReason     string
+    CreatedAt          time.Time
+    UpdatedAt          time.Time
+}
+
+type Run struct {
+    ID             string
+    MissionID      string
+    TaskID         string
+    Mode           RunMode
+    Status         RunStatus
+    LeaseOwner     string
+    LeaseExpiresAt *time.Time
+    HeartbeatAt    *time.Time
+    WorktreePath   string
+    StartedAt      *time.Time
+    EndedAt        *time.Time
+    Summary        string
+    ErrorText      string
+}
+
+type Approval struct {
+    ID           string
+    MissionID    string
+    TaskID       string
+    RunID        string
+    Kind         ApprovalKind
+    Status       ApprovalStatus
+    RequestJSON  []byte
+    ResponseJSON []byte
+    CreatedAt    time.Time
+    ResolvedAt   *time.Time
+}
+
+type Event struct {
+    ID        int64
+    MissionID string
+    TaskID    string
+    RunID     string
+    Type      EventType
+    Payload   []byte
+    CreatedAt time.Time
+}
+```
+
+These types should live close to the mission primitives, not be spread across UI packages.
+
+## 21.4.2 Controller-facing request/result types
+
+The orchestration core should use typed request/result structs for all boundary crossings.
+
+Minimum expected shapes:
+
+```go
+type LeaseRequest struct {
+    MaxLeases        int
+    ReserveReviewers int
+    Now              time.Time
+}
+
+type TaskLease struct {
+    Task          Task
+    Run           Run
+    LeaseToken    string
+    LeaseDeadline time.Time
+}
+
+type RunSpec struct {
+    Mission   Mission
+    Task      Task
+    Run       Run
+    Worktree  WorktreeHandle
+    TaskSpec  TaskSpecArtifact
+    Policy    MissionPolicy
+}
+
+type RunResult struct {
+    RunID         string
+    Status        RunStatus
+    Summary       string
+    ErrorText     string
+    ArtifactRefs  []ArtifactRecord
+    FollowupTasks []TaskDraft
+}
+
+type IntegrationRequest struct {
+    Mission Mission
+    Task    Task
+    Run     Run
+}
+
+type IntegrationResult struct {
+    Result        string
+    AppliedCommit string
+    ArtifactRefs  []ArtifactRecord
+    FollowupTasks []TaskDraft
+}
+```
+
+Using typed request/result structs is required to keep the controller loop understandable and testable.
+
 v1 should avoid interfaces for:
 
 - the mission controller itself
@@ -1241,6 +2053,43 @@ v1 should avoid interfaces for:
 - pure state transition helpers
 
 Those should be concrete packages/types unless a second real implementation appears.
+
+## 21.4.3 Near-code mission controller API
+
+The implementation should make the controller API explicit enough that a coding agent can scaffold it directly.
+
+Illustrative shape:
+
+```go
+type Controller struct {
+    store       MissionStore
+    planner     Planner
+    runner      RoleRunner
+    integration IntegrationEngine
+    worktrees   WorktreeManager
+    clock       Clock
+    logger      Logger
+}
+
+func NewController(deps ControllerDeps) (*Controller, error)
+func (c *Controller) CreateMission(ctx context.Context, req CreateMissionRequest) (Mission, error)
+func (c *Controller) StartMission(ctx context.Context, missionID string) error
+func (c *Controller) PauseMission(ctx context.Context, missionID string, hard bool) error
+func (c *Controller) ResumeMission(ctx context.Context, missionID string) error
+func (c *Controller) CancelMission(ctx context.Context, missionID string) error
+func (c *Controller) Tick(ctx context.Context, missionID string) error
+func (c *Controller) Recover(ctx context.Context, missionID string) error
+func (c *Controller) Approve(ctx context.Context, approvalID string) error
+func (c *Controller) Reject(ctx context.Context, approvalID string, reason string) error
+```
+
+Behavioral expectations:
+
+1. `CreateMission` persists canonical mission state before any planning work begins
+2. `StartMission` only transitions from an allowed pre-run state
+3. `Tick` is the single orchestration step function and must stay idempotent enough for crash/restart tolerance
+4. `Recover` must reconcile leases, worktrees, and derived mission phase
+5. approval methods must resolve canonical approval state and emit matching events
 
 ## 21.5 Package dependency rules
 
@@ -1252,6 +2101,23 @@ Implementation must follow these dependency rules:
 4. Planner/worker/review runners must depend on abstract run specs and result types, not direct UI models.
 5. UI packages may observe mission state and events, but must not own canonical mission transitions.
 6. Approval rendering code may format approval requests, but only the mission controller may resolve canonical approval state.
+
+## 21.6 Anti-corruption boundary between Golem and Gollem
+
+The product/framework seam must be explicit.
+
+Gollem mission packages are the reusable orchestration core.
+Golem mission packages are the product adapter layer.
+
+Rules:
+
+1. Gollem must not import Bubble Tea, product styling, or CLI presentation code.
+2. Golem may translate product config/UI actions into Gollem mission requests, but must not fork canonical state semantics.
+3. JSON/CLI formatting belongs in Golem.
+4. canonical mission state transitions, event taxonomy, and artifact contracts belong in Gollem mission primitives.
+5. any convenience view model introduced in Golem must be derived from canonical mission state, not become a second source of truth.
+
+Violations of this boundary are architecture regressions.
 
 ---
 
@@ -1279,6 +2145,25 @@ ext/mission/
   fake_model.go
 ```
 
+### File responsibilities
+
+- `mission.go`: public entry points and high-level package docs
+- `types.go`: core enums, data types, and JSON-serializable contracts
+- `store.go`: MissionStore interface and transaction boundary helpers
+- `sqlite_store.go`: concrete SQLite persistence and migration wiring
+- `scheduler.go`: ready-queue selection, scope conflict rules, lease assignment
+- `controller.go`: orchestration entry points and controller subroutines
+- `planner.go`: planner interface and planner request/result shaping
+- `runner.go`: shared role-runner orchestration glue
+- `review.go`: review result normalization and review-specific helpers
+- `integration.go`: integration engine contracts and deterministic apply helpers
+- `artifacts.go`: artifact naming, validation, and hashing helpers
+- `events.go`: event taxonomy, event payload structs, and append helpers
+- `policy.go`: budget checks, approval classification, retry policy helpers
+- `worktree.go`: worktree abstractions independent of concrete git shelling
+- `recovery.go`: startup reconciliation and lease-loss recovery helpers
+- `fake_model.go`: deterministic fixture-model harness for tests
+
 ## 22.2 Recommended Golem layout
 
 ```text
@@ -1295,6 +2180,18 @@ internal/ui/
   mission_view.go
   mission_cmds.go
 ```
+
+### File responsibilities
+
+- `internal/mission/service.go`: product-facing mission service wiring to Gollem primitives
+- `internal/mission/commands.go`: CLI command registration and JSON output shaping
+- `internal/mission/runtime.go`: provider/runtime configuration for planner/worker/reviewer runs
+- `internal/mission/approval.go`: approval presentation helpers and policy-driven decision mapping
+- `internal/mission/worktree.go`: local git worktree implementation
+- `internal/mission/smoke_live_test.go`: opt-in live-provider smoke scenarios
+- `internal/ui/mission_model.go`: Bubble Tea mission state model and message handling
+- `internal/ui/mission_view.go`: mission board rendering and detail panes
+- `internal/ui/mission_cmds.go`: async commands bridging UI actions to mission service operations
 
 ## 22.3 Expected current integration points
 
@@ -1356,6 +2253,19 @@ Required golden coverage:
 - mission board render states
 - artifact rendering helpers
 
+### Required UI golden states
+
+At minimum, the mission UI should have stable snapshot/golden coverage for:
+
+1. draft mission with no tasks
+2. planning mission with spinner/progress state
+3. running mission with multiple active workers
+4. blocked mission with no runnable tasks
+5. review rejection surfaced in board + detail pane
+6. pending approval surfaced in queue + approval detail
+7. completed mission with final evidence visible
+8. recovered mission after restart with lease-lost reconciliation shown
+
 ## 23.4 Invariant tests
 
 Required invariants:
@@ -1380,13 +2290,201 @@ Simulate:
 
 Each fault must have an asserted recovery path.
 
-## 23.6 Performance tests
+## 23.6 Mission controller loop pseudocode
+
+The mission controller loop should be simple enough to reason about directly.
+
+Illustrative pseudocode:
+
+```go
+func (c *Controller) Tick(ctx context.Context, missionID string) error {
+    mission := c.store.GetMission(ctx, missionID)
+
+    if mission.IsTerminal() {
+        return nil
+    }
+
+    if err := c.recoverExpiredLeases(ctx, mission); err != nil {
+        return err
+    }
+
+    if approval := c.store.GetBlockingApproval(ctx, missionID); approval != nil {
+        c.emitWaitingForApproval(mission, approval)
+        return nil
+    }
+
+    if c.shouldReplan(ctx, mission) {
+        proposal, err := c.planner.Replan(ctx, c.buildReplanRequest(mission))
+        if err != nil {
+            return c.recordPlannerFailure(ctx, mission, err)
+        }
+        return c.handleReplanProposal(ctx, mission, proposal)
+    }
+
+    accepted := c.store.ListAcceptedNotIntegratedTasks(ctx, missionID)
+    for _, task := range accepted {
+        result, err := c.integration.ApplyAcceptedTask(ctx, c.buildIntegrationRequest(mission, task))
+        if err != nil {
+            return c.recordIntegrationFailure(ctx, mission, task, err)
+        }
+        if err := c.applyIntegrationResult(ctx, mission, task, result); err != nil {
+            return err
+        }
+    }
+
+    ready := c.store.ListReadyTasks(ctx, missionID)
+    leases, err := c.store.LeaseReadyTasks(ctx, missionID, c.buildLeaseRequest(mission, ready))
+    if err != nil {
+        return err
+    }
+
+    for _, lease := range leases {
+        go c.runWorkerOrReviewer(c.childContext(missionID), lease)
+    }
+
+    return c.updateMissionPhase(ctx, missionID)
+}
+```
+
+Required behavioral properties of the loop:
+
+1. one tick must be safe to rerun after crash or restart
+2. integration must happen only after review pass
+3. blocking approval must halt new leases
+4. replan proposal must not partially mutate the plan before decision
+5. terminal missions must be no-op under further ticks
+
+### Required controller subroutine pseudocode
+
+The implementation should also spell out and unit-test these subroutines:
+
+```go
+func (c *Controller) shouldReplan(ctx context.Context, mission Mission) bool
+func (c *Controller) handleReplanProposal(ctx context.Context, mission Mission, draft PlanDraft) error
+func (c *Controller) applyIntegrationResult(ctx context.Context, mission Mission, task Task, result IntegrationResult) error
+func (c *Controller) recoverExpiredLeases(ctx context.Context, mission Mission) error
+```
+
+Behavioral intent:
+
+- `shouldReplan` evaluates durable facts only
+- `handleReplanProposal` is responsible for approval-vs-auto-apply routing
+- `applyIntegrationResult` performs canonical task/mission transitions and follow-up task creation
+- `recoverExpiredLeases` reconciles dead runs without double-leasing work
+
+## 23.7 Performance tests
 
 Required performance checks:
 
 - scheduler remains reasonable with at least 1,000 queued tasks
 - event replay does not cause unbounded memory growth
 - TUI remains responsive under high event throughput
+
+## 23.8 Evaluation fixtures
+
+Mission evaluation requires dedicated tiny repos and scenario fixtures.
+
+Recommended fixture families:
+
+1. **planning_only_repo**
+   - enough structure to test decomposition quality without code edits
+2. **parallel_scopes_repo**
+   - two or more clearly independent writable scopes
+3. **review_rejection_repo**
+   - encourages believable worker overclaim or incomplete fix
+4. **repair_loop_repo**
+   - requires at least one failed attempt and one successful follow-up
+5. **conflict_boundary_repo**
+   - tasks that look parallel but actually share writable scope risk
+6. **pause_resume_repo**
+   - long enough execution path to test persistence and recovery
+
+Fixture quality requirements:
+
+- tiny and cheap to run
+- deterministic build/test scripts
+- readable enough for maintainers to understand failure causes
+- deliberately shaped to exercise one primary orchestration behavior each
+
+## 23.8.1 Concrete fixture guidance
+
+### planning_only_repo
+Must contain:
+- at least 3 subsystems or directories
+- a real but small dependency graph the planner can reason about
+- no required file edits for a planning-only success path
+
+### parallel_scopes_repo
+Must contain:
+- two failing or incomplete areas in disjoint paths
+- deterministic checks per area
+- obvious opportunity for safe parallelism
+
+### review_rejection_repo
+Must contain:
+- a bug that can be superficially "fixed" while still violating an acceptance criterion
+- deterministic tests or checks that expose the overclaim
+
+### repair_loop_repo
+Must contain:
+- an initial task likely to fail review or integration on the first attempt
+- a clear follow-up path that can succeed on the second attempt
+
+### conflict_boundary_repo
+Must contain:
+- two tasks whose scopes appear independent at first glance
+- a shared integration hotspot to exercise conflict detection/replanning
+
+### pause_resume_repo
+Must contain:
+- enough tasks and timing to exercise mid-mission persistence
+- deterministic signals showing whether resume correctly preserved progress
+
+## 23.8.2 Fixture directory recommendation
+
+Recommended structure:
+
+```text
+internal/mission/testdata/
+  planning_only_repo/
+  parallel_scopes_repo/
+  review_rejection_repo/
+  repair_loop_repo/
+  conflict_boundary_repo/
+  pause_resume_repo/
+```
+
+Each fixture should include a short README describing:
+- intended orchestration behavior
+- expected acceptance checks
+- common failure modes
+
+## 23.9 Evaluation scoring heuristics
+
+Deterministic evaluation should score at least:
+
+- planning boundedness
+- task scope quality
+- review correctness
+- integration correctness
+- recovery correctness
+- operator explainability of the resulting mission state
+
+A mission system that technically completes tasks but produces unreadable plans, noisy approvals, or opaque recovery behavior is not meeting the product bar.
+
+## 23.10 Live evaluation discipline
+
+Live smoke scenarios should be written so that failure is informative.
+
+That means each live scenario should isolate one primary orchestration claim:
+
+- planning quality
+- safe parallel execution
+- review catches overclaim
+- repair loop works
+- pause/resume works
+
+Do not create giant end-to-end live scenarios that fail ambiguously.
 
 ---
 
@@ -1453,10 +2551,10 @@ Every live smoke run must retain:
 - task artifacts
 - commands run
 - final diff
-- review reports
-- completion summary
+- review evidence
+- final integration evidence
 
-A smoke run is incomplete if evidence retention fails.
+A live smoke run is incomplete if evidence retention fails.
 
 ---
 
@@ -1481,6 +2579,33 @@ The feature is accepted only when all of the following are true:
 
 Implementation must follow this order.
 
+## 26.1 Migration and backfill strategy
+
+The mission system is a new subsystem, but the implementation should still treat schema evolution seriously from day one.
+
+Requirements:
+
+1. store schema must be versioned
+2. startup must run idempotent migrations before opening mission services
+3. the store must fail fast on unknown future schema versions
+4. derived data must be recomputable from canonical rows plus artifacts
+5. no migration may require in-memory-only backfill logic
+
+Recommended approach:
+
+- maintain a schema version table
+- keep SQL migrations in ordered files
+- prefer additive migrations in early versions
+- treat artifacts as immutable once recorded except for deterministic regeneration of derived artifacts
+
+Backfill policy:
+
+- if a new derived field is introduced later, recompute it from canonical state/events/artifacts on startup or first access
+- do not rewrite old event history unless there is a compelling corruption fix
+- when backfilling derived mission summaries, emit a backfill event for auditability
+
+## 26.2 Package-by-package implementation sequence
+
 ### Phase 1: core store and state
 
 - state types
@@ -1489,12 +2614,21 @@ Implementation must follow this order.
 - state transition helpers
 - artifact persistence helpers
 
+Definition of done:
+- schema boots from empty state
+- state transitions are unit tested
+- event append and artifact recording are durable
+
 ### Phase 2: controller and scheduler
 
 - mission controller
 - scheduler
 - lease logic
 - recovery logic
+
+Definition of done:
+- controller can create, load, tick, and recover missions deterministically
+- scheduler honors scope conflicts and review capacity
 
 ### Phase 3: worker and review execution
 
@@ -1503,11 +2637,18 @@ Implementation must follow this order.
 - review execution mode
 - derived artifact generation
 
+Definition of done:
+- one task can execute end-to-end through review with durable artifacts
+
 ### Phase 4: integration and approvals
 
 - integration engine
 - post-apply validation
 - approval lifecycle
+
+Definition of done:
+- accepted work integrates only through the integration engine
+- blocking approvals survive restart and resolve deterministically
 
 ### Phase 5: product surface
 
@@ -1515,6 +2656,9 @@ Implementation must follow this order.
 - TUI mission board
 - workflow panel integration
 - status JSON
+
+Definition of done:
+- operator can drive and inspect a mission entirely from CLI/TUI
 
 ### Phase 6: verification
 
@@ -1561,11 +2705,11 @@ Mitigation:
 
 ---
 
-## 28. Explicit Anti-Patterns
+## 28. Anti-patterns
 
-The implementing agent must not do any of the following:
+The implementation must not:
 
-1. Implement mission orchestration as uncontrolled agent-to-agent freeform chat.
+1. Turn mission orchestration into a freeform agent-to-agent chat swarm.
 2. Introduce a daemon or remote protocol as a v1 requirement.
 3. Merge worker changes without an independent review result.
 4. Make artifact generation depend entirely on model obedience when deterministic generation is possible.
@@ -1577,14 +2721,10 @@ The implementing agent must not do any of the following:
 
 ## 29. Final Notes to the Implementing Agent
 
-Build the smallest system that can credibly deliver:
-
-- mission-level autonomy
-- safe parallel execution
-- trustworthy review
-- durable recovery
-- elegant operator control
-
-If a proposed implementation makes the system feel more distributed than necessary, more magical than auditable, or more complicated than explainable, that implementation is wrong.
+1. Build the simplest system that satisfies the behavioral requirements.
+2. Favor explicit state, explicit evidence, and deterministic transitions.
+3. If a design choice makes the system feel more distributed than necessary, more magical than auditable, or more complicated than explainable, that design choice is wrong.
+4. If a decision belongs in the reusable orchestration core, put it in Gollem.
+5. If a decision belongs to product UX or presentation, keep it in Golem.
 
 The correct v1 mission system should feel like a natural extension of Golem’s existing disciplined coding workflow, not like a separate platform stapled onto it.
