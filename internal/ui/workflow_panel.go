@@ -48,6 +48,14 @@ func (m *Model) cleanupSession() {
 	if session != nil {
 		session.Cleanup()
 	}
+	if m.runtime.MCPManager != nil {
+		m.runtime.MCPManager.Close()
+		m.runtime.MCPManager = nil
+	}
+	if closer, ok := m.runtime.MemoryStore.(interface{ Close() error }); ok {
+		closer.Close()
+		m.runtime.MemoryStore = nil
+	}
 }
 
 func (m *Model) pendingCount() int {

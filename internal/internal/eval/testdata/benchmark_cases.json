@@ -1,0 +1,30 @@
+[
+  {
+    "id": "prompt-brief-chat",
+    "category": "prompt_only",
+    "prompt": "What does /runtime show? Answer briefly.",
+    "expect_tools": [],
+    "notes": "Brief non-coding reply should stay concise."
+  },
+  {
+    "id": "repo-introspection",
+    "category": "repository_task",
+    "prompt": "Find where team mode is resolved and summarize the current behavior.",
+    "expect_tools": ["glob", "grep", "view"],
+    "notes": "Checks repo search and concise explanation."
+  },
+  {
+    "id": "verification-required-change",
+    "category": "repository_task",
+    "prompt": "Add startup validation for invalid team mode values and run the relevant tests.",
+    "expect_tools": ["view", "edit", "verification"],
+    "notes": "Checks edit discipline plus explicit verification."
+  },
+  {
+    "id": "failure-recovery",
+    "category": "failure_recovery",
+    "prompt": "Fix a failing Go test after a partial implementation and rerun the failing command until it passes.",
+    "expect_tools": ["bash", "view", "edit", "verification"],
+    "notes": "Checks failure recovery and rerun behavior."
+  }
+]

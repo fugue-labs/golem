@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,30 @@ import (
 	"github.com/fugue-labs/gollem/ext/codetool"
 	"github.com/fugue-labs/gollem/ext/deep"
 )
+
+// modelPricing returns known model pricing for cost estimation.
+// Rates are cost-per-token (e.g., $3/1M input = 0.000003).
+func modelPricing() map[string]core.ModelPricing {
+	return map[string]core.ModelPricing{
+		// Anthropic
+		"claude-sonnet-4-20250514": {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
+		"claude-sonnet-4":         {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
+		"claude-opus-4-20250514":  {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
+		"claude-opus-4":          {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
+		"claude-haiku-3.5":       {InputTokenCost: 0.0000008, OutputTokenCost: 0.000004, CachedInputCost: 0.00000008, CacheWriteCost: 0.000001},
+		// OpenAI
+		"gpt-4o":                {InputTokenCost: 0.0000025, OutputTokenCost: 0.00001},
+		"gpt-4o-mini":           {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
+		"o3":                    {InputTokenCost: 0.00001, OutputTokenCost: 0.00004},
+		"o4-mini":               {InputTokenCost: 0.0000011, OutputTokenCost: 0.0000044},
+		// xAI
+		"grok-3":                {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
+		"grok-4-0709":           {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
+		// Google
+		"gemini-2.5-pro":        {InputTokenCost: 0.00000125, OutputTokenCost: 0.00001},
+		"gemini-2.5-flash":      {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
+	}
+}
 
 // Agent event messages sent to the TUI via p.Send from the goroutine.
 type (
@@ -63,6 +88,12 @@ type (
 		messages  []core.ModelMessage
 		toolState map[string]any
 		err       error
+	}
+	compactDoneMsg struct {
+		beforeCount int
+		afterCount  int
+		messages    []core.ModelMessage
+		err         error
 	}
 	askUserRequest struct {
 		runID     int
@@ -123,6 +154,19 @@ type Model struct {
 	askCurrent   int
 	askRespCh    chan<- []codetool.AskUserAnswer
 	askDone      chan struct{}
+
+	// Cost tracking across the session.
+	costTracker  *core.CostTracker
+	sessionUsage core.RunUsage // accumulated across all runs
+
+	// Tool approval state.
+	approvalCh     chan toolApprovalRequest
+	approvalDone   chan struct{}
+	approvalMode   bool
+	approvalTool   string
+	approvalArgs   string
+	approvalRespCh chan<- bool
+	approvalAlways map[string]bool // tools the user has permanently allowed this session
 }
 
 // New creates the initial app model.
@@ -139,13 +183,17 @@ func New(cfg *config.Config) *Model {
 	allSkills, _ := skills.LoadAll(skills.DefaultDir())
 
 	return &Model{
-		cfg:       cfg,
-		runtime:   agent.InitialRuntimeState(cfg),
-		input:     ti,
-		spinner:   sp,
-		askUserCh: make(chan askUserRequest, 1),
-		askDone:   make(chan struct{}),
-		allSkills: allSkills,
+		cfg:            cfg,
+		runtime:        agent.InitialRuntimeState(cfg),
+		input:          ti,
+		spinner:        sp,
+		askUserCh:      make(chan askUserRequest, 1),
+		askDone:        make(chan struct{}),
+		approvalCh:     make(chan toolApprovalRequest, 1),
+		approvalDone:   make(chan struct{}),
+		approvalAlways: make(map[string]bool),
+		costTracker:    core.NewCostTracker(modelPricing()),
+		allSkills:      allSkills,
 	}
 }
 
@@ -160,6 +208,7 @@ func (m *Model) Init() tea.Cmd {
 		m.input.Focus(),
 		m.spinner.Tick,
 		m.waitForAskUser(),
+		m.waitForToolApproval(),
 	)
 }
 
@@ -194,6 +243,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.input.Focus(), m.waitForAskUser())
 
 	case askUserShutdownMsg:
+		return m, nil
+
+	case toolApprovalRequest:
+		if msg.runID != m.runID {
+			return m, m.waitForToolApproval()
+		}
+		// Auto-approve if user previously chose "always" for this tool.
+		if m.approvalAlways[msg.toolName] {
+			if msg.response != nil {
+				select {
+				case msg.response <- true:
+				default:
+				}
+			}
+			return m, m.waitForToolApproval()
+		}
+		m.beginApprovalMode(msg)
+		return m, m.waitForToolApproval()
+
+	case toolApprovalShutdownMsg:
+		return m, nil
+
+	case compactDoneMsg:
+		if msg.err != nil {
+			m.messages = append(m.messages, &chat.Message{
+				Kind:    chat.KindError,
+				Content: "compact failed: " + msg.err.Error(),
+			})
+		} else {
+			m.history = msg.messages
+			m.messages = append(m.messages, &chat.Message{
+				Kind:    chat.KindAssistant,
+				Content: fmt.Sprintf("Context compacted: %d messages → summary + %d recent", msg.beforeCount, msg.afterCount),
+			})
+		}
+		m.scroll = 0
 		return m, nil
 
 	// Agent streaming events.
@@ -269,6 +354,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancel = nil
 		m.agent = nil
 		m.usage = msg.usage
+		m.sessionUsage.IncrRun(msg.usage)
+		m.costTracker.Record(m.cfg.Model, msg.usage)
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			errMsg := &chat.Message{
 				Kind:    chat.KindError,
@@ -288,6 +375,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if currentVerify, ok := codetool.VerificationFromToolState(msg.toolState); ok {
 				m.verificationState = uiverification.FromToolState(currentVerify)
 			}
+			// Auto-save session after each successful run.
+			go func() {
+				_ = agent.SaveSession(m.cfg.WorkingDir, msg.messages, msg.toolState, m.sessionUsage, m.cfg.Model, string(m.cfg.Provider), m.lastPrompt)
+			}()
 		}
 		validation := config.ValidationResult{}
 		if m.cfg != nil {
@@ -315,6 +406,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.approvalMode {
+		return m.handleApprovalKey(msg)
+	}
 	if m.askMode {
 		return m.handleAskKey(msg)
 	}
@@ -327,6 +421,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.input.Focus()
 		}
 		m.shutdownAskLoop()
+		m.shutdownApprovalLoop()
 		m.cleanupSession()
 		return m, tea.Quit
 
@@ -401,6 +496,47 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			name := strings.TrimSpace(strings.TrimPrefix(text, "/skill "))
 			m.input.Reset()
 			m.messages = append(m.messages, m.activateSkill(name))
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/compact" {
+			m.input.Reset()
+			return m, m.compactContext()
+		}
+		if text == "/cost" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderCostSummaryMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/resume" {
+			m.input.Reset()
+			msg := m.resumeSession()
+			m.messages = append(m.messages, msg)
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if strings.HasPrefix(text, "/model") {
+			m.input.Reset()
+			m.messages = append(m.messages, m.handleModelCommand(text))
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/diff" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderDiffMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/undo" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.handleUndo())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/doctor" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderDoctorMessage())
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
@@ -541,12 +677,23 @@ func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cm
 	if msg.runtime.EffectiveTeamMode {
 		msg.runtime.AskUserFunc = makeAskUserFunc(msg.runID, m.askUserCh)
 	}
+	var extraOpts []core.AgentOption[string]
+	extraOpts = append(extraOpts,
+		core.WithHooks[string](m.agentHooks()),
+		core.WithAgentMiddleware[string](m.steeringMiddleware()),
+		core.WithCostTracker[string](m.costTracker),
+	)
+	if m.cfg.PermissionMode == "suggest" {
+		extraOpts = append(extraOpts,
+			core.WithToolApproval[string](makeToolApprovalFunc(msg.runID, m.approvalCh)),
+			core.WithGlobalToolApproval[string](),
+		)
+	}
 	a, err := agent.NewWithRuntime(
 		m.cfg,
 		&msg.runtime,
 		m.activeSkills,
-		core.WithHooks[string](m.agentHooks()),
-		core.WithAgentMiddleware[string](m.steeringMiddleware()),
+		extraOpts...,
 	)
 	if err != nil {
 		return m, func() tea.Msg {
@@ -778,15 +925,42 @@ func (m *Model) renderHeader() string {
 	dir := m.sty.Header.WorkingDir.Render(m.cfg.ShortDir())
 
 	header := fmt.Sprintf(" %s%s%s%s%s", model, sep, provider, sep, dir)
+
+	// Show git branch in header if available.
+	if m.runtime.Git != nil {
+		if branch := m.runtime.Git.BranchDisplay(); branch != "" {
+			gitLabel := m.sty.Header.WorkingDir.Render(branch)
+			header += sep + gitLabel
+		}
+	}
+
 	line := m.sty.Subtle.Render(strings.Repeat(styles.Separator, m.width))
 	return header + "\n" + line
 }
 
 func (m *Model) renderChat(height, width int) string {
 	if len(m.messages) == 0 {
-		greeting := m.sty.Muted.Render("  Ask anything, or try /help for commands.")
-		padding := strings.Repeat("\n", max(0, height-2))
-		return padding + greeting
+		var lines []string
+		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  %s/%s", m.cfg.Provider, m.cfg.Model)))
+		if m.runtime.Git != nil && m.runtime.Git.IsRepo {
+			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  git: %s", m.runtime.Git.BranchDisplay())))
+		}
+		if len(m.runtime.Instructions) > 0 {
+			names := make([]string, len(m.runtime.Instructions))
+			for i, f := range m.runtime.Instructions {
+				names[i] = filepath.Base(f.Path)
+			}
+			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  instructions: %s", strings.Join(names, ", "))))
+		}
+		if len(m.runtime.MCPServers) > 0 {
+			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  mcp: %s", strings.Join(m.runtime.MCPServers, ", "))))
+		}
+		lines = append(lines, "")
+		lines = append(lines, m.sty.Muted.Render("  Ask anything, or try /help for commands."))
+		content := strings.Join(lines, "\n")
+		contentLines := strings.Count(content, "\n") + 1
+		padding := strings.Repeat("\n", max(0, height-contentLines-1))
+		return padding + content
 	}
 
 	// Phase 1: Compute line counts per message using cached renders.
@@ -872,6 +1046,9 @@ func (m *Model) renderChat(height, width int) string {
 }
 
 func (m *Model) renderInput() string {
+	if m.approvalMode {
+		return m.renderApproval()
+	}
 	if m.askMode {
 		return m.renderAskInput()
 	}
@@ -892,6 +1069,58 @@ func (m *Model) renderInputBusyOrIdle() string {
 	}
 	prompt := m.sty.Input.Prompt.Render(" > ")
 	return prompt + m.input.View()
+}
+
+func (m *Model) resumeSession() *chat.Message {
+	if m.busy {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot resume while agent is running."}
+	}
+	if len(m.history) > 0 {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Session already has history. Use `/clear` first to resume a previous session."}
+	}
+	session, err := agent.LoadLatestSession(m.cfg.WorkingDir)
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to load session: %v", err)}
+	}
+	if session == nil {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No previous session found for this project."}
+	}
+	msgs, err := session.RestoreMessages()
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to restore messages: %v", err)}
+	}
+	m.history = msgs
+	m.toolState = session.ToolState
+	m.sessionUsage = session.Usage
+	return &chat.Message{
+		Kind:    chat.KindAssistant,
+		Content: fmt.Sprintf("Resumed session from %s (%d messages, %d requests).", session.Timestamp.Format("Jan 2 15:04"), len(msgs), session.Usage.Requests),
+	}
+}
+
+func (m *Model) compactContext() tea.Cmd {
+	history := m.history
+	cfg := m.cfg
+	return func() tea.Msg {
+		if len(history) < 3 {
+			return compactDoneMsg{err: fmt.Errorf("not enough history to compact (%d messages)", len(history))}
+		}
+		model, err := agent.CreateModel(cfg)
+		if err != nil {
+			return compactDoneMsg{err: fmt.Errorf("creating model for compaction: %w", err)}
+		}
+		beforeCount := len(history)
+		compressed, err := core.CompactMessages(context.Background(), history, model, 4)
+		if err != nil {
+			return compactDoneMsg{err: err}
+		}
+		afterCount := len(compressed)
+		return compactDoneMsg{
+			beforeCount: beforeCount,
+			afterCount:  afterCount,
+			messages:    compressed,
+		}
+	}
 }
 
 func (m *Model) renderStatusBar() string {
@@ -951,6 +1180,16 @@ func (m *Model) renderStatusBar() string {
 		scrolled := m.sty.StatusBar.Key.Render("scroll ") +
 			m.sty.StatusBar.Value.Render(fmt.Sprintf("+%d", m.scroll))
 		leftParts = append(leftParts, divider, scrolled)
+	}
+
+	if cost := m.costTracker.TotalCost(); cost > 0 {
+		costStr := fmt.Sprintf("$%.2f", cost)
+		if cost < 0.01 {
+			costStr = fmt.Sprintf("$%.4f", cost)
+		}
+		costPart := m.sty.StatusBar.Key.Render("cost ") +
+			m.sty.StatusBar.Value.Render(costStr)
+		leftParts = append(leftParts, divider, costPart)
 	}
 
 	provider := m.sty.StatusBar.Provider.Render(string(m.cfg.Provider) + "/" + m.cfg.Model)

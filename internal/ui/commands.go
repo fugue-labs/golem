@@ -1,11 +1,16 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
+	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/fugue-labs/golem/internal/agent"
+	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/gollem/core"
 )
 
 func (m *Model) renderHelpMessage() *chat.Message {
@@ -17,6 +22,13 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/invariants` — summarize the tracked invariant checklist\n")
 	b.WriteString("- `/runtime` — show the effective runtime profile\n")
 	b.WriteString("- `/verify` — show the latest verification summary\n")
+	b.WriteString("- `/compact` — compress conversation context\n")
+	b.WriteString("- `/cost` — show session cost breakdown\n")
+	b.WriteString("- `/resume` — restore the last saved session\n")
+	b.WriteString("- `/model [name]` — show or switch the active model\n")
+	b.WriteString("- `/diff` — show git diff of uncommitted changes\n")
+	b.WriteString("- `/undo` — revert the last git-tracked file change\n")
+	b.WriteString("- `/doctor` — diagnose setup issues\n")
 	b.WriteString("- `/skills` — list detected skills\n")
 	b.WriteString("- `/skill <name>` — toggle a skill on or off\n")
 	b.WriteString("- `/quit` or `/exit` — quit the app\n\n")
@@ -96,6 +108,268 @@ func (m *Model) renderInvariantSummaryMessage() *chat.Message {
 func (m *Model) renderRuntimeSummaryMessage() *chat.Message {
 	report := agent.BuildRuntimeReport(m.cfg, m.runtime, m.cfg.Validate(), nil)
 	return &chat.Message{Kind: chat.KindAssistant, Content: agent.RenderRuntimeSummary(report)}
+}
+
+func (m *Model) renderCostSummaryMessage() *chat.Message {
+	total := m.costTracker.TotalCost()
+	if total == 0 && m.sessionUsage.Requests == 0 {
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: "No usage recorded yet.",
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("**Session cost summary**\n\n")
+
+	// Token usage.
+	fmt.Fprintf(&b, "- Requests: %d\n", m.sessionUsage.Requests)
+	fmt.Fprintf(&b, "- Input tokens: %d\n", m.sessionUsage.InputTokens)
+	fmt.Fprintf(&b, "- Output tokens: %d\n", m.sessionUsage.OutputTokens)
+	if m.sessionUsage.CacheReadTokens > 0 {
+		fmt.Fprintf(&b, "- Cache read tokens: %d\n", m.sessionUsage.CacheReadTokens)
+	}
+	if m.sessionUsage.CacheWriteTokens > 0 {
+		fmt.Fprintf(&b, "- Cache write tokens: %d\n", m.sessionUsage.CacheWriteTokens)
+	}
+	fmt.Fprintf(&b, "- Tool calls: %d\n\n", m.sessionUsage.ToolCalls)
+
+	// Cost breakdown.
+	breakdown := m.costTracker.CostBreakdown()
+	if len(breakdown) > 0 {
+		b.WriteString("**Cost breakdown**\n\n")
+		models := make([]string, 0, len(breakdown))
+		for model := range breakdown {
+			models = append(models, model)
+		}
+		sort.Strings(models)
+		for _, model := range models {
+			fmt.Fprintf(&b, "- `%s`: $%.4f\n", model, breakdown[model])
+		}
+		b.WriteString("\n")
+	}
+
+	fmt.Fprintf(&b, "**Total: $%.4f**\n", total)
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) handleModelCommand(text string) *chat.Message {
+	arg := strings.TrimSpace(strings.TrimPrefix(text, "/model"))
+	if arg == "" {
+		var b strings.Builder
+		fmt.Fprintf(&b, "Current model: `%s` (provider: `%s`)\n\n", m.cfg.Model, m.cfg.Provider)
+		if models := knownModels(m.cfg.Provider); len(models) > 0 {
+			b.WriteString("Available models:\n")
+			for _, name := range models {
+				marker := " "
+				if name == m.cfg.Model {
+					marker = ">"
+				}
+				fmt.Fprintf(&b, "%s `%s`\n", marker, name)
+			}
+		}
+		return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+	}
+	if m.busy {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot switch models while agent is running."}
+	}
+	old := m.cfg.Model
+	m.cfg.Model = arg
+	m.costTracker = core.NewCostTracker(modelPricing())
+	return &chat.Message{
+		Kind:    chat.KindAssistant,
+		Content: fmt.Sprintf("Switched model from `%s` to `%s`. Next run will use the new model.", old, arg),
+	}
+}
+
+func (m *Model) renderDiffMessage() *chat.Message {
+	dir := m.cfg.WorkingDir
+	if dir == "" {
+		dir = "."
+	}
+	cmd := exec.Command("git", "diff", "--stat", "--no-color")
+	cmd.Dir = dir
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git diff failed: %v\n%s", err, out.String())}
+	}
+	diff := strings.TrimSpace(out.String())
+	if diff == "" {
+		cmd2 := exec.Command("git", "diff", "--cached", "--stat", "--no-color")
+		cmd2.Dir = dir
+		var out2 bytes.Buffer
+		cmd2.Stdout = &out2
+		cmd2.Stderr = &out2
+		if err := cmd2.Run(); err == nil {
+			diff = strings.TrimSpace(out2.String())
+		}
+	}
+	if diff == "" {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No uncommitted changes."}
+	}
+
+	cmd3 := exec.Command("git", "diff", "--no-color")
+	cmd3.Dir = dir
+	var out3 bytes.Buffer
+	cmd3.Stdout = &out3
+	cmd3.Stderr = &out3
+	_ = cmd3.Run()
+	fullDiff := out3.String()
+	if len(fullDiff) > 3000 {
+		fullDiff = fullDiff[:3000] + "\n... (truncated)"
+	}
+
+	var b strings.Builder
+	b.WriteString("**Git diff**\n\n")
+	b.WriteString("```\n")
+	b.WriteString(diff)
+	b.WriteString("\n```\n")
+	if fullDiff != "" {
+		b.WriteString("\n```diff\n")
+		b.WriteString(fullDiff)
+		b.WriteString("\n```\n")
+	}
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) handleUndo() *chat.Message {
+	dir := m.cfg.WorkingDir
+	if dir == "" {
+		dir = "."
+	}
+	if m.busy {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot undo while agent is running."}
+	}
+
+	cmd := exec.Command("git", "diff", "--name-only")
+	cmd.Dir = dir
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git failed: %v", err)}
+	}
+	files := strings.TrimSpace(out.String())
+	if files == "" {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No uncommitted changes to undo."}
+	}
+
+	cmd2 := exec.Command("git", "checkout", "--", ".")
+	cmd2.Dir = dir
+	var out2 bytes.Buffer
+	cmd2.Stdout = &out2
+	cmd2.Stderr = &out2
+	if err := cmd2.Run(); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git checkout failed: %v\n%s", err, out2.String())}
+	}
+
+	count := len(strings.Split(files, "\n"))
+	return &chat.Message{
+		Kind:    chat.KindAssistant,
+		Content: fmt.Sprintf("Reverted %d file(s) to last committed state:\n```\n%s\n```", count, files),
+	}
+}
+
+func knownModels(provider config.Provider) []string {
+	switch provider {
+	case config.ProviderAnthropic:
+		return []string{"claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-haiku-3.5"}
+	case config.ProviderOpenAI:
+		return []string{"gpt-5.4", "gpt-4o", "gpt-4o-mini", "o3", "o4-mini"}
+	case config.ProviderOpenAICompatible:
+		return []string{"grok-3", "grok-4-0709", "grok-code-fast-1"}
+	case config.ProviderVertexAI:
+		return []string{"gemini-2.5-pro", "gemini-2.5-flash"}
+	case config.ProviderVertexAnthropic:
+		return []string{"claude-sonnet-4-5", "claude-opus-4"}
+	default:
+		return nil
+	}
+}
+
+func (m *Model) renderDoctorMessage() *chat.Message {
+	var b strings.Builder
+	b.WriteString("**Golem Doctor**\n\n")
+
+	// Provider & auth check.
+	validation := m.cfg.Validate()
+	if validation.HasErrors() {
+		for _, e := range validation.Errors {
+			fmt.Fprintf(&b, "- **ERROR**: %s\n", e)
+		}
+	} else {
+		fmt.Fprintf(&b, "- Provider: `%s` — OK\n", m.cfg.Provider)
+		fmt.Fprintf(&b, "- Model: `%s`\n", m.cfg.Model)
+		authStatus := "configured"
+		if m.cfg.ChatGPTCreds != nil {
+			authStatus = "ChatGPT subscription"
+		} else if m.cfg.APIKey != "" {
+			authStatus = "API key"
+		}
+		fmt.Fprintf(&b, "- Auth: %s\n", authStatus)
+	}
+	for _, w := range validation.Warnings {
+		fmt.Fprintf(&b, "- **WARN**: %s\n", w)
+	}
+
+	// Git check.
+	if m.runtime.Git != nil && m.runtime.Git.IsRepo {
+		fmt.Fprintf(&b, "- Git: `%s` — OK\n", m.runtime.Git.BranchDisplay())
+	} else {
+		b.WriteString("- Git: not a git repository\n")
+	}
+
+	// Working dir.
+	fmt.Fprintf(&b, "- Working dir: `%s`\n", m.cfg.WorkingDir)
+
+	// Instructions check.
+	if len(m.runtime.Instructions) > 0 {
+		fmt.Fprintf(&b, "- Instructions: %d file(s) loaded\n", len(m.runtime.Instructions))
+	} else {
+		b.WriteString("- Instructions: none (create GOLEM.md for project-specific guidance)\n")
+	}
+
+	// MCP check.
+	if len(m.runtime.MCPServers) > 0 {
+		fmt.Fprintf(&b, "- MCP servers: %s\n", strings.Join(m.runtime.MCPServers, ", "))
+	} else {
+		b.WriteString("- MCP: no servers configured\n")
+	}
+
+	// Permission mode.
+	fmt.Fprintf(&b, "- Permission mode: `%s`\n", m.cfg.PermissionMode)
+
+	// Tool checks.
+	toolChecks := []struct {
+		name string
+		cmd  string
+	}{
+		{"git", "git --version"},
+		{"node", "node --version"},
+		{"python3", "python3 --version"},
+	}
+	b.WriteString("\n**Tool checks**\n\n")
+	for _, tc := range toolChecks {
+		parts := strings.Fields(tc.cmd)
+		cmd := exec.Command(parts[0], parts[1:]...)
+		cmd.Dir = m.cfg.WorkingDir
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(&b, "- `%s`: not found\n", tc.name)
+		} else {
+			ver := strings.TrimSpace(out.String())
+			if len(ver) > 50 {
+				ver = ver[:50]
+			}
+			fmt.Fprintf(&b, "- `%s`: %s\n", tc.name, ver)
+		}
+	}
+
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
 
 func (m *Model) renderVerificationSummaryMessage() *chat.Message {

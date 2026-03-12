@@ -47,6 +47,12 @@ type RuntimeReport struct {
 	AutoContextKeepLastN int                     `json:"auto_context_keep_last_n,omitempty"`
 	TopLevelPersonality  bool                    `json:"top_level_personality"`
 	GitRepo              string                  `json:"git_repo"`
+	PermissionMode       string                  `json:"permission_mode,omitempty"`
+	GitBranch            string                  `json:"git_branch,omitempty"`
+	InstructionFiles     []string                `json:"instruction_files,omitempty"`
+	MCPServers           []string                `json:"mcp_servers,omitempty"`
+	MCPStatus            string                  `json:"mcp_status,omitempty"`
+	MemoryStatus         string                  `json:"memory_status,omitempty"`
 	RuntimeError         string                  `json:"runtime_error,omitempty"`
 	ToolSurfaces         ToolSurfaceReport       `json:"tool_surfaces"`
 	Validation           config.ValidationResult `json:"validation,omitempty"`
@@ -94,6 +100,20 @@ func BuildRuntimeReport(cfg *config.Config, runtime RuntimeState, validation con
 	report.AutoContextKeepLastN = cfg.AutoContextKeepLastN
 	report.TopLevelPersonality = cfg.TopLevelPersonality
 	report.GitRepo = onOff(isGitRepo(cfg.WorkingDir))
+	report.PermissionMode = cfg.PermissionMode
+	if runtime.Git != nil {
+		report.GitBranch = runtime.Git.BranchDisplay()
+	}
+	for _, f := range runtime.Instructions {
+		report.InstructionFiles = append(report.InstructionFiles, shortFilePath(f.Path))
+	}
+	report.MCPServers = runtime.MCPServers
+	report.MCPStatus = runtime.MCPStatus
+	if runtime.MemoryStore != nil {
+		report.MemoryStatus = "on"
+	} else {
+		report.MemoryStatus = "off"
+	}
 	report.ToolSurfaces.Delegate = onOff(!cfg.DisableDelegate && runtime.EffectiveTeamMode)
 	return report
 }
@@ -183,6 +203,25 @@ func runtimeProfileLines(report RuntimeReport) []string {
 	}
 	lines = append(lines, fmt.Sprintf("Top-level personality: `%t`", report.TopLevelPersonality))
 	lines = append(lines, fmt.Sprintf("Git repo: `%s`", report.GitRepo))
+	if report.PermissionMode != "" {
+		lines = append(lines, fmt.Sprintf("Permission mode: `%s`", report.PermissionMode))
+	}
+	if report.GitBranch != "" {
+		lines = append(lines, fmt.Sprintf("Git branch: `%s`", report.GitBranch))
+	}
+	if len(report.InstructionFiles) > 0 {
+		lines = append(lines, fmt.Sprintf("Project instructions: `%s`", strings.Join(report.InstructionFiles, "`, `")))
+	}
+	if report.MCPStatus != "" && report.MCPStatus != "off" {
+		if len(report.MCPServers) > 0 {
+			lines = append(lines, fmt.Sprintf("MCP servers: `%s`", strings.Join(report.MCPServers, "`, `")))
+		} else {
+			lines = append(lines, fmt.Sprintf("MCP: `%s`", report.MCPStatus))
+		}
+	}
+	if report.MemoryStatus == "on" {
+		lines = append(lines, fmt.Sprintf("Memory: `%s`", report.MemoryStatus))
+	}
 	return lines
 }
 

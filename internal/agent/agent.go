@@ -19,6 +19,7 @@ import (
 	openaiauth "github.com/fugue-labs/gollem/auth/openai"
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
+	"github.com/fugue-labs/gollem/ext/memory"
 	"github.com/fugue-labs/gollem/modelutil"
 	"github.com/fugue-labs/gollem/provider/anthropic"
 	"github.com/fugue-labs/gollem/provider/openai"
@@ -91,9 +92,8 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 	if cfg.DisableGreedyThinkingPressure {
 		toolOpts = append(toolOpts, codetool.WithDisableGreedyThinkingPressure())
 	}
-	if cfg.EnableFetchURL {
-		toolOpts = append(toolOpts, codetool.WithFetchURL(defaultFetchURL()))
-	}
+	// FetchURL is always enabled for web content retrieval.
+	toolOpts = append(toolOpts, codetool.WithFetchURL(defaultFetchURL()))
 	if runtime.EffectiveTeamMode && runtime.AskUserFunc != nil {
 		toolOpts = append(toolOpts, codetool.WithAskUser(runtime.AskUserFunc))
 	}
@@ -114,6 +114,25 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 		core.WithToolOutputTruncation[string](core.DefaultTruncationConfig()),
 		core.WithHistoryProcessor[string](core.NormalizeHistory()),
 	)
+
+	// Register MCP tools if available.
+	if len(runtime.MCPTools) > 0 {
+		opts = append(opts, core.WithTools[string](runtime.MCPTools...))
+	}
+
+	// Wire persistent memory: tool for agent access + knowledge base for context injection.
+	if runtime.MemoryStore != nil {
+		namespace := []string{"golem", projectHash(cfg.WorkingDir)}
+		memTool := memory.MemoryTool(runtime.MemoryStore, namespace...)
+		memKB := memory.StoreKnowledgeBase(runtime.MemoryStore, namespace...)
+		opts = append(opts, core.WithTools[string](memTool))
+		opts = append(opts, core.WithKnowledgeBase[string](memKB))
+	}
+
+	// Register user-defined shell hooks.
+	if hooksCfg := LoadHooksConfig(); len(hooksCfg.PreToolUse) > 0 || len(hooksCfg.PostToolUse) > 0 {
+		opts = append(opts, core.WithHooks[string](BuildHook(hooksCfg, cfg.WorkingDir)))
+	}
 
 	if cfg.TopLevelPersonality {
 		personalityGen := modelutil.CachedPersonalityGenerator(modelutil.GeneratePersonality(model))
@@ -166,6 +185,19 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills []skills.Skill) string {
 	var b strings.Builder
 	b.WriteString(RenderRuntimePrompt(BuildRuntimeReport(cfg, runtime, cfg.Validate(), nil)))
+
+	// Project instructions from GOLEM.md / CLAUDE.md files.
+	if instructions := FormatInstructions(runtime.Instructions); instructions != "" {
+		b.WriteString("\n\n")
+		b.WriteString(instructions)
+	}
+
+	// Git context.
+	if gitCtx := FormatGitContext(runtime.Git); gitCtx != "" {
+		b.WriteString("\n\n")
+		b.WriteString(gitCtx)
+	}
+
 	if len(activeSkills) > 0 {
 		b.WriteString("\n## Active skills\n")
 		for _, s := range activeSkills {
@@ -283,6 +315,13 @@ func chatgptTokenRefresher(creds *openaiauth.Credentials) openai.TokenRefresher 
 		}
 		return creds.AccessToken, nil
 	}
+}
+
+// CreateModel creates a gollem Model from the current configuration.
+// Exported for use by TUI commands (e.g., /compact) that need a model
+// outside of agent construction.
+func CreateModel(cfg *config.Config) (core.Model, error) {
+	return createModelWithName(cfg, cfg.Model)
 }
 
 func createModel(cfg *config.Config) (core.Model, error) {
