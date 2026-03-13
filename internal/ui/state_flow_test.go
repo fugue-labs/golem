@@ -2,14 +2,20 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
+	"github.com/fugue-labs/golem/internal/ui/chat"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
+	"github.com/fugue-labs/golem/internal/ui/spec"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
 	"github.com/fugue-labs/gollem/core"
@@ -385,6 +391,285 @@ func TestNonMutatingToolDoesNotMarkStale(t *testing.T) {
 	if model.verificationState.Entries[0].Freshness != "fresh" {
 		t.Fatal("expected freshness to remain fresh after non-mutating tool")
 	}
+}
+
+// --- restoreSessionState integration tests ---
+
+func TestRestoreSessionStateRestoresAllFields(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+
+	transcript := []*chat.Message{
+		{Kind: chat.KindUser, Content: "hello"},
+		{Kind: chat.KindAssistant, Content: "world"},
+	}
+	transcriptJSON, _ := json.Marshal(transcript)
+
+	planJSON, _ := json.Marshal(plan.State{Tasks: []plan.Task{
+		{ID: "T1", Description: "task one", Status: "completed"},
+	}})
+	invJSON, _ := json.Marshal(uiinvariants.State{
+		Extracted: true,
+		Items:     []uiinvariants.Item{{ID: "I1", Description: "inv1", Kind: "hard", Status: "pass"}},
+	})
+	verJSON, _ := json.Marshal(uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test", Status: "pass", Freshness: "fresh"},
+	}})
+	specJSON, _ := json.Marshal(spec.State{
+		FilePath: "spec.md",
+		Phase:    spec.PhaseApproved,
+		Gates:    spec.DefaultGates(),
+	})
+
+	msgs := []core.ModelMessage{
+		core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "test"}}},
+	}
+
+	session := &agent.SessionData{
+		Usage:             core.RunUsage{Requests: 10, ToolCalls: 5},
+		Prompt:            "test prompt",
+		Transcript:        json.RawMessage(transcriptJSON),
+		PlanState:         json.RawMessage(planJSON),
+		InvariantState:    json.RawMessage(invJSON),
+		VerificationState: json.RawMessage(verJSON),
+		SpecState:         json.RawMessage(specJSON),
+	}
+
+	err := m.restoreSessionState(session, msgs)
+	if err != nil {
+		t.Fatalf("restoreSessionState: %v", err)
+	}
+
+	// Verify history restored.
+	if len(m.history) != 1 {
+		t.Fatalf("history=%d, want 1", len(m.history))
+	}
+
+	// Verify transcript (messages) restored.
+	if len(m.messages) != 2 {
+		t.Fatalf("messages=%d, want 2", len(m.messages))
+	}
+	if m.messages[0].Content != "hello" {
+		t.Fatalf("messages[0].content=%q", m.messages[0].Content)
+	}
+
+	// Verify plan state restored.
+	if !m.planState.HasTasks() {
+		t.Fatal("plan state has no tasks")
+	}
+	if m.planState.Tasks[0].ID != "T1" {
+		t.Fatalf("plan task id=%q", m.planState.Tasks[0].ID)
+	}
+
+	// Verify invariant state restored.
+	if !m.invariantState.HasItems() {
+		t.Fatal("invariant state has no items")
+	}
+	if m.invariantState.Items[0].ID != "I1" {
+		t.Fatalf("invariant id=%q", m.invariantState.Items[0].ID)
+	}
+
+	// Verify verification state restored.
+	if !m.verificationState.HasEntries() {
+		t.Fatal("verification state has no entries")
+	}
+	if m.verificationState.Entries[0].ID != "V1" {
+		t.Fatalf("verification id=%q", m.verificationState.Entries[0].ID)
+	}
+
+	// Verify spec state restored. advanceSpecPhase runs after restore, so
+	// with plan tasks present the phase advances from approved → decomposed.
+	if m.specState.Phase != spec.PhaseDecomposed {
+		t.Fatalf("spec phase=%q, want decomposed (advanced by advanceSpecPhase)", m.specState.Phase)
+	}
+
+	// Verify usage restored.
+	if m.sessionUsage.Requests != 10 {
+		t.Fatalf("usage.requests=%d", m.sessionUsage.Requests)
+	}
+
+	// Verify prompt restored.
+	if m.lastPrompt != "test prompt" {
+		t.Fatalf("lastPrompt=%q", m.lastPrompt)
+	}
+
+	// Verify turnCount reset.
+	if m.turnCount != 0 {
+		t.Fatalf("turnCount=%d, want 0", m.turnCount)
+	}
+}
+
+func TestRestoreSessionStateAdvancesSpecPhase(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+
+	// Spec in draft phase with invariants present → should advance to approved.
+	invJSON, _ := json.Marshal(uiinvariants.State{
+		Extracted: true,
+		Items:     []uiinvariants.Item{{ID: "I1", Description: "inv1", Kind: "hard", Status: "pass"}},
+	})
+	specJSON, _ := json.Marshal(spec.State{
+		FilePath: "spec.md",
+		Phase:    spec.PhaseDraft,
+		Gates:    spec.DefaultGates(),
+	})
+
+	session := &agent.SessionData{
+		InvariantState: json.RawMessage(invJSON),
+		SpecState:      json.RawMessage(specJSON),
+	}
+
+	err := m.restoreSessionState(session, nil)
+	if err != nil {
+		t.Fatalf("restoreSessionState: %v", err)
+	}
+
+	// advanceSpecPhase should have run and advanced from draft → approved.
+	if m.specState.Phase != spec.PhaseApproved {
+		t.Fatalf("spec phase=%q, want approved (should have been advanced)", m.specState.Phase)
+	}
+}
+
+func TestRestoreSessionStateEmptyOptionalFields(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+
+	// Session with no optional fields — simulates backward compatibility.
+	session := &agent.SessionData{
+		Usage: core.RunUsage{Requests: 1},
+	}
+
+	err := m.restoreSessionState(session, nil)
+	if err != nil {
+		t.Fatalf("restoreSessionState: %v", err)
+	}
+
+	if len(m.messages) != 0 {
+		t.Fatalf("messages=%d, want 0", len(m.messages))
+	}
+	if m.planState.HasTasks() {
+		t.Fatal("expected empty plan state")
+	}
+	if m.invariantState.HasItems() {
+		t.Fatal("expected empty invariant state")
+	}
+	if m.verificationState.HasEntries() {
+		t.Fatal("expected empty verification state")
+	}
+	if m.specState.IsActive() {
+		t.Fatal("expected inactive spec state")
+	}
+	if m.turnCount != 0 {
+		t.Fatalf("turnCount=%d", m.turnCount)
+	}
+}
+
+// --- resumeSession tests ---
+
+func TestResumeSessionBusyGuard(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.busy = true
+
+	msg := m.resumeSession()
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if !strings.Contains(msg.Content, "Cannot resume") {
+		t.Fatalf("expected busy guard message, got %q", msg.Content)
+	}
+}
+
+func TestResumeSessionHistoryGuard(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.history = []core.ModelMessage{
+		core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "existing"}}},
+	}
+
+	msg := m.resumeSession()
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if !strings.Contains(msg.Content, "already has history") {
+		t.Fatalf("expected history guard message, got %q", msg.Content)
+	}
+}
+
+func TestResumeSessionNoSession(t *testing.T) {
+	dir := t.TempDir()
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: dir})
+
+	msg := m.resumeSession()
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if !strings.Contains(msg.Content, "No previous session") {
+		t.Fatalf("expected no session message, got %q", msg.Content)
+	}
+}
+
+func TestResumeSessionEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: dir})
+
+	// Save a session to disk.
+	msgs := []core.ModelMessage{
+		core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "hello"}}},
+		core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "world"}}},
+	}
+	transcript := []*chat.Message{
+		{Kind: chat.KindUser, Content: "hello"},
+		{Kind: chat.KindAssistant, Content: "response"},
+	}
+
+	err := agent.SaveSession(dir, msgs, transcript, nil, core.RunUsage{Requests: 3}, "test-model", "test-provider", "initial prompt", nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	// Now we need to override SessionDir to point to our temp dir.
+	// Since resumeSession uses cfg.WorkingDir → SessionDir, we need to make
+	// sure the session is saved in the right place.
+	sessionDir, err := agent.SessionDir(dir)
+	if err != nil {
+		t.Fatalf("SessionDir: %v", err)
+	}
+
+	// Verify the session file exists at the expected path.
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", sessionDir, err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("no session files in %s", sessionDir)
+	}
+
+	msg := m.resumeSession()
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if msg.Kind == chat.KindError {
+		t.Fatalf("got error: %s", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "Resumed session") {
+		t.Fatalf("expected resume message, got %q", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "2 messages") {
+		t.Fatalf("expected message count, got %q", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "3 requests") {
+		t.Fatalf("expected request count, got %q", msg.Content)
+	}
+
+	// Verify state was actually restored.
+	if len(m.history) != 2 {
+		t.Fatalf("history=%d, want 2", len(m.history))
+	}
+	if len(m.messages) != 2 {
+		t.Fatalf("messages=%d, want 2", len(m.messages))
+	}
+	if m.lastPrompt != "initial prompt" {
+		t.Fatalf("lastPrompt=%q", m.lastPrompt)
+	}
+
+	// Clean up the session dir from user's home.
+	os.RemoveAll(filepath.Dir(sessionDir))
 }
 
 func TestVerifyCommandRendersVerificationSummary(t *testing.T) {
