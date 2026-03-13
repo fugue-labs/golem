@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/agent"
+	"github.com/fugue-labs/golem/internal/automations"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/login"
 	"github.com/fugue-labs/golem/internal/ui"
@@ -57,6 +58,8 @@ func run(args []string, out, errOut io.Writer) int {
 			return runDashboard(missionID, errOut)
 		case "status", "runtime":
 			return runRuntimeCommand(args[0], args[1:], out, errOut)
+		case "automations":
+			return runAutomationsCommand(args[1:], out, errOut)
 		}
 	}
 
@@ -175,4 +178,59 @@ func parseJSONFlag(args []string) (bool, bool) {
 		return true, true
 	}
 	return false, false
+}
+
+func runAutomationsCommand(args []string, out, errOut io.Writer) int {
+	sub := "list"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+
+	switch sub {
+	case "list":
+		cfg, err := automations.LoadConfig()
+		if err != nil {
+			fmt.Fprintf(errOut, "error loading automations config: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(out, automations.ListAutomations(cfg))
+		return 0
+
+	case "start":
+		cfg, err := automations.LoadConfig()
+		if err != nil {
+			fmt.Fprintf(errOut, "error loading automations config: %v\n", err)
+			return 1
+		}
+		if cfg == nil {
+			fmt.Fprintln(errOut, "no automations configured")
+			fmt.Fprintln(errOut, "\nCreate ~/.golem/automations.json to get started.")
+			fmt.Fprintln(errOut, "Run `golem automations init` for an example configuration.")
+			return 1
+		}
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+
+		daemon := automations.NewDaemon(cfg)
+		if err := daemon.Start(ctx); err != nil {
+			fmt.Fprintf(errOut, "automations daemon error: %v\n", err)
+			return 1
+		}
+		return 0
+
+	case "status":
+		fmt.Fprintln(out, automations.StatusSummary())
+		return 0
+
+	case "init":
+		fmt.Fprintln(out, "Example ~/.golem/automations.json:\n")
+		fmt.Fprintln(out, automations.ExampleConfig())
+		return 0
+
+	default:
+		fmt.Fprintf(errOut, "unknown automations subcommand: %s\n", sub)
+		fmt.Fprintln(errOut, "usage: golem automations [list|start|status|init]")
+		return 1
+	}
 }
