@@ -98,6 +98,87 @@ func TestIgnoredPaths(t *testing.T) {
 	}
 }
 
+func TestChmodOnlyFiltered(t *testing.T) {
+	dir := t.TempDir()
+	w, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Create a file (generates a real event).
+	path := filepath.Join(dir, "stable.txt")
+	if err := os.WriteFile(path, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drain the create event.
+	select {
+	case <-w.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for initial event")
+	}
+
+	// Chmod without content change should NOT trigger an event.
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case events := <-w.Events():
+		for _, ev := range events {
+			if ev.Path == "stable.txt" {
+				t.Errorf("chmod-only change should be filtered, got: %+v", ev)
+			}
+		}
+	case <-time.After(time.Second):
+		// No event — correct.
+	}
+}
+
+func TestWriteSameContentFiltered(t *testing.T) {
+	dir := t.TempDir()
+	w, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Create a file.
+	path := filepath.Join(dir, "same.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drain the create event.
+	select {
+	case <-w.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for initial event")
+	}
+
+	// Stat the file so we know its mtime.
+	info, _ := os.Stat(path)
+	origMtime := info.ModTime()
+
+	// Write same content back and restore mtime to simulate a no-change write.
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(path, origMtime, origMtime)
+
+	select {
+	case events := <-w.Events():
+		for _, ev := range events {
+			if ev.Path == "same.txt" {
+				t.Errorf("write with unchanged mtime+size should be filtered, got: %+v", ev)
+			}
+		}
+	case <-time.After(time.Second):
+		// No event — correct.
+	}
+}
+
 func TestSubdirectoryWatching(t *testing.T) {
 	dir := t.TempDir()
 	w, err := New(dir)

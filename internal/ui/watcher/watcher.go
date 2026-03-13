@@ -16,6 +16,12 @@ type Event struct {
 	Op   string // "create", "write", "remove", "rename"
 }
 
+// fileFingerprint captures mtime+size for detecting real content changes.
+type fileFingerprint struct {
+	size  int64
+	mtime time.Time
+}
+
 // Watcher monitors a directory tree for external file changes, debouncing
 // rapid events and filtering out agent-originated modifications.
 type Watcher struct {
@@ -26,6 +32,10 @@ type Watcher struct {
 	// Key: absolute path, Value: timestamp of last agent modification.
 	agentMu    sync.Mutex
 	agentFiles map[string]time.Time
+
+	// fingerprints tracks last-known file state to filter false positives.
+	// Only accessed from the loop goroutine, so no mutex needed.
+	fingerprints map[string]fileFingerprint
 
 	// eventCh delivers batches of external file changes.
 	eventCh chan []Event
@@ -41,11 +51,12 @@ func New(root string) (*Watcher, error) {
 		return nil, err
 	}
 	w := &Watcher{
-		fsw:        fsw,
-		root:       root,
-		agentFiles: make(map[string]time.Time),
-		eventCh:    make(chan []Event, 8),
-		done:       make(chan struct{}),
+		fsw:          fsw,
+		root:         root,
+		agentFiles:   make(map[string]time.Time),
+		fingerprints: make(map[string]fileFingerprint),
+		eventCh:      make(chan []Event, 8),
+		done:         make(chan struct{}),
 	}
 	if err := w.addRecursive(root); err != nil {
 		fsw.Close()
@@ -100,6 +111,11 @@ func (w *Watcher) loop() {
 			if w.shouldIgnore(ev.Name) {
 				continue
 			}
+			// Filter pure-CHMOD events — metadata-only changes (e.g. atime
+			// updates on macOS/kqueue) are not content changes.
+			if ev.Op == fsnotify.Chmod {
+				continue
+			}
 			// If a new directory was created, start watching it.
 			if ev.Has(fsnotify.Create) {
 				if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
@@ -150,6 +166,18 @@ func (w *Watcher) flush(pending map[string]fsnotify.Event) {
 			delete(w.agentFiles, absPath) // consumed
 			continue
 		}
+		// For Write events, verify the file actually changed via mtime+size.
+		if ev.Op.Has(fsnotify.Write) && !w.hasRealChange(absPath) {
+			continue
+		}
+		// Clean up fingerprint on removal/rename.
+		if ev.Op.Has(fsnotify.Remove) || ev.Op.Has(fsnotify.Rename) {
+			delete(w.fingerprints, absPath)
+		} else if ev.Op.Has(fsnotify.Create) {
+			// Record fingerprint for newly created files so subsequent
+			// Write events can detect false positives.
+			w.recordFingerprint(absPath)
+		}
 		rel, err := filepath.Rel(w.root, absPath)
 		if err != nil {
 			rel = absPath
@@ -176,6 +204,32 @@ func (w *Watcher) flush(pending map[string]fsnotify.Event) {
 			}
 		}
 	}
+}
+
+// hasRealChange checks whether a file's mtime+size actually differ from the
+// last known fingerprint. Returns true if the file is new or has changed.
+// Must only be called from the loop goroutine (no locking needed).
+func (w *Watcher) hasRealChange(absPath string) bool {
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return true // can't stat → report conservatively
+	}
+	fp := fileFingerprint{size: info.Size(), mtime: info.ModTime()}
+	old, exists := w.fingerprints[absPath]
+	w.fingerprints[absPath] = fp
+	if !exists {
+		return true // first observation → real change
+	}
+	return fp != old
+}
+
+// recordFingerprint stores the current mtime+size for a file without comparing.
+func (w *Watcher) recordFingerprint(absPath string) {
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return
+	}
+	w.fingerprints[absPath] = fileFingerprint{size: info.Size(), mtime: info.ModTime()}
 }
 
 func (w *Watcher) shouldIgnore(path string) bool {
