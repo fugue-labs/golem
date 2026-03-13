@@ -31,6 +31,7 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/model [name]` — show or switch the active model\n")
 	b.WriteString("- `/diff` — show git diff of uncommitted changes\n")
 	b.WriteString("- `/undo [path]` — revert one unstaged git-tracked file change\n")
+	b.WriteString("- `/mission [new|status|tasks|plan|approve|start|pause|cancel|list]` — mission orchestration\n")
 	b.WriteString("- `/doctor` — diagnose setup issues\n")
 	b.WriteString("- `/config` — show effective configuration\n")
 	b.WriteString("- `/team` — show team member status\n")

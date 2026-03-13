@@ -56,6 +56,10 @@ func (m *Model) cleanupSession() {
 		closer.Close()
 		m.runtime.MemoryStore = nil
 	}
+	if m.missionCtrl != nil {
+		m.missionCtrl.Close()
+		m.missionCtrl = nil
+	}
 }
 
 func (m *Model) pendingCount() int {
@@ -65,7 +69,7 @@ func (m *Model) pendingCount() int {
 }
 
 func (m *Model) hasWorkflowPanel() bool {
-	return m.planState.HasTasks() || m.invariantState.HasItems() || m.verificationState.HasEntries() || m.hasTeamMembers()
+	return m.planState.HasTasks() || m.invariantState.HasItems() || m.verificationState.HasEntries() || m.hasTeamMembers() || m.hasMissionState()
 }
 
 func (m *Model) hasTeamMembers() bool {
@@ -101,6 +105,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	titleLine := headerLeft + strings.Repeat(" ", titleGap) + headerRight
 
 	var body []string
+	showMission := m.hasMissionState()
 	showPlan := m.planState.HasTasks()
 	showInv := m.invariantState.HasItems()
 	showVerify := m.verificationState.HasEntries()
@@ -109,6 +114,9 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 
 	// Count how many sections we need to render.
 	sections := 0
+	if showMission {
+		sections++
+	}
 	if showPlan {
 		sections++
 	}
@@ -132,7 +140,18 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 		perSection := max(1, bodyBudget/sections)
 		remainder := bodyBudget - perSection*sections
 
+		if showMission {
+			budget := perSection
+			if remainder > 0 {
+				budget++
+				remainder--
+			}
+			body = append(body, m.renderMissionPanelLines(budget, contentWidth)...)
+		}
 		if showTeam {
+			if len(body) > 0 {
+				body = append(body, sep)
+			}
 			budget := perSection
 			if remainder > 0 {
 				budget++
@@ -194,6 +213,9 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 
 func workflowPanelSummary(m *Model) string {
 	var parts []string
+	if missionSummary := m.missionPanelSummary(); missionSummary != "" {
+		parts = append(parts, missionSummary)
+	}
 	if m.hasTeamMembers() {
 		members := m.runtime.Session.Team.Members()
 		running := 0
