@@ -2,19 +2,42 @@ package mission
 
 import (
 	"context"
-	"path/filepath"
+	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 )
 
-func testStore(t *testing.T) *SQLiteStore {
+func testStore(t *testing.T) *DoltStore {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	s, err := OpenSQLiteStore(dbPath)
+	dbName := fmt.Sprintf("testmissions_%d", time.Now().UnixNano())
+
+	// Create the test database on the Dolt server.
+	rootDB, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/")
+	if err != nil {
+		t.Skip("Dolt server not available:", err)
+	}
+	if err := rootDB.Ping(); err != nil {
+		rootDB.Close()
+		t.Skip("Dolt server not reachable:", err)
+	}
+	if _, err := rootDB.Exec("CREATE DATABASE `" + dbName + "`"); err != nil {
+		rootDB.Close()
+		t.Skip("Cannot create test database:", err)
+	}
+	rootDB.Close()
+
+	dsn := "root@tcp(127.0.0.1:3307)/" + dbName
+	s, err := OpenDoltStore(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() {
+		s.Close()
+		cleanup, _ := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/")
+		cleanup.Exec("DROP DATABASE `" + dbName + "`")
+		cleanup.Close()
+	})
 	return s
 }
 

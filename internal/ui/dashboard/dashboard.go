@@ -3,7 +3,6 @@ package dashboard
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -85,12 +84,7 @@ func (m *Model) initStore() tea.Cmd {
 		if m.ctrl != nil {
 			return m.doRefresh()
 		}
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return refreshDoneMsg{err: fmt.Errorf("home dir: %w", err)}
-		}
-		dbPath := filepath.Join(homeDir, ".golem", "missions", "missions.db")
-		store, err := mission.OpenSQLiteStore(dbPath)
+		store, err := mission.OpenDoltStore(mission.DefaultDSN())
 		if err != nil {
 			return refreshDoneMsg{err: fmt.Errorf("open mission store: %w", err)}
 		}
