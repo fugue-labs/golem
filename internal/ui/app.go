@@ -406,6 +406,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.input.SetWidth(msg.Width - 4)
 
+		// Fallback: initialize styles if BackgroundColorMsg never arrived
+		// (e.g., in PTY environments that don't support OSC 11 queries).
+		if m.sty == nil {
+			m.sty = styles.New(nil)
+			m.spinner.Style = m.sty.SpinnerStyle
+		}
+
 		// Fire initial prompt on first window size (startup).
 		if m.initialPrompt != "" {
 			prompt := m.initialPrompt
