@@ -14,6 +14,7 @@ import (
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/login"
 	"github.com/fugue-labs/golem/internal/ui"
+	"github.com/fugue-labs/golem/internal/ui/dashboard"
 )
 
 var (
@@ -48,6 +49,12 @@ func run(args []string, out, errOut io.Writer) int {
 				return 1
 			}
 			return 0
+		case "dashboard":
+			var missionID string
+			if len(args) >= 2 {
+				missionID = args[1]
+			}
+			return runDashboard(missionID, errOut)
 		case "status", "runtime":
 			return runRuntimeCommand(args[0], args[1:], out, errOut)
 		}
@@ -145,6 +152,16 @@ func runRuntimeCommand(name string, args []string, out, errOut io.Writer) int {
 	}
 
 	if validation.HasErrors() || runtimeErr != nil {
+		return 1
+	}
+	return 0
+}
+
+func runDashboard(missionID string, errOut io.Writer) int {
+	m := dashboard.New(missionID)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(errOut, "dashboard error: %v\n", err)
 		return 1
 	}
 	return 0
