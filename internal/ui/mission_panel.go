@@ -3,8 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -23,13 +21,8 @@ func (m *Model) missionController() *mission.Controller {
 		return m.missionCtrl
 	}
 
-	// Initialize mission store on first use.
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	dbPath := filepath.Join(homeDir, ".golem", "missions", "missions.db")
-	store, err := mission.OpenSQLiteStore(dbPath)
+	// Initialize mission store on first use (connects to Dolt server).
+	store, err := mission.OpenDoltStore(mission.DefaultDSN())
 	if err != nil {
 		return nil
 	}

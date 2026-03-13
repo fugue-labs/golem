@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -19,19 +18,12 @@ func stripANSI(s string) string {
 	return re.ReplaceAllString(s, "")
 }
 
-// setupTeatestModel creates a dashboard model with a real SQLite store and
+// setupTeatestModel creates a dashboard model with a real Dolt store and
 // pre-injected controller, suitable for teatest integration tests that run
 // through the full bubbletea program lifecycle.
 func setupTeatestModel(t *testing.T, width, height int) (*Model, *mission.Controller) {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "teatest.db")
-	store, err := mission.OpenSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
-
+	store := openTestDoltStore(t)
 	ctrl := mission.NewController(store)
 	m := New("")
 	m.ctrl = ctrl

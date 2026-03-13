@@ -2,10 +2,13 @@ package dashboard
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	_ "github.com/go-sql-driver/mysql"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -14,20 +17,44 @@ import (
 
 func setupTestDashboard(t *testing.T) (*Model, *mission.Controller) {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-	store, err := mission.OpenSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
-
+	store := openTestDoltStore(t)
 	ctrl := mission.NewController(store)
 	m := New("")
 	m.ctrl = ctrl
 	m.width = 120
 	m.height = 40
 	return m, ctrl
+}
+
+func openTestDoltStore(t *testing.T) *mission.DoltStore {
+	t.Helper()
+	dbName := fmt.Sprintf("testdash_%d", time.Now().UnixNano())
+	rootDB, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/")
+	if err != nil {
+		t.Skip("Dolt server not available:", err)
+	}
+	if err := rootDB.Ping(); err != nil {
+		rootDB.Close()
+		t.Skip("Dolt server not reachable:", err)
+	}
+	if _, err := rootDB.Exec("CREATE DATABASE `" + dbName + "`"); err != nil {
+		rootDB.Close()
+		t.Skip("Cannot create test database:", err)
+	}
+	rootDB.Close()
+
+	dsn := "root@tcp(127.0.0.1:3307)/" + dbName
+	store, err := mission.OpenDoltStore(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		store.Close()
+		cleanup, _ := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/")
+		cleanup.Exec("DROP DATABASE `" + dbName + "`")
+		cleanup.Close()
+	})
+	return store
 }
 
 func createTestMission(t *testing.T, ctrl *mission.Controller) *mission.Mission {

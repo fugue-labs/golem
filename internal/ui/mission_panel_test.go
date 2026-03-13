@@ -2,9 +2,13 @@ package ui
 
 import (
 	"context"
-	"path/filepath"
+	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/mission"
@@ -12,21 +16,46 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
 
-// testMissionModel creates a Model wired to a temp SQLite mission store.
+// testMissionModel creates a Model wired to a Dolt mission store.
 func testMissionModel(t *testing.T) (*Model, *mission.Controller) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test_missions.db")
-	store, err := mission.OpenSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
-
+	store := openTestDoltStore(t)
 	ctrl := mission.NewController(store)
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
 	m.missionCtrl = ctrl
 	return m, ctrl
+}
+
+func openTestDoltStore(t *testing.T) *mission.DoltStore {
+	t.Helper()
+	dbName := fmt.Sprintf("testmpanel_%d", time.Now().UnixNano())
+	rootDB, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/")
+	if err != nil {
+		t.Skip("Dolt server not available:", err)
+	}
+	if err := rootDB.Ping(); err != nil {
+		rootDB.Close()
+		t.Skip("Dolt server not reachable:", err)
+	}
+	if _, err := rootDB.Exec("CREATE DATABASE `" + dbName + "`"); err != nil {
+		rootDB.Close()
+		t.Skip("Cannot create test database:", err)
+	}
+	rootDB.Close()
+
+	dsn := "root@tcp(127.0.0.1:3307)/" + dbName
+	store, err := mission.OpenDoltStore(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		store.Close()
+		cleanup, _ := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/")
+		cleanup.Exec("DROP DATABASE `" + dbName + "`")
+		cleanup.Close()
+	})
+	return store
 }
 
 // seedMission creates a mission with tasks at various statuses and returns the mission ID.
