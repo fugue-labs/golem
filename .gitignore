@@ -1,6 +1,7 @@
 .claude
 
 # Gas Town (added by gt)
+.beads/
 .runtime/
 .logs/
 __pycache__/
