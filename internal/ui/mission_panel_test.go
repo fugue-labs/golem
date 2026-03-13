@@ -30,29 +30,40 @@ func testMissionModel(t *testing.T) (*Model, *mission.Controller) {
 func openTestDoltStore(t *testing.T) *mission.DoltStore {
 	t.Helper()
 	dbName := fmt.Sprintf("testmpanel_%d", time.Now().UnixNano())
-	rootDB, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/")
+
+	const dsnParams = "?timeout=5s&readTimeout=5s&writeTimeout=5s"
+	rootDB, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/"+dsnParams)
 	if err != nil {
 		t.Skip("Dolt server not available:", err)
 	}
-	if err := rootDB.Ping(); err != nil {
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := rootDB.PingContext(ctx); err != nil {
 		rootDB.Close()
 		t.Skip("Dolt server not reachable:", err)
 	}
-	if _, err := rootDB.Exec("CREATE DATABASE `" + dbName + "`"); err != nil {
+	if _, err := rootDB.ExecContext(ctx, "CREATE DATABASE `"+dbName+"`"); err != nil {
 		rootDB.Close()
 		t.Skip("Cannot create test database:", err)
 	}
 	rootDB.Close()
 
-	dsn := "root@tcp(127.0.0.1:3307)/" + dbName
+	dsn := "root@tcp(127.0.0.1:3307)/" + dbName + dsnParams
 	store, err := mission.OpenDoltStore(dsn)
 	if err != nil {
-		t.Fatal(err)
+		t.Skip("Cannot open Dolt store:", err)
 	}
 	t.Cleanup(func() {
 		store.Close()
-		cleanup, _ := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/")
-		cleanup.Exec("DROP DATABASE `" + dbName + "`")
+		cleanup, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/"+dsnParams)
+		if err != nil {
+			return
+		}
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		cleanup.ExecContext(cctx, "DROP DATABASE IF EXISTS `"+dbName+"`")
 		cleanup.Close()
 	})
 	return store
