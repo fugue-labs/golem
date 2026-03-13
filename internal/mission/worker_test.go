@@ -428,6 +428,123 @@ func TestBuildWorkerPrompt(t *testing.T) {
 	}
 }
 
+func TestDispatchReadyTasks_FullFlow(t *testing.T) {
+	// Uses a real git repo to test the full dispatch pipeline including
+	// worktree creation, run record creation, and task status transitions.
+	repo := initTestRepo(t)
+
+	store := newWorkerMockStore()
+	store.missions["m1"] = &Mission{
+		ID:         "m1",
+		Status:     MissionRunning,
+		BaseBranch: "HEAD",
+		Budget:     Budget{MaxConcurrentWorkers: 3},
+	}
+
+	task := &Task{
+		ID:        "t1",
+		MissionID: "m1",
+		Title:     "Test task",
+		Kind:      TaskKindCode,
+		Priority:  1,
+		Objective: "Do something useful",
+		Status:    TaskReady,
+		Scope:     TaskScope{WritePaths: []string{"pkg/a"}},
+	}
+	store.ready = []*Task{task}
+	store.tasks["t1"] = task
+
+	sched := NewScheduler(store)
+	wt := NewWorktreeManager(repo)
+	launcher := NewWorkerLauncher(sched, wt, store)
+
+	specs, err := launcher.DispatchReadyTasks(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+
+	spec := specs[0]
+
+	// Verify run was created with worker mode.
+	if spec.Run.Mode != RunModeWorker {
+		t.Errorf("expected worker mode, got %s", spec.Run.Mode)
+	}
+	if spec.Run.Status != RunRunning {
+		t.Errorf("expected run status running, got %s", spec.Run.Status)
+	}
+	if spec.Run.LeaseExpires == nil {
+		t.Error("expected lease expiry to be set")
+	}
+	if spec.Run.LeaseOwner != "t1" {
+		t.Errorf("expected lease owner t1, got %s", spec.Run.LeaseOwner)
+	}
+
+	// Verify task transitioned to running.
+	if spec.Task.Status != TaskRunning {
+		t.Errorf("expected task status running, got %s", spec.Task.Status)
+	}
+	if spec.Task.AttemptCount != 1 {
+		t.Errorf("expected attempt count 1, got %d", spec.Task.AttemptCount)
+	}
+
+	// Verify WorkerSpec is fully populated.
+	if spec.WorktreePath == "" {
+		t.Error("expected non-empty worktree path")
+	}
+	if spec.Prompt == "" {
+		t.Error("expected non-empty prompt")
+	}
+	if !strings.Contains(spec.Prompt, "Test task") {
+		t.Error("prompt should contain task title")
+	}
+	if !strings.Contains(spec.Prompt, "Do something useful") {
+		t.Error("prompt should contain objective")
+	}
+
+	// Verify run was persisted in the store.
+	if len(store.runs) != 1 {
+		t.Errorf("expected 1 run in store, got %d", len(store.runs))
+	}
+
+	// Verify dispatch event was logged.
+	found := false
+	for _, e := range store.events {
+		if e.Type == "worker.dispatched" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected worker.dispatched event")
+	}
+}
+
+func TestDispatchReadyTasks_NoReadyTasks(t *testing.T) {
+	store := newWorkerMockStore()
+	store.missions["m1"] = &Mission{
+		ID:     "m1",
+		Status: MissionRunning,
+		Budget: Budget{MaxConcurrentWorkers: 3},
+	}
+	store.ready = nil
+
+	sched := NewScheduler(store)
+	wt := NewWorktreeManager("/tmp/test-repo")
+	launcher := NewWorkerLauncher(sched, wt, store)
+
+	specs, err := launcher.DispatchReadyTasks(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 0 {
+		t.Fatalf("expected 0 specs for no ready tasks, got %d", len(specs))
+	}
+}
+
 func TestBuildWorkerPrompt_MinimalTask(t *testing.T) {
 	task := &Task{
 		ID:        "t2",

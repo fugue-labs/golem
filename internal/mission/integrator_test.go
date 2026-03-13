@@ -188,3 +188,84 @@ func TestIntegrateTask_NotAccepted(t *testing.T) {
 		t.Error("expected error text")
 	}
 }
+
+func TestIntegrateReady_NoAcceptedTasks(t *testing.T) {
+	store := newIntegratorMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskRunning}
+
+	ie := NewIntegrationEngine(store, "/tmp/repo")
+	results, err := ie.IntegrateReady(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results for no accepted tasks, got %d", len(results))
+	}
+}
+
+func TestIntegrateReady_ResolvesDownstreamTasks(t *testing.T) {
+	store := newIntegratorMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning, BaseBranch: "main"}
+
+	// t1 is already done (integrated previously).
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskIntegrated}
+
+	// t2 is accepted but will fail git integration (fake repo path).
+	store.tasks["t2"] = &Task{ID: "t2", MissionID: "m1", Status: TaskAccepted}
+	store.tasksByStatus[TaskAccepted] = []*Task{store.tasks["t2"]}
+
+	// t3 is pending and depends on t1 (which is integrated).
+	store.tasks["t3"] = &Task{ID: "t3", MissionID: "m1", Status: TaskPending}
+	store.deps = []TaskDependency{
+		{TaskID: "t3", DependsOnID: "t1"},
+	}
+
+	ie := NewIntegrationEngine(store, "/tmp/nonexistent-repo")
+	results, err := ie.IntegrateReady(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// t2 integration fails on git (no real repo), but resolveReadyTasks
+	// still runs. t3's dependency (t1) is integrated, so t3 should be
+	// promoted to ready.
+	_ = results // integration results may be empty due to git errors
+
+	if store.tasks["t3"].Status != TaskReady {
+		t.Errorf("expected t3 promoted to ready (dep t1 integrated), got %s", store.tasks["t3"].Status)
+	}
+}
+
+func TestCheckMissionComplete_MixedTerminalStates(t *testing.T) {
+	store := newIntegratorMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskIntegrated}
+	store.tasks["t2"] = &Task{ID: "t2", MissionID: "m1", Status: TaskDone}
+	store.tasks["t3"] = &Task{ID: "t3", MissionID: "m1", Status: TaskIntegrated}
+
+	ie := NewIntegrationEngine(store, "/tmp/repo")
+	complete, err := ie.CheckMissionComplete(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete {
+		t.Error("expected complete when all tasks are integrated or done")
+	}
+}
+
+func TestCheckMissionComplete_FailedTaskPreventsCompletion(t *testing.T) {
+	store := newIntegratorMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskIntegrated}
+	store.tasks["t2"] = &Task{ID: "t2", MissionID: "m1", Status: TaskFailed}
+
+	ie := NewIntegrationEngine(store, "/tmp/repo")
+	complete, err := ie.CheckMissionComplete(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete {
+		t.Error("expected not complete when a task is failed")
+	}
+}
