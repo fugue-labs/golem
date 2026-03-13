@@ -44,6 +44,8 @@ type Store interface {
 	// Aggregate queries.
 	GetMissionSummary(ctx context.Context, missionID string) (*MissionSummary, error)
 	GetReadyTasks(ctx context.Context, missionID string) ([]*Task, error)
+	GetTasksByStatus(ctx context.Context, missionID string, status TaskStatus) ([]*Task, error)
+	GetRunsForTask(ctx context.Context, taskID string) ([]*Run, error)
 
 	// Lifecycle.
 	Close() error

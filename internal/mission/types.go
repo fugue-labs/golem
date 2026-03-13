@@ -217,6 +217,40 @@ type Event struct {
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
+// ReviewVerdict represents the outcome of a review run.
+type ReviewVerdict string
+
+const (
+	ReviewPass           ReviewVerdict = "pass"
+	ReviewReject         ReviewVerdict = "reject"
+	ReviewRequestChanges ReviewVerdict = "request_changes"
+)
+
+// ReviewResult is the structured output produced by a reviewer.
+type ReviewResult struct {
+	Verdict    ReviewVerdict `json:"verdict"`
+	Summary    string        `json:"summary"`
+	Issues     []ReviewIssue `json:"issues,omitempty"`
+	Suggestion string        `json:"suggestion,omitempty"`
+}
+
+// ReviewIssue describes a specific concern found during review.
+type ReviewIssue struct {
+	Severity    string `json:"severity"` // "error", "warning", "info"
+	File        string `json:"file,omitempty"`
+	Line        int    `json:"line,omitempty"`
+	Description string `json:"description"`
+}
+
+// IntegrationResult captures the outcome of merging a task's work.
+type IntegrationResult struct {
+	TaskID        string   `json:"task_id"`
+	MergedCommit  string   `json:"merged_commit,omitempty"`
+	ConflictFiles []string `json:"conflict_files,omitempty"`
+	Success       bool     `json:"success"`
+	ErrorText     string   `json:"error_text,omitempty"`
+}
+
 // CreateMissionRequest contains the parameters for creating a new mission.
 type CreateMissionRequest struct {
 	Title      string   `json:"title"`

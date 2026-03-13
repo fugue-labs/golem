@@ -46,8 +46,10 @@ func (s *mockStore) CreateApproval(context.Context, *Approval) error            
 func (s *mockStore) GetApproval(context.Context, string) (*Approval, error)          { panic("not implemented") }
 func (s *mockStore) UpdateApproval(context.Context, *Approval) error                 { panic("not implemented") }
 func (s *mockStore) ListApprovals(context.Context, string) ([]*Approval, error)      { panic("not implemented") }
-func (s *mockStore) GetMissionSummary(context.Context, string) (*MissionSummary, error) { panic("not implemented") }
-func (s *mockStore) Close() error                                                    { return nil }
+func (s *mockStore) GetMissionSummary(context.Context, string) (*MissionSummary, error)          { panic("not implemented") }
+func (s *mockStore) GetTasksByStatus(context.Context, string, TaskStatus) ([]*Task, error)       { panic("not implemented") }
+func (s *mockStore) GetRunsForTask(context.Context, string) ([]*Run, error)                      { panic("not implemented") }
+func (s *mockStore) Close() error                                                                { return nil }
 
 // --- Tests ---
 

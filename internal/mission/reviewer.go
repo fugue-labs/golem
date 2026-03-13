@@ -1,0 +1,370 @@
+package mission
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// ReviewLauncher coordinates the lifecycle of review runs for completed worker
+// tasks. It is the Phase C counterpart to WorkerLauncher.
+type ReviewLauncher struct {
+	store Store
+}
+
+// NewReviewLauncher creates a review launcher.
+func NewReviewLauncher(store Store) *ReviewLauncher {
+	return &ReviewLauncher{store: store}
+}
+
+// ReviewSpec describes a provisioned review run ready for execution by the TUI.
+type ReviewSpec struct {
+	Run       *Run
+	Task      *Task
+	WorkerRun *Run
+	Prompt    string
+	DiffText  string
+}
+
+// DispatchPendingReviews creates review runs for tasks in TaskAwaitingReview.
+// The TUI spawns a reviewer agent for each returned ReviewSpec.
+func (rl *ReviewLauncher) DispatchPendingReviews(ctx context.Context, missionID, repoRoot string) ([]*ReviewSpec, error) {
+	mission, err := rl.store.GetMission(ctx, missionID)
+	if err != nil {
+		return nil, fmt.Errorf("review: get mission: %w", err)
+	}
+	if mission.Status != MissionRunning {
+		return nil, fmt.Errorf("review: mission %s is %s, not running", missionID, mission.Status)
+	}
+
+	tasks, err := rl.store.GetTasksByStatus(ctx, missionID, TaskAwaitingReview)
+	if err != nil {
+		return nil, fmt.Errorf("review: get awaiting tasks: %w", err)
+	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+
+	baseBranch := mission.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	var specs []*ReviewSpec
+	for _, task := range tasks {
+		// Check if a review is already running for this task.
+		if rl.hasActiveReview(ctx, task.ID) {
+			continue
+		}
+
+		spec, err := rl.provisionReview(ctx, mission, task, repoRoot, baseBranch)
+		if err != nil {
+			rl.logEvent(ctx, missionID, task.ID, "", "review.provision_failed", map[string]string{
+				"error": err.Error(),
+			})
+			continue
+		}
+		specs = append(specs, spec)
+	}
+
+	return specs, nil
+}
+
+// hasActiveReview checks if there's already a running review for a task.
+func (rl *ReviewLauncher) hasActiveReview(ctx context.Context, taskID string) bool {
+	runs, err := rl.store.GetRunsForTask(ctx, taskID)
+	if err != nil {
+		return false
+	}
+	for _, r := range runs {
+		if r.Mode == RunModeReview && r.Status == RunRunning {
+			return true
+		}
+	}
+	return false
+}
+
+// provisionReview creates a review run and builds the review prompt.
+func (rl *ReviewLauncher) provisionReview(ctx context.Context, m *Mission, task *Task, repoRoot, baseBranch string) (*ReviewSpec, error) {
+	// Find the most recent succeeded worker run.
+	workerRun, err := rl.lastSucceededWorkerRun(ctx, task.ID)
+	if err != nil {
+		return nil, fmt.Errorf("find worker run for %s: %w", task.ID, err)
+	}
+
+	// Get the diff.
+	diff, err := GetWorkerDiff(ctx, repoRoot, baseBranch, task.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get diff for %s: %w", task.ID, err)
+	}
+
+	// Create run record.
+	now := time.Now().UTC()
+	run := &Run{
+		ID:        generateID("r"),
+		MissionID: m.ID,
+		TaskID:    task.ID,
+		Mode:      RunModeReview,
+		Status:    RunRunning,
+		StartedAt: &now,
+	}
+	if err := rl.store.CreateRun(ctx, run); err != nil {
+		return nil, fmt.Errorf("create review run for %s: %w", task.ID, err)
+	}
+
+	rl.logEvent(ctx, m.ID, task.ID, run.ID, "review.dispatched", nil)
+
+	prompt := BuildReviewPrompt(task, workerRun, diff)
+
+	return &ReviewSpec{
+		Run:       run,
+		Task:      task,
+		WorkerRun: workerRun,
+		Prompt:    prompt,
+		DiffText:  diff,
+	}, nil
+}
+
+// lastSucceededWorkerRun finds the most recent succeeded worker run for a task.
+func (rl *ReviewLauncher) lastSucceededWorkerRun(ctx context.Context, taskID string) (*Run, error) {
+	runs, err := rl.store.GetRunsForTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(runs) - 1; i >= 0; i-- {
+		if runs[i].Mode == RunModeWorker && runs[i].Status == RunSucceeded {
+			return runs[i], nil
+		}
+	}
+	return nil, fmt.Errorf("no succeeded worker run found for task %s", taskID)
+}
+
+// CompleteReview handles the reviewer's verdict.
+func (rl *ReviewLauncher) CompleteReview(ctx context.Context, spec *ReviewSpec, result *ReviewResult) error {
+	now := time.Now().UTC()
+
+	// Mark review run as succeeded.
+	spec.Run.Status = RunSucceeded
+	spec.Run.EndedAt = &now
+	spec.Run.Summary = result.Summary
+	if err := rl.store.UpdateRun(ctx, spec.Run); err != nil {
+		return fmt.Errorf("update review run %s: %w", spec.Run.ID, err)
+	}
+
+	// Store the review result as an artifact.
+	resultJSON, _ := json.Marshal(result)
+	rl.store.CreateArtifact(ctx, &Artifact{ //nolint:errcheck
+		ID:           generateID("a"),
+		MissionID:    spec.Run.MissionID,
+		TaskID:       spec.Task.ID,
+		RunID:        spec.Run.ID,
+		Type:         "review_result",
+		RelativePath: fmt.Sprintf("reviews/%s.json", spec.Task.ID),
+		CreatedAt:    now,
+	})
+
+	switch result.Verdict {
+	case ReviewPass:
+		return rl.handlePass(ctx, spec, result, resultJSON, now)
+	case ReviewReject:
+		return rl.handleReject(ctx, spec, result, resultJSON, now)
+	case ReviewRequestChanges:
+		return rl.handleRequestChanges(ctx, spec, result, resultJSON, now)
+	default:
+		return fmt.Errorf("unknown review verdict: %s", result.Verdict)
+	}
+}
+
+func (rl *ReviewLauncher) handlePass(ctx context.Context, spec *ReviewSpec, result *ReviewResult, resultJSON json.RawMessage, now time.Time) error {
+	// Transition task to accepted.
+	spec.Task.Status = TaskAccepted
+	spec.Task.UpdatedAt = now
+	if err := rl.store.UpdateTask(ctx, spec.Task); err != nil {
+		return fmt.Errorf("accept task %s: %w", spec.Task.ID, err)
+	}
+
+	// Create approval record.
+	resolvedAt := now
+	rl.store.CreateApproval(ctx, &Approval{ //nolint:errcheck
+		ID:           generateID("ap"),
+		MissionID:    spec.Run.MissionID,
+		TaskID:       spec.Task.ID,
+		RunID:        spec.Run.ID,
+		Kind:         "review",
+		Status:       ApprovalApproved,
+		ResponseJSON: resultJSON,
+		CreatedAt:    now,
+		ResolvedAt:   &resolvedAt,
+	})
+
+	rl.logEvent(ctx, spec.Run.MissionID, spec.Task.ID, spec.Run.ID, "review.passed", map[string]string{
+		"summary": result.Summary,
+	})
+
+	return nil
+}
+
+func (rl *ReviewLauncher) handleReject(ctx context.Context, spec *ReviewSpec, result *ReviewResult, resultJSON json.RawMessage, now time.Time) error {
+	// Put task back to ready for retry.
+	spec.Task.Status = TaskReady
+	spec.Task.UpdatedAt = now
+	if err := rl.store.UpdateTask(ctx, spec.Task); err != nil {
+		return fmt.Errorf("reject task %s: %w", spec.Task.ID, err)
+	}
+
+	resolvedAt := now
+	rl.store.CreateApproval(ctx, &Approval{ //nolint:errcheck
+		ID:           generateID("ap"),
+		MissionID:    spec.Run.MissionID,
+		TaskID:       spec.Task.ID,
+		RunID:        spec.Run.ID,
+		Kind:         "review",
+		Status:       ApprovalRejected,
+		ResponseJSON: resultJSON,
+		CreatedAt:    now,
+		ResolvedAt:   &resolvedAt,
+	})
+
+	rl.logEvent(ctx, spec.Run.MissionID, spec.Task.ID, spec.Run.ID, "review.rejected", map[string]string{
+		"summary": result.Summary,
+	})
+
+	return nil
+}
+
+func (rl *ReviewLauncher) handleRequestChanges(ctx context.Context, spec *ReviewSpec, result *ReviewResult, resultJSON json.RawMessage, now time.Time) error {
+	spec.Task.Status = TaskRejected
+	spec.Task.BlockingReason = result.Suggestion
+	if spec.Task.BlockingReason == "" {
+		spec.Task.BlockingReason = result.Summary
+	}
+	spec.Task.UpdatedAt = now
+	if err := rl.store.UpdateTask(ctx, spec.Task); err != nil {
+		return fmt.Errorf("request changes for task %s: %w", spec.Task.ID, err)
+	}
+
+	resolvedAt := now
+	rl.store.CreateApproval(ctx, &Approval{ //nolint:errcheck
+		ID:           generateID("ap"),
+		MissionID:    spec.Run.MissionID,
+		TaskID:       spec.Task.ID,
+		RunID:        spec.Run.ID,
+		Kind:         "review",
+		Status:       ApprovalRejected,
+		ResponseJSON: resultJSON,
+		CreatedAt:    now,
+		ResolvedAt:   &resolvedAt,
+	})
+
+	rl.logEvent(ctx, spec.Run.MissionID, spec.Task.ID, spec.Run.ID, "review.changes_requested", map[string]string{
+		"summary":    result.Summary,
+		"suggestion": result.Suggestion,
+	})
+
+	return nil
+}
+
+// FailReview handles reviewer crash/timeout. Keeps task in TaskAwaitingReview
+// so a new review can be attempted.
+func (rl *ReviewLauncher) FailReview(ctx context.Context, spec *ReviewSpec, errText string) error {
+	now := time.Now().UTC()
+	spec.Run.Status = RunFailed
+	spec.Run.EndedAt = &now
+	spec.Run.ErrorText = errText
+	if err := rl.store.UpdateRun(ctx, spec.Run); err != nil {
+		return fmt.Errorf("fail review run %s: %w", spec.Run.ID, err)
+	}
+
+	rl.logEvent(ctx, spec.Run.MissionID, spec.Task.ID, spec.Run.ID, "review.failed", map[string]string{
+		"error": errText,
+	})
+
+	// Task stays in TaskAwaitingReview for re-review.
+	return nil
+}
+
+// logEvent appends a structured event to the mission event log.
+func (rl *ReviewLauncher) logEvent(ctx context.Context, missionID, taskID, runID, eventType string, payload map[string]string) {
+	var payloadJSON json.RawMessage
+	if payload != nil {
+		payloadJSON, _ = json.Marshal(payload)
+	}
+	rl.store.AppendEvent(ctx, &Event{ //nolint:errcheck
+		MissionID:   missionID,
+		TaskID:      taskID,
+		RunID:       runID,
+		Type:        eventType,
+		PayloadJSON: payloadJSON,
+		CreatedAt:   time.Now().UTC(),
+	})
+}
+
+// GetWorkerDiff returns the diff between baseBranch and the worker's branch.
+func GetWorkerDiff(ctx context.Context, repoRoot, baseBranch, taskID string) (string, error) {
+	branchName := "mission/worker/" + taskID
+	cmd := exec.CommandContext(ctx, "git", "diff", baseBranch+"..."+branchName)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git diff %s...%s: %w\n%s", baseBranch, branchName, err, out)
+	}
+	return string(out), nil
+}
+
+// BuildReviewPrompt constructs the prompt given to a reviewer agent.
+func BuildReviewPrompt(task *Task, workerRun *Run, diff string) string {
+	var b strings.Builder
+
+	b.WriteString("# Code Review\n\n")
+	b.WriteString(fmt.Sprintf("**Task ID:** %s\n", task.ID))
+	b.WriteString(fmt.Sprintf("**Title:** %s\n", task.Title))
+	b.WriteString(fmt.Sprintf("**Kind:** %s\n\n", task.Kind))
+
+	b.WriteString("## Task Objective\n\n")
+	b.WriteString(task.Objective)
+	b.WriteString("\n\n")
+
+	if len(task.AcceptanceCriteria) > 0 {
+		b.WriteString("## Acceptance Criteria\n\n")
+		for _, c := range task.AcceptanceCriteria {
+			b.WriteString(fmt.Sprintf("- %s\n", c))
+		}
+		b.WriteString("\n")
+	}
+
+	if workerRun != nil && workerRun.Summary != "" {
+		b.WriteString("## Worker Summary\n\n")
+		b.WriteString(workerRun.Summary)
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString("## Diff to Review\n\n")
+	b.WriteString("```diff\n")
+	if diff != "" {
+		b.WriteString(diff)
+	} else {
+		b.WriteString("(no changes)\n")
+	}
+	b.WriteString("```\n\n")
+
+	b.WriteString("## Review Instructions\n\n")
+	b.WriteString("1. Treat all worker claims as untrusted. Verify by inspecting the diff.\n")
+	b.WriteString("2. Check each acceptance criterion against the actual changes.\n")
+	b.WriteString("3. Look for bugs, security issues, and correctness problems.\n")
+	b.WriteString("4. Produce your verdict as a JSON block in this exact format:\n\n")
+	b.WriteString("```json\n")
+	b.WriteString("{\n")
+	b.WriteString("  \"verdict\": \"pass\" | \"reject\" | \"request_changes\",\n")
+	b.WriteString("  \"summary\": \"Brief explanation of your verdict\",\n")
+	b.WriteString("  \"issues\": [\n")
+	b.WriteString("    {\"severity\": \"error|warning|info\", \"file\": \"path\", \"line\": 0, \"description\": \"...\"}\n")
+	b.WriteString("  ],\n")
+	b.WriteString("  \"suggestion\": \"What the worker should change (for request_changes only)\"\n")
+	b.WriteString("}\n")
+	b.WriteString("```\n")
+
+	return b.String()
+}

@@ -748,6 +748,58 @@ func (s *DoltStore) GetReadyTasks(ctx context.Context, missionID string) ([]*Tas
 	return tasks, rows.Err()
 }
 
+func (s *DoltStore) GetTasksByStatus(ctx context.Context, missionID string, status TaskStatus) ([]*Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, mission_id, title, kind, objective, status, priority,
+			scope_json, acceptance_criteria_json, review_requirements_json,
+			estimated_effort, risk_level, attempt_count, blocking_reason,
+			created_at, updated_at
+		FROM tasks WHERE mission_id = ? AND status = ?
+		ORDER BY priority DESC, created_at ASC`, missionID, string(status))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []*Task
+	for rows.Next() {
+		t, err := scanTaskRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+func (s *DoltStore) GetRunsForTask(ctx context.Context, taskID string) ([]*Run, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, mission_id, task_id, mode, status, lease_owner,
+			lease_expires_at, heartbeat_at, worktree_path, started_at, ended_at,
+			summary, error_text
+		FROM runs WHERE task_id = ? ORDER BY id ASC`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []*Run
+	for rows.Next() {
+		r, err := scanRunRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
+}
+
 // --- Dolt-specific operations ---
 
 // DoltCommit creates a Dolt commit on the current branch with the given message.

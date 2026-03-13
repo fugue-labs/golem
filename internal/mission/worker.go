@@ -168,12 +168,9 @@ func (wl *WorkerLauncher) CompleteWorker(ctx context.Context, spec *WorkerSpec, 
 		"summary": summary,
 	})
 
-	// Release worktree (non-fatal if this fails).
-	if err := wl.worktrees.Release(ctx, spec.Task.ID); err != nil {
-		wl.logEvent(ctx, spec.Run.MissionID, spec.Task.ID, spec.Run.ID, "worktree.release_failed", map[string]string{
-			"error": err.Error(),
-		})
-	}
+	// NOTE: Worktree is NOT released here. The reviewer and integrator
+	// need access to the worker's branch. Release happens after
+	// integration or rejection via ReleaseWorkerWorktree.
 
 	return nil
 }
@@ -245,6 +242,17 @@ func (wl *WorkerLauncher) CancelWorker(ctx context.Context, spec *WorkerSpec) er
 	}
 
 	return nil
+}
+
+// ReleaseWorkerWorktree releases the worktree for a task after review +
+// integration or rejection. This is separate from CompleteWorker because
+// the reviewer and integrator need the worktree to remain available.
+func (wl *WorkerLauncher) ReleaseWorkerWorktree(ctx context.Context, missionID, taskID string) {
+	if err := wl.worktrees.Release(ctx, taskID); err != nil {
+		wl.logEvent(ctx, missionID, taskID, "", "worktree.release_failed", map[string]string{
+			"error": err.Error(),
+		})
+	}
 }
 
 // HeartbeatWorker updates the lease heartbeat for a running worker.
