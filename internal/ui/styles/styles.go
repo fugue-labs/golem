@@ -23,6 +23,8 @@ const (
 	HollowIcon     = "○"
 	InProgressIcon = "◐"
 	BlockedIcon    = "✗"
+	PromptIcon     = "❯"
+	ResultPrefix   = "⎿"
 )
 
 // Styles contains all visual styles for the application.

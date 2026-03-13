@@ -14,6 +14,8 @@
 - `/undo [path]` — revert one unstaged git-tracked file change
 - `/doctor` — diagnose setup issues
 - `/config` — show effective configuration
+- `/team` — show team member status
+- `/context` — show context window usage
 - `/skills` — list detected skills
 - `/skill <name>` — toggle a skill on or off
 - `/quit` or `/exit` — quit the app

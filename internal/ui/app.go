@@ -28,6 +28,7 @@ import (
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
 	"github.com/fugue-labs/gollem/ext/deep"
+	"github.com/fugue-labs/gollem/ext/team"
 )
 
 // modelPricing returns known model pricing for cost estimation.
@@ -128,6 +129,16 @@ type (
 		messages    []core.ModelMessage
 		err         error
 	}
+	contextCompactedMsg struct {
+		strategy     string
+		msgsBefore   int
+		msgsAfter    int
+		tokensBefore int
+		tokensAfter  int
+	}
+	teamEventMsg struct {
+		text string // pre-formatted event description
+	}
 	askUserRequest struct {
 		runID     int
 		questions []codetool.AskUserQuestion
@@ -197,6 +208,23 @@ type Model struct {
 	sessionUsage core.RunUsage  // accumulated across all runs
 	lastCost     float64        // cost at end of previous run (for per-request delta)
 
+	// Context window tracking.
+	estimatedTokens int // estimated token count of current conversation
+
+	// Active tool tracking — shown in the spinner while busy.
+	activeToolName string
+	activeToolArgs string
+
+	// Team event bus for forwarding lifecycle events to chat.
+	teamEventBus *core.EventBus
+
+	// Initial prompt from command line.
+	initialPrompt string
+
+	// Slash command tab completion.
+	tabMatches []string // current set of matching commands
+	tabIdx     int      // current index in tabMatches
+
 	// Tool approval state.
 	approvalCh     chan toolApprovalRequest
 	approvalDone   chan struct{}
@@ -231,6 +259,7 @@ func New(cfg *config.Config) *Model {
 		approvalDone:   make(chan struct{}),
 		approvalAlways: make(map[string]bool),
 		costTracker:    core.NewCostTracker(modelPricing()),
+		teamEventBus:   core.NewEventBus(),
 		historyIdx:     -1,
 		allSkills:      allSkills,
 	}
@@ -239,6 +268,51 @@ func New(cfg *config.Config) *Model {
 // SetProgram gives the model a reference to the tea.Program for sending async messages.
 func (m *Model) SetProgram(p *tea.Program) {
 	m.prog = p
+	m.subscribeTeamEvents()
+}
+
+// SetInitialPrompt sets a prompt to be sent automatically on first render.
+func (m *Model) SetInitialPrompt(prompt string) {
+	m.initialPrompt = prompt
+}
+
+// subscribeTeamEvents registers event bus handlers that forward team lifecycle
+// events to the BubbleTea message loop for display in the chat stream.
+func (m *Model) subscribeTeamEvents() {
+	bus := m.teamEventBus
+	p := m.prog
+	if bus == nil || p == nil {
+		return
+	}
+	core.Subscribe(bus, func(e team.TeammateSpawnedEvent) {
+		text := fmt.Sprintf("Spawned teammate %s", e.TeammateName)
+		if e.Task != "" {
+			task := e.Task
+			if len(task) > 80 {
+				task = task[:77] + "..."
+			}
+			text += ": " + task
+		}
+		p.Send(teamEventMsg{text: text})
+	})
+	core.Subscribe(bus, func(e team.TeammateTerminatedEvent) {
+		text := fmt.Sprintf("Teammate %s stopped", e.TeammateName)
+		if e.Reason != "" && e.Reason != "stopped" {
+			text += " (" + e.Reason + ")"
+		}
+		p.Send(teamEventMsg{text: text})
+	})
+	core.Subscribe(bus, func(e team.MessageSentEvent) {
+		text := fmt.Sprintf("%s → %s: %s", e.From, e.To, e.Summary)
+		p.Send(teamEventMsg{text: text})
+	})
+	core.Subscribe(bus, func(e team.TaskCompletedEvent) {
+		text := fmt.Sprintf("Task %s completed", e.TaskID)
+		if e.Owner != "" {
+			text += " by " + e.Owner
+		}
+		p.Send(teamEventMsg{text: text})
+	})
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -264,6 +338,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.input.SetWidth(msg.Width - 4)
+
+		// Fire initial prompt on first window size (startup).
+		if m.initialPrompt != "" {
+			prompt := m.initialPrompt
+			m.initialPrompt = ""
+			userMsg := &chat.Message{Kind: chat.KindUser, Content: prompt}
+			m.messages = append(m.messages, userMsg)
+			m.inputHistory = append(m.inputHistory, prompt)
+			m.busy = true
+			m.startTime = time.Now()
+			m.lastPrompt = prompt
+			m.currentRunMessages = []*chat.Message{userMsg}
+			m.runID++
+			m.hookRID.Store(int64(m.runID))
+			m.runCtx, m.cancel = context.WithCancel(context.Background())
+			return m, m.prepareRun(prompt)
+		}
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -320,6 +411,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scroll = 0
 		return m, nil
 
+	case teamEventMsg:
+		m.messages = append(m.messages, &chat.Message{
+			Kind:    chat.KindSystem,
+			Content: msg.text,
+		})
+		m.scroll = 0
+		return m, nil
+
+	case contextCompactedMsg:
+		label := "Auto-compact"
+		if msg.strategy == core.CompactionStrategyEmergencyTruncation {
+			label = "Emergency truncation"
+		}
+		summary := fmt.Sprintf("%s: %d→%d messages, ~%dk→%dk tokens",
+			label, msg.msgsBefore, msg.msgsAfter,
+			msg.tokensBefore/1000, msg.tokensAfter/1000)
+		m.messages = append(m.messages, &chat.Message{
+			Kind:    chat.KindSystem,
+			Content: summary,
+		})
+		m.estimatedTokens = msg.tokensAfter
+		m.scroll = 0
+		return m, nil
+
 	// Agent streaming events.
 	case textDeltaMsg:
 		if msg.runID != m.runID {
@@ -352,6 +467,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.messages = append(m.messages, toolMsg)
 		m.currentRunMessages = append(m.currentRunMessages, toolMsg)
+		m.activeToolName = msg.name
+		m.activeToolArgs = extractMainParam(msg.args)
 		m.scroll = 0
 		return m, nil
 
@@ -359,6 +476,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		m.activeToolName = ""
+		m.activeToolArgs = ""
 		m.finishLastTool(msg.callID, msg.name, msg.result, msg.errText)
 		if currentPlan, ok := deep.PlanFromToolState(msg.toolState); ok {
 			m.planState = plan.FromDeepPlan(currentPlan)
@@ -394,6 +513,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resetAskState()
 		m.busy = false
+		m.activeToolName = ""
+		m.activeToolArgs = ""
 		m.runCtx = nil
 		m.cancel = nil
 		m.agent = nil
@@ -437,12 +558,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		m.lastRunSummary = &summary
 
+		// Update estimated token count from conversation history.
+		if msg.messages != nil {
+			m.estimatedTokens = core.EstimateTokens(msg.messages)
+		}
+
 		// Show per-request usage summary.
 		elapsed := time.Since(m.startTime)
+
+		// Count file modifications from this run.
+		filesModified := countFilesModified(m.currentRunMessages)
+
 		usageParts := []string{
 			fmt.Sprintf("%d↓ %d↑", msg.usage.InputTokens, msg.usage.OutputTokens),
 			fmt.Sprintf("%d tools", msg.usage.ToolCalls),
 			formatDuration(elapsed),
+		}
+		if filesModified > 0 {
+			usageParts = append(usageParts, fmt.Sprintf("%d files changed", filesModified))
 		}
 		if cost := m.costTracker.TotalCost() - m.lastCost; cost > 0 {
 			if cost < 0.01 {
@@ -512,11 +645,25 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.input.Focus()
 		}
 
+	case "ctrl+l":
+		// Clear transcript (like terminal Ctrl+L).
+		if !m.busy {
+			m.clearSessionState()
+			return m, m.input.Focus()
+		}
+
 	case "shift+enter":
 		// Insert newline for multiline input.
 		m.input.InsertString("\n")
 		h := min(5, strings.Count(m.input.Value(), "\n")+2)
 		m.input.SetHeight(h)
+		return m, nil
+
+	case "tab":
+		text := m.input.Value()
+		if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") {
+			return m.completeSlashCommand(text)
+		}
 		return m, nil
 
 	case "enter":
@@ -627,6 +774,29 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
+		if text == "/team" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderTeamMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/context" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderContextMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		// Catch unknown slash commands.
+		if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") && !m.busy {
+			m.input.Reset()
+			m.messages = append(m.messages, &chat.Message{
+				Kind:    chat.KindError,
+				Content: fmt.Sprintf("Unknown command: %s. Try /help for available commands.", text),
+			})
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+
 		m.input.Reset()
 		m.input.SetHeight(1)
 		m.scroll = 0
@@ -693,12 +863,57 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "pgdown":
 		m.scroll = max(0, m.scroll-10)
+
+	case "home":
+		// Scroll to top.
+		m.scroll = 999999 // clamped in renderChat
+
+	case "end":
+		// Scroll to bottom.
+		m.scroll = 0
 	}
 
 	// Forward unhandled keys to the textarea.
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// slashCommands is the sorted list of available slash commands for tab completion.
+var slashCommands = []string{
+	"/clear", "/compact", "/config", "/context", "/cost", "/diff",
+	"/doctor", "/exit", "/help", "/invariants", "/model", "/plan",
+	"/quit", "/resume", "/runtime", "/skill", "/skills", "/team",
+	"/undo", "/verify",
+}
+
+func (m *Model) completeSlashCommand(text string) (tea.Model, tea.Cmd) {
+	prefix := strings.TrimSpace(text)
+
+	// If exact match to previous completion, cycle to next.
+	if len(m.tabMatches) > 0 && prefix == m.tabMatches[m.tabIdx] {
+		m.tabIdx = (m.tabIdx + 1) % len(m.tabMatches)
+		m.input.Reset()
+		m.input.InsertString(m.tabMatches[m.tabIdx])
+		return m, nil
+	}
+
+	// Build new match set.
+	var matches []string
+	for _, cmd := range slashCommands {
+		if strings.HasPrefix(cmd, prefix) {
+			matches = append(matches, cmd)
+		}
+	}
+	if len(matches) == 0 {
+		return m, nil
+	}
+
+	m.tabMatches = matches
+	m.tabIdx = 0
+	m.input.Reset()
+	m.input.InsertString(matches[0])
+	return m, nil
 }
 
 // drainPending returns and clears any queued user messages.
@@ -787,6 +1002,7 @@ func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cm
 	}
 
 	msg.runtime.Session = m.runtime.Session
+	msg.runtime.EventBus = m.teamEventBus
 	if msg.runtime.EffectiveTeamMode {
 		msg.runtime.AskUserFunc = makeAskUserFunc(msg.runID, m.askUserCh)
 	}
@@ -854,6 +1070,17 @@ func (m *Model) agentHooks() core.Hook {
 					errText = err.Error()
 				}
 				p.Send(toolResultMsg{runID: rid, callID: toolCallID, name: toolName, result: result, errText: errText, toolState: rc.ToolState()})
+			}
+		},
+		OnContextCompaction: func(_ context.Context, _ *core.RunContext, stats core.ContextCompactionStats) {
+			if p != nil {
+				p.Send(contextCompactedMsg{
+					strategy:     stats.Strategy,
+					msgsBefore:   stats.MessagesBefore,
+					msgsAfter:    stats.MessagesAfter,
+					tokensBefore: stats.EstimatedTokensBefore,
+					tokensAfter:  stats.EstimatedTokensAfter,
+				})
 			}
 		},
 	}
@@ -977,6 +1204,53 @@ func extractMainParam(argsJSON string) string {
 	return ""
 }
 
+// countFilesModified counts unique files changed by edit/write/multi_edit in a run.
+func countFilesModified(messages []*chat.Message) int {
+	seen := make(map[string]bool)
+	for _, msg := range messages {
+		if msg.Kind != chat.KindToolCall {
+			continue
+		}
+		switch msg.ToolName {
+		case "edit", "write":
+			if p := extractJSONField(msg.RawArgs, "file_path"); p != "" {
+				seen[p] = true
+			} else if p := extractJSONField(msg.RawArgs, "path"); p != "" {
+				seen[p] = true
+			}
+		case "multi_edit":
+			// multi_edit may have a top-level file_path or individual edits.
+			if p := extractJSONField(msg.RawArgs, "file_path"); p != "" {
+				seen[p] = true
+			}
+		}
+	}
+	return len(seen)
+}
+
+// extractJSONField extracts a string from a JSON object.
+func extractJSONField(jsonStr, field string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
+		return ""
+	}
+	if v, ok := m[field]; ok {
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
+}
+
+// contextBar renders a compact visual bar for context window usage.
+func contextBar(pct int) string {
+	const width = 8
+	filled := pct * width / 100
+	if filled > width {
+		filled = width
+	}
+	bar := strings.Repeat("▰", filled) + strings.Repeat("▱", width-filled)
+	return bar
+}
+
 func (m *Model) View() tea.View {
 	if m.sty == nil {
 		return tea.NewView("Loading...")
@@ -1036,11 +1310,10 @@ func (m *Model) View() tea.View {
 
 func (m *Model) renderHeader() string {
 	model := m.sty.Header.Model.Render(m.cfg.Model)
-	provider := m.sty.Header.Provider.Render(string(m.cfg.Provider))
-	sep := m.sty.Header.Separator.Render(" • ")
+	sep := m.sty.Header.Separator.Render(" · ")
 	dir := m.sty.Header.WorkingDir.Render(m.cfg.ShortDir())
 
-	header := fmt.Sprintf(" %s%s%s%s%s", model, sep, provider, sep, dir)
+	header := " " + model + sep + dir
 
 	// Show git branch in header if available.
 	if m.runtime.Git != nil {
@@ -1050,46 +1323,77 @@ func (m *Model) renderHeader() string {
 		}
 	}
 
+	// Show cost on the right side of the header if we have usage.
+	rightParts := ""
+	if cost := m.costTracker.TotalCost(); cost > 0 {
+		costStr := fmt.Sprintf("$%.2f", cost)
+		if cost < 0.01 {
+			costStr = fmt.Sprintf("$%.4f", cost)
+		}
+		rightParts = m.sty.Muted.Render(costStr+" ")
+	}
+
+	headerW := lipgloss.Width(header)
+	rightW := lipgloss.Width(rightParts)
+	gap := m.width - headerW - rightW
+	if gap < 1 {
+		gap = 1
+	}
+	fullHeader := header + strings.Repeat(" ", gap) + rightParts
+
 	line := m.sty.Subtle.Render(strings.Repeat(styles.Separator, m.width))
-	return header + "\n" + line
+	return fullHeader + "\n" + line
 }
 
 func (m *Model) renderChat(height, width int) string {
 	if len(m.messages) == 0 {
 		var lines []string
-		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  %s/%s", m.cfg.Provider, m.cfg.Model)))
+
+		// Context summary — compact key/value pairs.
+		var contextParts []string
 		if m.runtime.Git != nil && m.runtime.Git.IsRepo {
 			gitInfo := m.runtime.Git.BranchDisplay()
 			if m.runtime.Git.IsDirty {
-				gitInfo += " (dirty)"
+				gitInfo += "*"
 			}
-			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  git: %s", gitInfo)))
+			contextParts = append(contextParts, gitInfo)
 		}
 		if len(m.runtime.Instructions) > 0 {
 			names := make([]string, len(m.runtime.Instructions))
 			for i, f := range m.runtime.Instructions {
 				names[i] = filepath.Base(f.Path)
 			}
-			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  instructions: %s", strings.Join(names, ", "))))
+			contextParts = append(contextParts, strings.Join(names, ", "))
 		}
 		if len(m.runtime.MCPServers) > 0 {
-			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  mcp: %s", strings.Join(m.runtime.MCPServers, ", "))))
+			contextParts = append(contextParts, fmt.Sprintf("%d MCP servers", len(m.runtime.MCPServers)))
 		}
 		if m.runtime.MemoryStore != nil {
-			lines = append(lines, m.sty.Muted.Render("  memory: on"))
-		}
-		if m.cfg.PermissionMode != "" && m.cfg.PermissionMode != "auto" {
-			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  permissions: %s", m.cfg.PermissionMode)))
+			contextParts = append(contextParts, "memory")
 		}
 		if len(m.activeSkills) > 0 {
-			skillNames := make([]string, len(m.activeSkills))
-			for i, s := range m.activeSkills {
-				skillNames[i] = s.Name
-			}
-			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("  skills: %s", strings.Join(skillNames, ", "))))
+			contextParts = append(contextParts, fmt.Sprintf("%d skills", len(m.activeSkills)))
+		}
+		if m.cfg.PermissionMode != "" && m.cfg.PermissionMode != "auto" {
+			contextParts = append(contextParts, "approve: "+m.cfg.PermissionMode)
+		}
+
+		if len(contextParts) > 0 {
+			lines = append(lines, m.sty.Muted.Render("  "+strings.Join(contextParts, " · ")))
 		}
 		lines = append(lines, "")
-		lines = append(lines, m.sty.Muted.Render("  Ask anything, or try /help for commands."))
+
+		// Tips — show one or two helpful hints on the welcome screen.
+		tips := []string{
+			"Use /help for available commands",
+			"Press Esc to cancel a running agent",
+			"Use /compact to compress context when conversations get long",
+			"Use /diff to see what changes were made",
+			"Use /undo to revert changes if something goes wrong",
+		}
+		// Pick a stable tip based on terminal width (changes per session).
+		tipIdx := m.width % len(tips)
+		lines = append(lines, m.sty.Muted.Render("  "+tips[tipIdx]))
 		content := strings.Join(lines, "\n")
 		contentLines := strings.Count(content, "\n") + 1
 		padding := strings.Repeat("\n", max(0, height-contentLines-1))
@@ -1192,15 +1496,27 @@ func (m *Model) renderInputBusyOrIdle() string {
 	if m.busy {
 		elapsed := time.Since(m.startTime).Truncate(time.Second)
 		sp := m.spinner.View()
-		statusText := elapsed.String()
-		if queued := m.pendingCount(); queued > 0 {
-			statusText += " · " + strconv.Itoa(queued) + " queued"
+		var parts []string
+		if m.activeToolName != "" {
+			toolLabel := m.activeToolName
+			if m.activeToolArgs != "" {
+				arg := m.activeToolArgs
+				if len(arg) > 40 {
+					arg = arg[:37] + "..."
+				}
+				toolLabel += " " + arg
+			}
+			parts = append(parts, toolLabel)
 		}
-		status := m.sty.Muted.Render(fmt.Sprintf(" %s %s", sp, statusText))
-		prompt := m.sty.Input.Prompt.Render(" > ")
+		parts = append(parts, elapsed.String())
+		if queued := m.pendingCount(); queued > 0 {
+			parts = append(parts, strconv.Itoa(queued)+" queued")
+		}
+		status := m.sty.Muted.Render(fmt.Sprintf("  %s %s", sp, strings.Join(parts, " · ")))
+		prompt := m.sty.Input.Prompt.Render(" " + styles.PromptIcon + " ")
 		return status + "\n" + prompt + m.input.View()
 	}
-	prompt := m.sty.Input.Prompt.Render(" > ")
+	prompt := m.sty.Input.Prompt.Render(" " + styles.PromptIcon + " ")
 	return prompt + m.input.View()
 }
 
@@ -1315,19 +1631,39 @@ func (m *Model) renderStatusBar() string {
 		leftParts = append(leftParts, divider, scrolled)
 	}
 
-	// Session cumulative tokens + context window usage.
-	if m.sessionUsage.Requests > 0 {
-		sessionTokens := m.sty.StatusBar.Key.Render("session ") +
-			m.sty.StatusBar.Value.Render(fmt.Sprintf("%dk↓ %dk↑",
-				m.sessionUsage.InputTokens/1000, m.sessionUsage.OutputTokens/1000))
-		leftParts = append(leftParts, divider, sessionTokens)
-
-		if ctxWindow := modelContextWindow(m.cfg.Model); ctxWindow > 0 && m.usage.InputTokens > 0 {
-			pct := m.usage.InputTokens * 100 / ctxWindow
-			ctxLabel := fmt.Sprintf("%d%%", pct)
+	// Context window usage — use estimated tokens for real-time tracking.
+	if ctxWindow := modelContextWindow(m.cfg.Model); ctxWindow > 0 {
+		tokenCount := m.estimatedTokens
+		if tokenCount == 0 && m.usage.InputTokens > 0 {
+			tokenCount = m.usage.InputTokens
+		}
+		if tokenCount > 0 {
+			pct := tokenCount * 100 / ctxWindow
+			bar := contextBar(pct)
+			ctxLabel := fmt.Sprintf("%s %d%%", bar, pct)
 			ctxPart := m.sty.StatusBar.Key.Render("ctx ") +
 				m.sty.StatusBar.Value.Render(ctxLabel)
 			leftParts = append(leftParts, divider, ctxPart)
+		}
+	}
+
+	// Team status in status bar.
+	if session := m.runtime.Session; session != nil && session.Team != nil {
+		members := session.Team.Members()
+		running, idle := 0, 0
+		for _, mi := range members {
+			switch mi.State.String() {
+			case "running":
+				running++
+			case "idle":
+				idle++
+			}
+		}
+		if len(members) > 1 { // >1 because leader is always a member
+			teamLabel := fmt.Sprintf("%d↑ %d○", running, idle)
+			teamPart := m.sty.StatusBar.Key.Render("team ") +
+				m.sty.StatusBar.Value.Render(teamLabel)
+			leftParts = append(leftParts, divider, teamPart)
 		}
 	}
 
@@ -1336,13 +1672,9 @@ func (m *Model) renderStatusBar() string {
 		if cost < 0.01 {
 			costStr = fmt.Sprintf("$%.4f", cost)
 		}
-		costPart := m.sty.StatusBar.Key.Render("cost ") +
-			m.sty.StatusBar.Value.Render(costStr)
+		costPart := m.sty.StatusBar.Value.Render(costStr)
 		leftParts = append(leftParts, divider, costPart)
 	}
-
-	provider := m.sty.StatusBar.Provider.Render(string(m.cfg.Provider) + "/" + m.cfg.Model)
-	leftParts = append(leftParts, divider, provider)
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top, leftParts...)
 

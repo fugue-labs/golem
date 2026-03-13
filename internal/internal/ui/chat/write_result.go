@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
 
@@ -18,30 +19,31 @@ func renderWriteResult(content string, toolCall *Message, sty *styles.Styles, wi
 		return renderPlainResult(content, sty, width)
 	}
 
-	base := filepath.Base(args.Path)
-	lines := strings.Split(args.Content, "\n")
+	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
+	available := max(0, width-8)
+	codeLines := strings.Split(args.Content, "\n")
 	maxLines := 8
-	truncated := len(lines) > maxLines
+	truncated := len(codeLines) > maxLines
 	if truncated {
-		lines = lines[:maxLines]
+		codeLines = codeLines[:maxLines]
 	}
 
-	rendered := []string{
-		"  " + sty.Tool.DiffHeader.Render("+++ " + base),
+	var rendered []string
+	// Summary on first line with ⎿ prefix.
+	summary := content
+	if summary == "" {
+		summary = fmt.Sprintf("Created %s (%d lines)", filepath.Base(args.Path), len(strings.Split(args.Content, "\n")))
 	}
-	for _, line := range lines {
-		if len(line) > width-6 {
-			line = line[:width-6]
-		}
-		rendered = append(rendered, "  "+sty.Tool.DiffAdd.Render("+ "+line))
+	rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentLine.Render(summary))
+
+	for _, line := range codeLines {
+		line = ansi.Truncate(line, available, "...")
+		rendered = append(rendered, "    "+sty.Tool.DiffAdd.Render("+ "+line))
 	}
 	if truncated {
-		rendered = append(rendered, "  "+sty.Tool.Truncation.Render(
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
 			fmt.Sprintf("... (%d more lines)", len(strings.Split(args.Content, "\n"))-maxLines),
 		))
-	}
-	if content != "" {
-		rendered = append(rendered, "  "+sty.Tool.ContentLine.Render(content))
 	}
 	return strings.Join(rendered, "\n")
 }

@@ -31,13 +31,17 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/undo [path]` — revert one unstaged git-tracked file change\n")
 	b.WriteString("- `/doctor` — diagnose setup issues\n")
 	b.WriteString("- `/config` — show effective configuration\n")
+	b.WriteString("- `/team` — show team member status\n")
+	b.WriteString("- `/context` — show context window usage\n")
 	b.WriteString("- `/skills` — list detected skills\n")
 	b.WriteString("- `/skill <name>` — toggle a skill on or off\n")
 	b.WriteString("- `/quit` or `/exit` — quit the app\n\n")
 	b.WriteString("**Keys**\n\n")
 	b.WriteString("- `Enter` — send\n")
 	b.WriteString("- `Shift+Enter` — insert newline\n")
+	b.WriteString("- `Tab` — autocomplete slash commands\n")
 	b.WriteString("- `Esc` — cancel the active run\n")
+	b.WriteString("- `Ctrl+L` — clear transcript\n")
 	b.WriteString("- `↑/↓` — recall input history\n")
 	b.WriteString("- `PgUp/PgDn` — scroll the transcript\n")
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
@@ -447,6 +451,91 @@ func (m *Model) renderConfigMessage() *chat.Message {
 		}
 		fmt.Fprintf(&b, "- `%s`: `%s`\n", env, display)
 	}
+
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) renderTeamMessage() *chat.Message {
+	session := m.runtime.Session
+	if session == nil || session.Team == nil {
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: "No team active. Set `GOLEM_TEAM_MODE=auto` to enable team mode.",
+		}
+	}
+	members := session.Team.Members()
+	if len(members) <= 1 {
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: "Team mode enabled but no teammates spawned yet.",
+		}
+	}
+
+	running, idle, stopped := 0, 0, 0
+	for _, mi := range members {
+		switch mi.State.String() {
+		case "running":
+			running++
+		case "idle":
+			idle++
+		case "stopped":
+			stopped++
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Team** — %d running, %d idle, %d stopped\n\n", running, idle, stopped)
+	for _, mi := range members {
+		icon := "○"
+		switch mi.State.String() {
+		case "running":
+			icon = "◐"
+		case "idle":
+			icon = "✓"
+		case "stopped":
+			icon = "×"
+		case "starting":
+			icon = "●"
+		}
+		fmt.Fprintf(&b, "- %s `%s` — %s\n", icon, mi.Name, mi.State.String())
+	}
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) renderContextMessage() *chat.Message {
+	var b strings.Builder
+	b.WriteString("**Context window**\n\n")
+
+	ctxWindow := modelContextWindow(m.cfg.Model)
+	tokenCount := m.estimatedTokens
+	if tokenCount == 0 && m.usage.InputTokens > 0 {
+		tokenCount = m.usage.InputTokens
+	}
+
+	fmt.Fprintf(&b, "- Model: `%s`\n", m.cfg.Model)
+	if ctxWindow > 0 {
+		fmt.Fprintf(&b, "- Window: %dk tokens\n", ctxWindow/1000)
+	}
+	if tokenCount > 0 {
+		fmt.Fprintf(&b, "- Estimated usage: ~%dk tokens", tokenCount/1000)
+		if ctxWindow > 0 {
+			pct := tokenCount * 100 / ctxWindow
+			fmt.Fprintf(&b, " (%d%%)", pct)
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString("- Estimated usage: no data yet\n")
+	}
+
+	if m.cfg.AutoContextMaxTokens > 0 {
+		fmt.Fprintf(&b, "- Auto-compact: triggers at %dk tokens, keeps last %d turns\n",
+			m.cfg.AutoContextMaxTokens/1000, m.cfg.AutoContextKeepLastN)
+	} else {
+		b.WriteString("- Auto-compact: disabled\n")
+	}
+
+	fmt.Fprintf(&b, "- Messages: %d in transcript\n", len(m.messages))
+	fmt.Fprintf(&b, "- Requests: %d\n", m.sessionUsage.Requests)
 
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }

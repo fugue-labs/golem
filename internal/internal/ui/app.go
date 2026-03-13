@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,19 +28,24 @@ import (
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
 	"github.com/fugue-labs/gollem/ext/deep"
+	"github.com/fugue-labs/gollem/ext/team"
 )
 
 // modelPricing returns known model pricing for cost estimation.
 // Rates are cost-per-token (e.g., $3/1M input = 0.000003).
 func modelPricing() map[string]core.ModelPricing {
 	return map[string]core.ModelPricing{
-		// Anthropic
+		// Anthropic — Claude 4.x family
 		"claude-sonnet-4-20250514": {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
-		"claude-sonnet-4":         {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
-		"claude-opus-4-20250514":  {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
-		"claude-opus-4":          {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
-		"claude-haiku-3.5":       {InputTokenCost: 0.0000008, OutputTokenCost: 0.000004, CachedInputCost: 0.00000008, CacheWriteCost: 0.000001},
+		"claude-sonnet-4":          {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
+		"claude-sonnet-4-6":        {InputTokenCost: 0.000003, OutputTokenCost: 0.000015, CachedInputCost: 0.0000003, CacheWriteCost: 0.00000375},
+		"claude-opus-4-20250514":   {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
+		"claude-opus-4":            {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
+		"claude-opus-4-6":          {InputTokenCost: 0.000015, OutputTokenCost: 0.000075, CachedInputCost: 0.0000015, CacheWriteCost: 0.00001875},
+		"claude-haiku-4-5":         {InputTokenCost: 0.0000008, OutputTokenCost: 0.000004, CachedInputCost: 0.00000008, CacheWriteCost: 0.000001},
+		"claude-haiku-3.5":         {InputTokenCost: 0.0000008, OutputTokenCost: 0.000004, CachedInputCost: 0.00000008, CacheWriteCost: 0.000001},
 		// OpenAI
+		"gpt-5.4":               {InputTokenCost: 0.000002, OutputTokenCost: 0.000008},
 		"gpt-4o":                {InputTokenCost: 0.0000025, OutputTokenCost: 0.00001},
 		"gpt-4o-mini":           {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
 		"o3":                    {InputTokenCost: 0.00001, OutputTokenCost: 0.00004},
@@ -47,10 +53,39 @@ func modelPricing() map[string]core.ModelPricing {
 		// xAI
 		"grok-3":                {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
 		"grok-4-0709":           {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
+		"grok-code-fast-1":      {InputTokenCost: 0.000001, OutputTokenCost: 0.000005},
 		// Google
 		"gemini-2.5-pro":        {InputTokenCost: 0.00000125, OutputTokenCost: 0.00001},
 		"gemini-2.5-flash":      {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
 	}
+}
+
+// modelContextWindow returns the context window size (in tokens) for known models.
+func modelContextWindow(model string) int {
+	windows := map[string]int{
+		"claude-sonnet-4-20250514": 200000,
+		"claude-sonnet-4":          200000,
+		"claude-sonnet-4-6":        200000,
+		"claude-opus-4-20250514":   200000,
+		"claude-opus-4":            200000,
+		"claude-opus-4-6":          200000,
+		"claude-haiku-4-5":         200000,
+		"claude-haiku-3.5":         200000,
+		"gpt-5.4":                  200000,
+		"gpt-4o":                   128000,
+		"gpt-4o-mini":              128000,
+		"o3":                       200000,
+		"o4-mini":                  200000,
+		"grok-3":                   131072,
+		"grok-4-0709":              131072,
+		"grok-code-fast-1":         131072,
+		"gemini-2.5-pro":           1048576,
+		"gemini-2.5-flash":         1048576,
+	}
+	if w, ok := windows[model]; ok {
+		return w
+	}
+	return 200000 // default
 }
 
 // Agent event messages sent to the TUI via p.Send from the goroutine.
@@ -93,6 +128,16 @@ type (
 		afterCount  int
 		messages    []core.ModelMessage
 		err         error
+	}
+	contextCompactedMsg struct {
+		strategy     string
+		msgsBefore   int
+		msgsAfter    int
+		tokensBefore int
+		tokensAfter  int
+	}
+	teamEventMsg struct {
+		text string // pre-formatted event description
 	}
 	askUserRequest struct {
 		runID     int
@@ -154,9 +199,24 @@ type Model struct {
 	askRespCh    chan<- []codetool.AskUserAnswer
 	askDone      chan struct{}
 
+	// Input history for arrow-up recall.
+	inputHistory []string
+	historyIdx   int // -1 = current input, 0..N = browsing history
+
 	// Cost tracking across the session.
 	costTracker  *core.CostTracker
-	sessionUsage core.RunUsage // accumulated across all runs
+	sessionUsage core.RunUsage  // accumulated across all runs
+	lastCost     float64        // cost at end of previous run (for per-request delta)
+
+	// Context window tracking.
+	estimatedTokens int // estimated token count of current conversation
+
+	// Active tool tracking — shown in the spinner while busy.
+	activeToolName string
+	activeToolArgs string
+
+	// Team event bus for forwarding lifecycle events to chat.
+	teamEventBus *core.EventBus
 
 	// Tool approval state.
 	approvalCh     chan toolApprovalRequest
@@ -192,6 +252,8 @@ func New(cfg *config.Config) *Model {
 		approvalDone:   make(chan struct{}),
 		approvalAlways: make(map[string]bool),
 		costTracker:    core.NewCostTracker(modelPricing()),
+		teamEventBus:   core.NewEventBus(),
+		historyIdx:     -1,
 		allSkills:      allSkills,
 	}
 }
@@ -199,6 +261,46 @@ func New(cfg *config.Config) *Model {
 // SetProgram gives the model a reference to the tea.Program for sending async messages.
 func (m *Model) SetProgram(p *tea.Program) {
 	m.prog = p
+	m.subscribeTeamEvents()
+}
+
+// subscribeTeamEvents registers event bus handlers that forward team lifecycle
+// events to the BubbleTea message loop for display in the chat stream.
+func (m *Model) subscribeTeamEvents() {
+	bus := m.teamEventBus
+	p := m.prog
+	if bus == nil || p == nil {
+		return
+	}
+	core.Subscribe(bus, func(e team.TeammateSpawnedEvent) {
+		text := fmt.Sprintf("Spawned teammate %s", e.TeammateName)
+		if e.Task != "" {
+			task := e.Task
+			if len(task) > 80 {
+				task = task[:77] + "..."
+			}
+			text += ": " + task
+		}
+		p.Send(teamEventMsg{text: text})
+	})
+	core.Subscribe(bus, func(e team.TeammateTerminatedEvent) {
+		text := fmt.Sprintf("Teammate %s stopped", e.TeammateName)
+		if e.Reason != "" && e.Reason != "stopped" {
+			text += " (" + e.Reason + ")"
+		}
+		p.Send(teamEventMsg{text: text})
+	})
+	core.Subscribe(bus, func(e team.MessageSentEvent) {
+		text := fmt.Sprintf("%s → %s: %s", e.From, e.To, e.Summary)
+		p.Send(teamEventMsg{text: text})
+	})
+	core.Subscribe(bus, func(e team.TaskCompletedEvent) {
+		text := fmt.Sprintf("Task %s completed", e.TaskID)
+		if e.Owner != "" {
+			text += " by " + e.Owner
+		}
+		p.Send(teamEventMsg{text: text})
+	})
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -280,6 +382,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scroll = 0
 		return m, nil
 
+	case teamEventMsg:
+		m.messages = append(m.messages, &chat.Message{
+			Kind:    chat.KindSystem,
+			Content: msg.text,
+		})
+		m.scroll = 0
+		return m, nil
+
+	case contextCompactedMsg:
+		label := "Auto-compact"
+		if msg.strategy == core.CompactionStrategyEmergencyTruncation {
+			label = "Emergency truncation"
+		}
+		summary := fmt.Sprintf("%s: %d→%d messages, ~%dk→%dk tokens",
+			label, msg.msgsBefore, msg.msgsAfter,
+			msg.tokensBefore/1000, msg.tokensAfter/1000)
+		m.messages = append(m.messages, &chat.Message{
+			Kind:    chat.KindSystem,
+			Content: summary,
+		})
+		m.estimatedTokens = msg.tokensAfter
+		m.scroll = 0
+		return m, nil
+
 	// Agent streaming events.
 	case textDeltaMsg:
 		if msg.runID != m.runID {
@@ -302,15 +428,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		toolMsg := &chat.Message{
-			Kind:     chat.KindToolCall,
-			CallID:   msg.callID,
-			ToolName: msg.name,
-			ToolArgs: extractMainParam(msg.args),
-			RawArgs:  msg.rawArgs,
-			Status:   chat.ToolRunning,
+			Kind:      chat.KindToolCall,
+			CallID:    msg.callID,
+			ToolName:  msg.name,
+			ToolArgs:  extractMainParam(msg.args),
+			RawArgs:   msg.rawArgs,
+			Status:    chat.ToolRunning,
+			StartedAt: time.Now(),
 		}
 		m.messages = append(m.messages, toolMsg)
 		m.currentRunMessages = append(m.currentRunMessages, toolMsg)
+		m.activeToolName = msg.name
+		m.activeToolArgs = extractMainParam(msg.args)
 		m.scroll = 0
 		return m, nil
 
@@ -318,6 +447,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		m.activeToolName = ""
+		m.activeToolArgs = ""
 		m.finishLastTool(msg.callID, msg.name, msg.result, msg.errText)
 		if currentPlan, ok := deep.PlanFromToolState(msg.toolState); ok {
 			m.planState = plan.FromDeepPlan(currentPlan)
@@ -347,8 +478,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		// Ring terminal bell if the task took >5 seconds.
+		if time.Since(m.startTime) > 5*time.Second {
+			fmt.Print("\a")
+		}
 		m.resetAskState()
 		m.busy = false
+		m.activeToolName = ""
+		m.activeToolArgs = ""
 		m.runCtx = nil
 		m.cancel = nil
 		m.agent = nil
@@ -373,6 +510,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if currentVerify, ok := codetool.VerificationFromToolState(msg.toolState); ok {
 				m.verificationState = uiverification.FromToolState(currentVerify)
 			}
+			// Auto-save session after each successful run.
+			go func() {
+				_ = agent.SaveSession(m.cfg.WorkingDir, msg.messages, msg.toolState, m.sessionUsage, m.cfg.Model, string(m.cfg.Provider), m.lastPrompt)
+			}()
 		}
 		validation := config.ValidationResult{}
 		if m.cfg != nil {
@@ -387,6 +528,49 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.err,
 		)
 		m.lastRunSummary = &summary
+
+		// Update estimated token count from conversation history.
+		if msg.messages != nil {
+			m.estimatedTokens = core.EstimateTokens(msg.messages)
+		}
+
+		// Show per-request usage summary.
+		elapsed := time.Since(m.startTime)
+		usageParts := []string{
+			fmt.Sprintf("%d↓ %d↑", msg.usage.InputTokens, msg.usage.OutputTokens),
+			fmt.Sprintf("%d tools", msg.usage.ToolCalls),
+			formatDuration(elapsed),
+		}
+		if cost := m.costTracker.TotalCost() - m.lastCost; cost > 0 {
+			if cost < 0.01 {
+				usageParts = append(usageParts, fmt.Sprintf("$%.4f", cost))
+			} else {
+				usageParts = append(usageParts, fmt.Sprintf("$%.2f", cost))
+			}
+		}
+		m.lastCost = m.costTracker.TotalCost()
+		ctxPct := 0
+		if ctxWindow := modelContextWindow(m.cfg.Model); ctxWindow > 0 {
+			ctxPct = msg.usage.InputTokens * 100 / ctxWindow
+		}
+		if ctxPct > 0 {
+			usageParts = append(usageParts, fmt.Sprintf("ctx %d%%", ctxPct))
+		}
+		usageMsg := &chat.Message{
+			Kind:    chat.KindSystem,
+			Content: strings.Join(usageParts, " · "),
+		}
+		m.messages = append(m.messages, usageMsg)
+
+		// Warn when approaching context window limits.
+		if ctxPct >= 80 {
+			warnMsg := &chat.Message{
+				Kind:    chat.KindSystem,
+				Content: fmt.Sprintf("Context window %d%% full — consider running /compact", ctxPct),
+			}
+			m.messages = append(m.messages, warnMsg)
+		}
+
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	}
@@ -503,7 +687,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
-		if text == "/model" || strings.HasPrefix(text, "/model ") {
+		if text == "/resume" {
+			m.input.Reset()
+			msg := m.resumeSession()
+			m.messages = append(m.messages, msg)
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if strings.HasPrefix(text, "/model") {
 			m.input.Reset()
 			m.messages = append(m.messages, m.handleModelCommand(text))
 			m.scroll = 0
@@ -533,9 +724,25 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
+		if text == "/team" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderTeamMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
+		if text == "/context" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderContextMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
 		m.input.Reset()
 		m.input.SetHeight(1)
 		m.scroll = 0
+
+		// Push to input history for arrow-up recall.
+		m.inputHistory = append(m.inputHistory, text)
+		m.historyIdx = -1
 
 		userMsg := &chat.Message{
 			Kind:    chat.KindUser,
@@ -561,9 +768,31 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.prepareRun(text)
 
 	case "up":
+		// Recall input history when idle; scroll when busy.
+		if !m.busy && len(m.inputHistory) > 0 {
+			if m.historyIdx == -1 {
+				m.historyIdx = len(m.inputHistory) - 1
+			} else if m.historyIdx > 0 {
+				m.historyIdx--
+			}
+			m.input.Reset()
+			m.input.InsertString(m.inputHistory[m.historyIdx])
+			return m, nil
+		}
 		m.scroll++
 
 	case "down":
+		if !m.busy && m.historyIdx >= 0 {
+			if m.historyIdx < len(m.inputHistory)-1 {
+				m.historyIdx++
+				m.input.Reset()
+				m.input.InsertString(m.inputHistory[m.historyIdx])
+			} else {
+				m.historyIdx = -1
+				m.input.Reset()
+			}
+			return m, nil
+		}
 		if m.scroll > 0 {
 			m.scroll--
 		}
@@ -667,6 +896,7 @@ func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cm
 	}
 
 	msg.runtime.Session = m.runtime.Session
+	msg.runtime.EventBus = m.teamEventBus
 	if msg.runtime.EffectiveTeamMode {
 		msg.runtime.AskUserFunc = makeAskUserFunc(msg.runID, m.askUserCh)
 	}
@@ -734,6 +964,17 @@ func (m *Model) agentHooks() core.Hook {
 					errText = err.Error()
 				}
 				p.Send(toolResultMsg{runID: rid, callID: toolCallID, name: toolName, result: result, errText: errText, toolState: rc.ToolState()})
+			}
+		},
+		OnContextCompaction: func(_ context.Context, _ *core.RunContext, stats core.ContextCompactionStats) {
+			if p != nil {
+				p.Send(contextCompactedMsg{
+					strategy:     stats.Strategy,
+					msgsBefore:   stats.MessagesBefore,
+					msgsAfter:    stats.MessagesAfter,
+					tokensBefore: stats.EstimatedTokensBefore,
+					tokensAfter:  stats.EstimatedTokensAfter,
+				})
 			}
 		},
 	}
@@ -819,6 +1060,9 @@ func (m *Model) finishLastTool(callID, name, result, errText string) {
 			msg.Status = chat.ToolError
 		} else {
 			msg.Status = chat.ToolSuccess
+		}
+		if !msg.StartedAt.IsZero() {
+			msg.Duration = time.Since(msg.StartedAt)
 		}
 		// Store result content inline on the tool call message so
 		// it renders directly below its header.
@@ -913,11 +1157,10 @@ func (m *Model) View() tea.View {
 
 func (m *Model) renderHeader() string {
 	model := m.sty.Header.Model.Render(m.cfg.Model)
-	provider := m.sty.Header.Provider.Render(string(m.cfg.Provider))
-	sep := m.sty.Header.Separator.Render(" • ")
+	sep := m.sty.Header.Separator.Render(" · ")
 	dir := m.sty.Header.WorkingDir.Render(m.cfg.ShortDir())
 
-	header := fmt.Sprintf(" %s%s%s%s%s", model, sep, provider, sep, dir)
+	header := " " + model + sep + dir
 
 	// Show git branch in header if available.
 	if m.runtime.Git != nil {
@@ -933,9 +1176,46 @@ func (m *Model) renderHeader() string {
 
 func (m *Model) renderChat(height, width int) string {
 	if len(m.messages) == 0 {
-		greeting := m.sty.Muted.Render("  Ask anything, or try /help for commands.")
-		padding := strings.Repeat("\n", max(0, height-2))
-		return padding + greeting
+		var lines []string
+
+		// Context summary — compact key/value pairs.
+		var contextParts []string
+		if m.runtime.Git != nil && m.runtime.Git.IsRepo {
+			gitInfo := m.runtime.Git.BranchDisplay()
+			if m.runtime.Git.IsDirty {
+				gitInfo += "*"
+			}
+			contextParts = append(contextParts, gitInfo)
+		}
+		if len(m.runtime.Instructions) > 0 {
+			names := make([]string, len(m.runtime.Instructions))
+			for i, f := range m.runtime.Instructions {
+				names[i] = filepath.Base(f.Path)
+			}
+			contextParts = append(contextParts, strings.Join(names, ", "))
+		}
+		if len(m.runtime.MCPServers) > 0 {
+			contextParts = append(contextParts, fmt.Sprintf("%d MCP servers", len(m.runtime.MCPServers)))
+		}
+		if m.runtime.MemoryStore != nil {
+			contextParts = append(contextParts, "memory")
+		}
+		if len(m.activeSkills) > 0 {
+			contextParts = append(contextParts, fmt.Sprintf("%d skills", len(m.activeSkills)))
+		}
+		if m.cfg.PermissionMode != "" && m.cfg.PermissionMode != "auto" {
+			contextParts = append(contextParts, "approve: "+m.cfg.PermissionMode)
+		}
+
+		if len(contextParts) > 0 {
+			lines = append(lines, m.sty.Muted.Render("  "+strings.Join(contextParts, " · ")))
+		}
+		lines = append(lines, "")
+		lines = append(lines, m.sty.Muted.Render("  Ask anything, or try /help for commands."))
+		content := strings.Join(lines, "\n")
+		contentLines := strings.Count(content, "\n") + 1
+		padding := strings.Repeat("\n", max(0, height-contentLines-1))
+		return padding + content
 	}
 
 	// Phase 1: Compute line counts per message using cached renders.
@@ -1034,16 +1314,55 @@ func (m *Model) renderInputBusyOrIdle() string {
 	if m.busy {
 		elapsed := time.Since(m.startTime).Truncate(time.Second)
 		sp := m.spinner.View()
-		statusText := elapsed.String()
-		if queued := m.pendingCount(); queued > 0 {
-			statusText += " · " + strconv.Itoa(queued) + " queued"
+		var parts []string
+		if m.activeToolName != "" {
+			toolLabel := m.activeToolName
+			if m.activeToolArgs != "" {
+				arg := m.activeToolArgs
+				if len(arg) > 40 {
+					arg = arg[:37] + "..."
+				}
+				toolLabel += " " + arg
+			}
+			parts = append(parts, toolLabel)
 		}
-		status := m.sty.Muted.Render(fmt.Sprintf(" %s %s", sp, statusText))
-		prompt := m.sty.Input.Prompt.Render(" > ")
+		parts = append(parts, elapsed.String())
+		if queued := m.pendingCount(); queued > 0 {
+			parts = append(parts, strconv.Itoa(queued)+" queued")
+		}
+		status := m.sty.Muted.Render(fmt.Sprintf("  %s %s", sp, strings.Join(parts, " · ")))
+		prompt := m.sty.Input.Prompt.Render(" " + styles.PromptIcon + " ")
 		return status + "\n" + prompt + m.input.View()
 	}
-	prompt := m.sty.Input.Prompt.Render(" > ")
+	prompt := m.sty.Input.Prompt.Render(" " + styles.PromptIcon + " ")
 	return prompt + m.input.View()
+}
+
+func (m *Model) resumeSession() *chat.Message {
+	if m.busy {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot resume while agent is running."}
+	}
+	if len(m.history) > 0 {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Session already has history. Use `/clear` first to resume a previous session."}
+	}
+	session, err := agent.LoadLatestSession(m.cfg.WorkingDir)
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to load session: %v", err)}
+	}
+	if session == nil {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No previous session found for this project."}
+	}
+	msgs, err := session.RestoreMessages()
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to restore messages: %v", err)}
+	}
+	m.history = msgs
+	m.toolState = session.ToolState
+	m.sessionUsage = session.Usage
+	return &chat.Message{
+		Kind:    chat.KindAssistant,
+		Content: fmt.Sprintf("Resumed session from %s (%d messages, %d requests).", session.Timestamp.Format("Jan 2 15:04"), len(msgs), session.Usage.Requests),
+	}
 }
 
 func (m *Model) compactContext() tea.Cmd {
@@ -1130,18 +1449,49 @@ func (m *Model) renderStatusBar() string {
 		leftParts = append(leftParts, divider, scrolled)
 	}
 
+	// Context window usage — use estimated tokens for real-time tracking.
+	if ctxWindow := modelContextWindow(m.cfg.Model); ctxWindow > 0 {
+		tokenCount := m.estimatedTokens
+		if tokenCount == 0 && m.usage.InputTokens > 0 {
+			tokenCount = m.usage.InputTokens
+		}
+		if tokenCount > 0 {
+			pct := tokenCount * 100 / ctxWindow
+			ctxLabel := fmt.Sprintf("%d%% ~%dk", pct, tokenCount/1000)
+			ctxPart := m.sty.StatusBar.Key.Render("ctx ") +
+				m.sty.StatusBar.Value.Render(ctxLabel)
+			leftParts = append(leftParts, divider, ctxPart)
+		}
+	}
+
+	// Team status in status bar.
+	if session := m.runtime.Session; session != nil && session.Team != nil {
+		members := session.Team.Members()
+		running, idle := 0, 0
+		for _, mi := range members {
+			switch mi.State.String() {
+			case "running":
+				running++
+			case "idle":
+				idle++
+			}
+		}
+		if len(members) > 1 { // >1 because leader is always a member
+			teamLabel := fmt.Sprintf("%d↑ %d○", running, idle)
+			teamPart := m.sty.StatusBar.Key.Render("team ") +
+				m.sty.StatusBar.Value.Render(teamLabel)
+			leftParts = append(leftParts, divider, teamPart)
+		}
+	}
+
 	if cost := m.costTracker.TotalCost(); cost > 0 {
 		costStr := fmt.Sprintf("$%.2f", cost)
 		if cost < 0.01 {
 			costStr = fmt.Sprintf("$%.4f", cost)
 		}
-		costPart := m.sty.StatusBar.Key.Render("cost ") +
-			m.sty.StatusBar.Value.Render(costStr)
+		costPart := m.sty.StatusBar.Value.Render(costStr)
 		leftParts = append(leftParts, divider, costPart)
 	}
-
-	provider := m.sty.StatusBar.Provider.Render(string(m.cfg.Provider) + "/" + m.cfg.Model)
-	leftParts = append(leftParts, divider, provider)
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top, leftParts...)
 
@@ -1257,6 +1607,16 @@ func (m *Model) activateSkill(name string) *chat.Message {
 
 // isMutatingToolName returns true for tools that modify repo files.
 // Used to auto-mark verification entries stale in the UI.
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+
 func isMutatingToolName(name string) bool {
 	switch name {
 	case "edit", "multi_edit", "write":

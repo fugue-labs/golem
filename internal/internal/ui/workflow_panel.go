@@ -48,6 +48,14 @@ func (m *Model) cleanupSession() {
 	if session != nil {
 		session.Cleanup()
 	}
+	if m.runtime.MCPManager != nil {
+		m.runtime.MCPManager.Close()
+		m.runtime.MCPManager = nil
+	}
+	if closer, ok := m.runtime.MemoryStore.(interface{ Close() error }); ok {
+		closer.Close()
+		m.runtime.MemoryStore = nil
+	}
 }
 
 func (m *Model) pendingCount() int {
@@ -57,7 +65,14 @@ func (m *Model) pendingCount() int {
 }
 
 func (m *Model) hasWorkflowPanel() bool {
-	return m.planState.HasTasks() || m.invariantState.HasItems() || m.verificationState.HasEntries()
+	return m.planState.HasTasks() || m.invariantState.HasItems() || m.verificationState.HasEntries() || m.hasTeamMembers()
+}
+
+func (m *Model) hasTeamMembers() bool {
+	if session := m.runtime.Session; session != nil && session.Team != nil {
+		return len(session.Team.Members()) > 1 // >1 because leader is always a member
+	}
+	return false
 }
 
 func (m *Model) renderWorkflowPanel(height, width int) string {
@@ -89,6 +104,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	showPlan := m.planState.HasTasks()
 	showInv := m.invariantState.HasItems()
 	showVerify := m.verificationState.HasEntries()
+	showTeam := m.hasTeamMembers()
 	bodyBudget := max(1, height-2)
 
 	// Count how many sections we need to render.
@@ -102,6 +118,9 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	if showVerify {
 		sections++
 	}
+	if showTeam {
+		sections++
+	}
 
 	if sections == 0 {
 		body = append(body, m.sty.Muted.Render("No workflow state yet."))
@@ -113,7 +132,18 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 		perSection := max(1, bodyBudget/sections)
 		remainder := bodyBudget - perSection*sections
 
+		if showTeam {
+			budget := perSection
+			if remainder > 0 {
+				budget++
+				remainder--
+			}
+			body = append(body, m.renderTeamPanelLines(budget, contentWidth)...)
+		}
 		if showPlan {
+			if len(body) > 0 {
+				body = append(body, sep)
+			}
 			budget := perSection
 			if remainder > 0 {
 				budget++
@@ -164,6 +194,16 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 
 func workflowPanelSummary(m *Model) string {
 	var parts []string
+	if m.hasTeamMembers() {
+		members := m.runtime.Session.Team.Members()
+		running := 0
+		for _, mi := range members {
+			if mi.State.String() == "running" {
+				running++
+			}
+		}
+		parts = append(parts, fmt.Sprintf("team %d/%d", running, len(members)))
+	}
 	if completed, total := m.planState.Progress(); total > 0 {
 		parts = append(parts, fmt.Sprintf("plan %d/%d", completed, total))
 	}
@@ -174,6 +214,51 @@ func workflowPanelSummary(m *Model) string {
 		parts = append(parts, fmt.Sprintf("verify %d✓ %d✗ %d◐ %d*", pass, fail, inProgress, stale))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func (m *Model) renderTeamPanelLines(limit, width int) []string {
+	if limit <= 0 || !m.hasTeamMembers() {
+		return nil
+	}
+	members := m.runtime.Session.Team.Members()
+	running, idle, stopped := 0, 0, 0
+	for _, mi := range members {
+		switch mi.State.String() {
+		case "running":
+			running++
+		case "idle":
+			idle++
+		case "stopped":
+			stopped++
+		}
+	}
+	header := fmt.Sprintf("Team %d↑ %d○ %d×", running, idle, stopped)
+	lines := []string{m.sty.Panel.Progress.Render(header)}
+	if limit == 1 {
+		return lines
+	}
+	itemBudget := limit - 1
+	maxItems := min(itemBudget, len(members))
+	for i := range maxItems {
+		mi := members[i]
+		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
+		switch mi.State.String() {
+		case "running":
+			icon = m.sty.Panel.IconInProgress.Render(styles.InProgressIcon)
+		case "idle":
+			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+		case "stopped":
+			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
+		case "starting":
+			icon = m.sty.Panel.IconPending.Render(styles.PendingIcon)
+		}
+		label := ansi.Truncate(mi.Name+" ("+mi.State.String()+")", max(1, width-4), "...")
+		lines = append(lines, fmt.Sprintf(" %s %s", icon, m.sty.Panel.TaskText.Render(label)))
+	}
+	for len(lines) < limit {
+		lines = append(lines, "")
+	}
+	return lines[:limit]
 }
 
 func (m *Model) renderPlanPanelLines(limit, width int) []string {

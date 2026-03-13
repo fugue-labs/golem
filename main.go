@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/agent"
@@ -76,6 +77,14 @@ func run(args []string, out, errOut io.Writer) int {
 	}
 
 	m := ui.New(cfg)
+
+	// If remaining args after subcommand check, join as initial prompt.
+	// e.g. `golem fix the failing tests` → prompt="fix the failing tests"
+	if len(args) > 0 {
+		prompt := strings.Join(args, " ")
+		m.SetInitialPrompt(prompt)
+	}
+
 	p := tea.NewProgram(m)
 	m.SetProgram(p)
 	if _, err := p.Run(); err != nil {

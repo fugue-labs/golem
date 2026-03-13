@@ -122,14 +122,24 @@ func (m *Model) renderApproval() string {
 	var b strings.Builder
 	b.WriteString(m.sty.TagWarning.Render(" Tool approval required "))
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "  Tool: %s\n", m.sty.Bold.Render(m.approvalTool))
 
-	// Show a compact, readable summary of the args.
-	summary := formatApprovalArgs(m.approvalTool, m.approvalArgs, m.width-4)
-	if summary != "" {
-		b.WriteString("  ")
-		b.WriteString(summary)
-		b.WriteString("\n")
+	if m.approvalTool == "bash" {
+		// For bash, show the command prominently with $ prompt.
+		summary := formatApprovalArgs(m.approvalTool, m.approvalArgs, m.width-6)
+		if summary != "" {
+			b.WriteString("  ")
+			b.WriteString(m.sty.Bold.Render("$ "))
+			b.WriteString(summary)
+			b.WriteString("\n")
+		}
+	} else {
+		fmt.Fprintf(&b, "  Tool: %s\n", m.sty.Bold.Render(m.approvalTool))
+		summary := formatApprovalArgs(m.approvalTool, m.approvalArgs, m.width-4)
+		if summary != "" {
+			b.WriteString("  ")
+			b.WriteString(summary)
+			b.WriteString("\n")
+		}
 	}
 
 	b.WriteString("\n")

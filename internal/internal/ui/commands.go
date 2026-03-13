@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -32,6 +31,8 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/undo [path]` — revert one unstaged git-tracked file change\n")
 	b.WriteString("- `/doctor` — diagnose setup issues\n")
 	b.WriteString("- `/config` — show effective configuration\n")
+	b.WriteString("- `/team` — show team member status\n")
+	b.WriteString("- `/context` — show context window usage\n")
 	b.WriteString("- `/skills` — list detected skills\n")
 	b.WriteString("- `/skill <name>` — toggle a skill on or off\n")
 	b.WriteString("- `/quit` or `/exit` — quit the app\n\n")
@@ -247,51 +248,60 @@ func (m *Model) handleUndo(text string) *chat.Message {
 		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot undo while agent is running."}
 	}
 
-	pathArg := strings.TrimSpace(strings.TrimPrefix(text, "/undo"))
-	if pathArg == "" {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "Usage: `/undo <path>` reverts unstaged changes for one tracked file."}
-	}
-	if filepath.IsAbs(pathArg) {
-		return &chat.Message{Kind: chat.KindError, Content: "`/undo` requires a repo-relative path."}
-	}
-	cleanPath := filepath.Clean(pathArg)
-	if cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
-		return &chat.Message{Kind: chat.KindError, Content: "`/undo` only accepts paths inside the repository."}
+	// Parse optional file path: /undo [path]
+	arg := strings.TrimSpace(strings.TrimPrefix(text, "/undo"))
+
+	if arg != "" {
+		// Undo a specific file.
+		cmd := exec.Command("git", "diff", "--name-only", "--", arg)
+		cmd.Dir = dir
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git failed: %v", err)}
+		}
+		if strings.TrimSpace(out.String()) == "" {
+			return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("No unstaged changes in `%s`.", arg)}
+		}
+		cmd2 := exec.Command("git", "checkout", "--", arg)
+		cmd2.Dir = dir
+		var out2 bytes.Buffer
+		cmd2.Stdout = &out2
+		cmd2.Stderr = &out2
+		if err := cmd2.Run(); err != nil {
+			return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git checkout failed: %v\n%s", err, out2.String())}
+		}
+		return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("Reverted `%s` to last committed state.", arg)}
 	}
 
-	tracked := exec.Command("git", "ls-files", "--error-unmatch", "--", cleanPath)
-	tracked.Dir = dir
-	var trackedOut bytes.Buffer
-	tracked.Stdout = &trackedOut
-	tracked.Stderr = &trackedOut
-	if err := tracked.Run(); err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("%q is not a tracked file. Only tracked files can be undone.", cleanPath)}
-	}
-
-	cmd := exec.Command("git", "diff", "--name-only", "--", cleanPath)
+	// Undo all unstaged changes.
+	cmd := exec.Command("git", "diff", "--name-only")
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git diff failed: %v\n%s", err, out.String())}
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git failed: %v", err)}
 	}
-	if strings.TrimSpace(out.String()) == "" {
-		return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("No unstaged changes to undo for `%s`.", cleanPath)}
-	}
-
-	restore := exec.Command("git", "restore", "--worktree", "--", cleanPath)
-	restore.Dir = dir
-	var restoreOut bytes.Buffer
-	restore.Stdout = &restoreOut
-	restore.Stderr = &restoreOut
-	if err := restore.Run(); err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git restore failed: %v\n%s", err, restoreOut.String())}
+	files := strings.TrimSpace(out.String())
+	if files == "" {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No uncommitted changes to undo."}
 	}
 
+	cmd2 := exec.Command("git", "checkout", "--", ".")
+	cmd2.Dir = dir
+	var out2 bytes.Buffer
+	cmd2.Stdout = &out2
+	cmd2.Stderr = &out2
+	if err := cmd2.Run(); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("git checkout failed: %v\n%s", err, out2.String())}
+	}
+
+	count := len(strings.Split(files, "\n"))
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Reverted unstaged changes in `%s`.", cleanPath),
+		Content: fmt.Sprintf("Reverted %d file(s) to last committed state:\n```\n%s\n```", count, files),
 	}
 }
 
@@ -439,6 +449,91 @@ func (m *Model) renderConfigMessage() *chat.Message {
 		}
 		fmt.Fprintf(&b, "- `%s`: `%s`\n", env, display)
 	}
+
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) renderTeamMessage() *chat.Message {
+	session := m.runtime.Session
+	if session == nil || session.Team == nil {
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: "No team active. Set `GOLEM_TEAM_MODE=auto` to enable team mode.",
+		}
+	}
+	members := session.Team.Members()
+	if len(members) <= 1 {
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: "Team mode enabled but no teammates spawned yet.",
+		}
+	}
+
+	running, idle, stopped := 0, 0, 0
+	for _, mi := range members {
+		switch mi.State.String() {
+		case "running":
+			running++
+		case "idle":
+			idle++
+		case "stopped":
+			stopped++
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Team** — %d running, %d idle, %d stopped\n\n", running, idle, stopped)
+	for _, mi := range members {
+		icon := "○"
+		switch mi.State.String() {
+		case "running":
+			icon = "◐"
+		case "idle":
+			icon = "✓"
+		case "stopped":
+			icon = "×"
+		case "starting":
+			icon = "●"
+		}
+		fmt.Fprintf(&b, "- %s `%s` — %s\n", icon, mi.Name, mi.State.String())
+	}
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) renderContextMessage() *chat.Message {
+	var b strings.Builder
+	b.WriteString("**Context window**\n\n")
+
+	ctxWindow := modelContextWindow(m.cfg.Model)
+	tokenCount := m.estimatedTokens
+	if tokenCount == 0 && m.usage.InputTokens > 0 {
+		tokenCount = m.usage.InputTokens
+	}
+
+	fmt.Fprintf(&b, "- Model: `%s`\n", m.cfg.Model)
+	if ctxWindow > 0 {
+		fmt.Fprintf(&b, "- Window: %dk tokens\n", ctxWindow/1000)
+	}
+	if tokenCount > 0 {
+		fmt.Fprintf(&b, "- Estimated usage: ~%dk tokens", tokenCount/1000)
+		if ctxWindow > 0 {
+			pct := tokenCount * 100 / ctxWindow
+			fmt.Fprintf(&b, " (%d%%)", pct)
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString("- Estimated usage: no data yet\n")
+	}
+
+	if m.cfg.AutoContextMaxTokens > 0 {
+		fmt.Fprintf(&b, "- Auto-compact: triggers at %dk tokens, keeps last %d turns\n",
+			m.cfg.AutoContextMaxTokens/1000, m.cfg.AutoContextKeepLastN)
+	} else {
+		b.WriteString("- Auto-compact: disabled\n")
+	}
+
+	fmt.Fprintf(&b, "- Messages: %d in transcript\n", len(m.messages))
+	fmt.Fprintf(&b, "- Requests: %d\n", m.sessionUsage.Requests)
 
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }

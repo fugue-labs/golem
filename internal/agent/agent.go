@@ -88,6 +88,9 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 	}
 	if runtime.EffectiveTeamMode {
 		toolOpts = append(toolOpts, codetool.WithTeamMode())
+		if runtime.EventBus != nil {
+			toolOpts = append(toolOpts, codetool.WithTeamEventBus(runtime.EventBus))
+		}
 	}
 	if cfg.DisableGreedyThinkingPressure {
 		toolOpts = append(toolOpts, codetool.WithDisableGreedyThinkingPressure())

@@ -46,6 +46,11 @@ type RuntimeState struct {
 	// Session holds the persistent session handle for interactive TUIs.
 	// Call Session.Cleanup() when the session ends (e.g., /clear).
 	Session *codetool.Session
+
+	// EventBus publishes team lifecycle events to the TUI. When non-nil,
+	// it is passed to the codetool layer so team events (spawn, idle,
+	// terminated, messages) are observable by subscribers.
+	EventBus *core.EventBus
 }
 
 // InitialRuntimeState returns the baseline runtime state before an agent run is

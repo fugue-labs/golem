@@ -3,7 +3,6 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -116,16 +115,16 @@ func RenderMessage(msg *Message, sty *styles.Styles, width int, allMessages []*M
 }
 
 func renderUserMessage(msg *Message, sty *styles.Styles, width int) string {
-	label := sty.Chat.UserLabel.Render("You")
-	border := sty.Chat.UserBorder.Render(styles.BorderThick)
-	content := sty.Base.Width(width - 3).Render(msg.Content)
+	prompt := sty.Chat.UserLabel.Render(styles.PromptIcon)
+	content := sty.Base.Width(width - 4).Render(msg.Content)
+	lines := strings.Split(content, "\n")
 
-	var lines []string
-	lines = append(lines, border+" "+label)
-	for _, line := range strings.Split(content, "\n") {
-		lines = append(lines, border+" "+line)
+	var rendered []string
+	rendered = append(rendered, "  "+prompt+" "+lines[0])
+	for _, line := range lines[1:] {
+		rendered = append(rendered, "    "+line)
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(rendered, "\n")
 }
 
 func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string {
@@ -133,12 +132,11 @@ func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string 
 		return ""
 	}
 
-	rendered := common.RenderMarkdown(sty, msg.Content, width-3)
-	border := sty.Chat.AssistantBorder.Render(styles.BorderThick)
+	rendered := common.RenderMarkdown(sty, msg.Content, width-4)
 
 	var lines []string
 	for _, line := range strings.Split(rendered, "\n") {
-		lines = append(lines, border+" "+line)
+		lines = append(lines, "  "+line)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -209,8 +207,14 @@ func renderToolCallResult(msg *Message, sty *styles.Styles, width int) string {
 		return renderWriteResult(msg.Content, msg, sty, width)
 	case "bash":
 		return renderBashResult(msg.Content, sty, width)
+	case "multi_edit":
+		return renderMultiEditResult(msg.Content, msg, sty, width)
 	case "grep":
 		return renderGrepResult(msg.Content, sty, width)
+	case "glob":
+		return renderGlobResult(msg.Content, sty, width)
+	case "ls":
+		return renderLsResult(msg.Content, sty, width)
 	default:
 		return renderPlainResult(msg.Content, sty, width)
 	}
@@ -325,6 +329,7 @@ func renderViewResult(content string, toolCall *Message, sty *styles.Styles, wid
 	highlighted := common.SyntaxHighlight(codeBlock, fileName)
 	highlightedLines := strings.Split(highlighted, "\n")
 
+	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
 	var rendered []string
 	for i, hline := range highlightedLines {
 		num := ""
@@ -335,11 +340,15 @@ func renderViewResult(content string, toolCall *Message, sty *styles.Styles, wid
 		}
 		available := max(0, width-10)
 		hline = ansi.Truncate(hline, available, "")
-		rendered = append(rendered, "  "+num+hline)
+		if i == 0 {
+			rendered = append(rendered, "  "+prefix+" "+num+hline)
+		} else {
+			rendered = append(rendered, "    "+num+hline)
+		}
 	}
 
 	if truncated {
-		rendered = append(rendered, "  "+sty.Tool.Truncation.Render(
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
 			fmt.Sprintf("... (%d more lines)", len(strings.Split(content, "\n"))-maxLines),
 		))
 	}
@@ -349,7 +358,7 @@ func renderViewResult(content string, toolCall *Message, sty *styles.Styles, wid
 
 func renderBashResult(content string, sty *styles.Styles, width int) string {
 	content = strings.TrimRight(content, "\n")
-	prefix := sty.Tool.ResultPrefix.Render("⎿")
+	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
 	available := max(0, width-8)
 
 	// Empty or whitespace-only output.
@@ -358,19 +367,23 @@ func renderBashResult(content string, sty *styles.Styles, width int) string {
 	}
 
 	lines := strings.Split(content, "\n")
-	maxLines := 6
+	maxLines := 8
 	truncated := len(lines) > maxLines
 	if truncated {
 		lines = lines[len(lines)-maxLines:] // Show tail, not head
 	}
 
 	var rendered []string
-	for _, line := range lines {
+	for i, line := range lines {
 		line = ansi.Truncate(line, available, "...")
-		rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentCode.Render(line))
+		if i == 0 {
+			rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentCode.Render(line))
+		} else {
+			rendered = append(rendered, "    "+sty.Tool.ContentCode.Render(line))
+		}
 	}
 	if truncated {
-		rendered = append(rendered, "  "+prefix+" "+sty.Tool.Truncation.Render(
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
 			fmt.Sprintf("... (%d lines hidden)", len(strings.Split(content, "\n"))-maxLines),
 		))
 	}
@@ -434,17 +447,21 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 	// Strip common directory prefix to show relative paths.
 	commonDir := longestCommonDirPrefix(paths)
 
-	prefix := sty.Tool.ResultPrefix.Render("⎿")
+	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
 	var rendered []string
+	first := true
 	for _, gl := range parsed {
 		if gl.filePath == "" && gl.code == "" {
-			// Separator line — skip or render subtle.
 			continue
 		}
 		if gl.filePath == "" {
-			// Unparseable line.
 			available := max(0, width-8)
-			rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentCode.Render(
+			linePrefix := "    "
+			if first {
+				linePrefix = "  " + prefix + " "
+				first = false
+			}
+			rendered = append(rendered, linePrefix+sty.Tool.ContentCode.Render(
 				ansi.Truncate(gl.code, available, "..."),
 			))
 			continue
@@ -461,17 +478,22 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 		available := max(0, width-lipgloss.Width(loc)-8)
 		highlighted = ansi.Truncate(highlighted, available, "...")
 
-		rendered = append(rendered, "  "+prefix+" "+loc+" "+highlighted)
+		linePrefix := "    "
+		if first {
+			linePrefix = "  " + prefix + " "
+			first = false
+		}
+		rendered = append(rendered, linePrefix+loc+" "+highlighted)
 	}
 
 	if truncated {
 		total := len(strings.Split(strings.TrimRight(content, "\n"), "\n"))
-		rendered = append(rendered, "  "+prefix+" "+sty.Tool.Truncation.Render(
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
 			fmt.Sprintf("... (%d lines hidden)", total-maxLines),
 		))
 	}
 	if footer != "" {
-		rendered = append(rendered, "  "+prefix+" "+sty.Tool.Truncation.Render(footer))
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(footer))
 	}
 
 	return strings.Join(rendered, "\n")
@@ -546,6 +568,7 @@ func longestCommonDirPrefix(paths []string) string {
 func renderEditResult(content string, toolCall *Message, sty *styles.Styles, width int) string {
 	var args struct {
 		Path      string `json:"path"`
+		FilePath  string `json:"file_path"`
 		OldString string `json:"old_string"`
 		NewString string `json:"new_string"`
 	}
@@ -553,46 +576,195 @@ func renderEditResult(content string, toolCall *Message, sty *styles.Styles, wid
 		return renderPlainResult(content, sty, width)
 	}
 
+	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
+	available := max(0, width-8)
+
 	var rendered []string
 
-	// File header.
-	base := filepath.Base(args.Path)
-	rendered = append(rendered, "  "+sty.Tool.DiffHeader.Render("--- "+base))
-	rendered = append(rendered, "  "+sty.Tool.DiffHeader.Render("+++ "+base))
+	// Summary on first line with ⎿ prefix.
+	summary := content
+	if summary == "" {
+		path := args.Path
+		if path == "" {
+			path = args.FilePath
+		}
+		oldCount := len(strings.Split(args.OldString, "\n"))
+		newCount := len(strings.Split(args.NewString, "\n"))
+		summary = fmt.Sprintf("Edited %s (-%d +%d lines)", path, oldCount, newCount)
+	}
+	rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentLine.Render(summary))
 
 	// Removed lines.
 	oldLines := strings.Split(args.OldString, "\n")
-	maxDiffLines := 8
+	maxDiffLines := 4
 	for i, line := range oldLines {
 		if i >= maxDiffLines {
-			rendered = append(rendered, "  "+sty.Tool.Truncation.Render(
-				fmt.Sprintf("  ... (%d more removed)", len(oldLines)-maxDiffLines),
+			rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+				fmt.Sprintf("... (%d more removed)", len(oldLines)-maxDiffLines),
 			))
 			break
 		}
-		if len(line) > width-6 {
-			line = line[:width-6]
-		}
-		rendered = append(rendered, "  "+sty.Tool.DiffDel.Render("- "+line))
+		line = ansi.Truncate(line, available, "...")
+		rendered = append(rendered, "    "+sty.Tool.DiffDel.Render("- "+line))
 	}
 
 	// Added lines.
 	newLines := strings.Split(args.NewString, "\n")
 	for i, line := range newLines {
 		if i >= maxDiffLines {
-			rendered = append(rendered, "  "+sty.Tool.Truncation.Render(
-				fmt.Sprintf("  ... (%d more added)", len(newLines)-maxDiffLines),
+			rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+				fmt.Sprintf("... (%d more added)", len(newLines)-maxDiffLines),
 			))
 			break
 		}
-		if len(line) > width-6 {
-			line = line[:width-6]
-		}
-		rendered = append(rendered, "  "+sty.Tool.DiffAdd.Render("+ "+line))
+		line = ansi.Truncate(line, available, "...")
+		rendered = append(rendered, "    "+sty.Tool.DiffAdd.Render("+ "+line))
 	}
 
-	// Summary line from the tool result.
-	rendered = append(rendered, "  "+sty.Tool.ContentLine.Render(content))
+	return strings.Join(rendered, "\n")
+}
+
+func renderMultiEditResult(content string, toolCall *Message, sty *styles.Styles, width int) string {
+	type editEntry struct {
+		Path      string `json:"path"`
+		OldString string `json:"old_string"`
+		NewString string `json:"new_string"`
+	}
+	var args struct {
+		Edits []editEntry `json:"edits"`
+	}
+	if err := json.Unmarshal([]byte(toolCall.RawArgs), &args); err != nil || len(args.Edits) == 0 {
+		return renderPlainResult(content, sty, width)
+	}
+
+	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
+	available := max(0, width-8)
+
+	var rendered []string
+	// Summary with ⎿ prefix.
+	summary := content
+	if summary == "" {
+		summary = fmt.Sprintf("%d edits applied", len(args.Edits))
+	}
+	rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentLine.Render(summary))
+
+	// Show up to 3 edits with compact diffs.
+	maxEdits := min(3, len(args.Edits))
+	for i := range maxEdits {
+		e := args.Edits[i]
+		// File label.
+		rendered = append(rendered, "    "+sty.Tool.ParamKey.Render(e.Path))
+		// Show 2 removed + 2 added lines max per edit.
+		oldLines := strings.Split(e.OldString, "\n")
+		for j, line := range oldLines {
+			if j >= 2 {
+				rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+					fmt.Sprintf("  ... (%d more removed)", len(oldLines)-2)))
+				break
+			}
+			line = ansi.Truncate(line, available, "...")
+			rendered = append(rendered, "    "+sty.Tool.DiffDel.Render("- "+line))
+		}
+		newLines := strings.Split(e.NewString, "\n")
+		for j, line := range newLines {
+			if j >= 2 {
+				rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+					fmt.Sprintf("  ... (%d more added)", len(newLines)-2)))
+				break
+			}
+			line = ansi.Truncate(line, available, "...")
+			rendered = append(rendered, "    "+sty.Tool.DiffAdd.Render("+ "+line))
+		}
+	}
+	if len(args.Edits) > maxEdits {
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+			fmt.Sprintf("... +%d more edits", len(args.Edits)-maxEdits)))
+	}
+
+	return strings.Join(rendered, "\n")
+}
+
+// renderGlobResult renders glob results as a compact file list with directory grouping.
+func renderGlobResult(content string, sty *styles.Styles, width int) string {
+	content = strings.TrimRight(content, "\n")
+	if content == "(no matches)" {
+		prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
+		return "  " + prefix + " " + sty.Tool.Truncation.Render("(no matches)")
+	}
+
+	lines := strings.Split(content, "\n")
+	// Separate content from any truncation footer.
+	var files []string
+	var footer string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "... (") {
+			footer = line
+		} else {
+			files = append(files, line)
+		}
+	}
+
+	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
+	available := max(0, width-8)
+
+	// Show summary on first line.
+	summary := fmt.Sprintf("%d files", len(files))
+	if footer != "" {
+		summary += " (truncated)"
+	}
+	var rendered []string
+	rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentLine.Render(summary))
+
+	// Show files grouped by directory, max 12 lines.
+	maxLines := 12
+	shown := 0
+	for _, f := range files {
+		if shown >= maxLines {
+			break
+		}
+		f = ansi.Truncate(f, available, "...")
+		rendered = append(rendered, "    "+sty.Tool.ContentCode.Render(f))
+		shown++
+	}
+	remaining := len(files) - shown
+	if remaining > 0 {
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+			fmt.Sprintf("... +%d more files", remaining)))
+	}
+	if footer != "" {
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(footer))
+	}
+
+	return strings.Join(rendered, "\n")
+}
+
+// renderLsResult renders directory listing with clean formatting.
+func renderLsResult(content string, sty *styles.Styles, width int) string {
+	content = strings.TrimRight(content, "\n")
+	lines := strings.Split(content, "\n")
+	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
+	available := max(0, width-8)
+
+	maxLines := 15
+	truncated := len(lines) > maxLines+1 // +1 for header
+	if truncated {
+		lines = lines[:maxLines+1]
+	}
+
+	var rendered []string
+	for i, line := range lines {
+		line = ansi.Truncate(line, available, "...")
+		if i == 0 {
+			// First line is the directory path header.
+			rendered = append(rendered, "  "+prefix+" "+sty.Tool.ParamKey.Render(line))
+		} else {
+			rendered = append(rendered, "    "+sty.Tool.ContentCode.Render(line))
+		}
+	}
+	if truncated {
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
+			fmt.Sprintf("... (%d more entries)", len(strings.Split(content, "\n"))-maxLines-1)))
+	}
 
 	return strings.Join(rendered, "\n")
 }
@@ -607,17 +779,19 @@ func renderPlainResult(content string, sty *styles.Styles, width int) string {
 		lines = lines[:maxLines]
 	}
 
-	prefix := sty.Tool.ResultPrefix.Render("⎿")
+	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
 	var rendered []string
-	for _, line := range lines {
+	for i, line := range lines {
 		available := max(0, width-8)
-		if len(line) > available {
-			line = line[:available] + "..."
+		line = ansi.Truncate(line, available, "...")
+		if i == 0 {
+			rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentCode.Render(line))
+		} else {
+			rendered = append(rendered, "    "+sty.Tool.ContentCode.Render(line))
 		}
-		rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentCode.Render(line))
 	}
 	if truncated {
-		rendered = append(rendered, "  "+prefix+" "+sty.Tool.Truncation.Render(
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
 			fmt.Sprintf("... (%d lines hidden)", len(strings.Split(content, "\n"))-maxLines),
 		))
 	}
@@ -629,7 +803,7 @@ func renderThinking(msg *Message, sty *styles.Styles, width int) string {
 	content := msg.Content
 	words := len(strings.Fields(content))
 	lines := strings.Split(content, "\n")
-	maxLines := 8
+	maxLines := 4
 	truncated := false
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
@@ -643,20 +817,42 @@ func renderThinking(msg *Message, sty *styles.Styles, width int) string {
 		label = fmt.Sprintf("Thinking (%d words)", words)
 	}
 	if truncated {
-		label += " — showing last lines"
+		label += " ..."
 	}
-	footer := sty.Chat.ThinkingFooter.Render(label)
+	footer := sty.Chat.ThinkingFooter.Render("  " + label)
 	return rendered + "\n" + footer
 }
 
 func renderSystem(msg *Message, sty *styles.Styles, _ int) string {
-	return "  " + sty.Muted.Render(msg.Content)
+	sep := sty.Subtle.Render("─")
+	return "  " + sep + " " + sty.Muted.Render(msg.Content)
 }
 
 func renderError(msg *Message, sty *styles.Styles, width int) string {
 	tag := sty.Chat.ErrorTag.Render("ERROR")
-	title := sty.Chat.ErrorTitle.Render(msg.Content)
-	return fmt.Sprintf("  %s %s", tag, title)
+	content := msg.Content
+	lines := strings.Split(content, "\n")
+	available := max(0, width-12)
+
+	if len(lines) <= 1 {
+		title := ansi.Truncate(content, available, "...")
+		return fmt.Sprintf("  %s %s", tag, sty.Chat.ErrorTitle.Render(title))
+	}
+
+	// Multi-line errors: show first line as title, rest as detail.
+	var rendered []string
+	firstLine := ansi.Truncate(lines[0], available, "...")
+	rendered = append(rendered, fmt.Sprintf("  %s %s", tag, sty.Chat.ErrorTitle.Render(firstLine)))
+	maxDetail := 6
+	for i := 1; i < len(lines) && i <= maxDetail; i++ {
+		detail := ansi.Truncate(lines[i], available, "...")
+		rendered = append(rendered, "    "+sty.Muted.Render(detail))
+	}
+	if len(lines) > maxDetail+1 {
+		rendered = append(rendered, "    "+sty.Muted.Render(
+			fmt.Sprintf("... (%d more lines)", len(lines)-maxDetail-1)))
+	}
+	return strings.Join(rendered, "\n")
 }
 
 // extractJSONField extracts a string field from a JSON object.
