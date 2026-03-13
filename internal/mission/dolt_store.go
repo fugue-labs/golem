@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,30 @@ const (
 // DefaultDSN returns the default MySQL DSN for the mission Dolt store.
 func DefaultDSN() string {
 	return "root@tcp(" + DefaultDoltHost + ")/" + DefaultDoltDB + "?timeout=5s&readTimeout=10s&writeTimeout=10s"
+}
+
+// Environment variable names for DSN configuration.
+const (
+	EnvDoltDSN  = "GOLEM_DOLT_DSN"
+	EnvDoltHost = "GOLEM_DOLT_HOST"
+	EnvDoltDB   = "GOLEM_DOLT_DB"
+)
+
+// ResolveDSN returns the Dolt DSN, checking environment overrides first.
+// Precedence: GOLEM_DOLT_DSN > GOLEM_DOLT_HOST/GOLEM_DOLT_DB > defaults.
+func ResolveDSN() string {
+	if dsn := strings.TrimSpace(os.Getenv(EnvDoltDSN)); dsn != "" {
+		return dsn
+	}
+	host := strings.TrimSpace(os.Getenv(EnvDoltHost))
+	if host == "" {
+		host = DefaultDoltHost
+	}
+	db := strings.TrimSpace(os.Getenv(EnvDoltDB))
+	if db == "" {
+		db = DefaultDoltDB
+	}
+	return "root@tcp(" + host + ")/" + db + "?timeout=5s&readTimeout=10s&writeTimeout=10s"
 }
 
 // DoltStore implements Store backed by a Dolt database (MySQL-protocol).

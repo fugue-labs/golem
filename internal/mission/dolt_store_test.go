@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -308,5 +309,45 @@ func TestControllerApplyPlan(t *testing.T) {
 	}
 	if taskMap["t_test"].Status != TaskPending {
 		t.Errorf("t_test status = %s, want pending", taskMap["t_test"].Status)
+	}
+}
+
+func TestResolveDSN_Defaults(t *testing.T) {
+	dsn := ResolveDSN()
+	if !strings.Contains(dsn, DefaultDoltHost) {
+		t.Errorf("expected default host in DSN, got %s", dsn)
+	}
+	if !strings.Contains(dsn, DefaultDoltDB) {
+		t.Errorf("expected default db in DSN, got %s", dsn)
+	}
+}
+
+func TestResolveDSN_FullOverride(t *testing.T) {
+	t.Setenv("GOLEM_DOLT_DSN", "root@tcp(remote:3308)/custom_db")
+	dsn := ResolveDSN()
+	if dsn != "root@tcp(remote:3308)/custom_db" {
+		t.Errorf("expected full DSN override, got %s", dsn)
+	}
+}
+
+func TestResolveDSN_ComponentOverride(t *testing.T) {
+	t.Setenv("GOLEM_DOLT_HOST", "10.0.0.5:3309")
+	t.Setenv("GOLEM_DOLT_DB", "staging_missions")
+	dsn := ResolveDSN()
+	if !strings.Contains(dsn, "10.0.0.5:3309") {
+		t.Errorf("expected host override in DSN, got %s", dsn)
+	}
+	if !strings.Contains(dsn, "staging_missions") {
+		t.Errorf("expected db override in DSN, got %s", dsn)
+	}
+}
+
+func TestResolveDSN_FullOverrideTakesPrecedence(t *testing.T) {
+	t.Setenv("GOLEM_DOLT_DSN", "root@tcp(full:9999)/fulldb")
+	t.Setenv("GOLEM_DOLT_HOST", "ignored:1111")
+	t.Setenv("GOLEM_DOLT_DB", "ignored_db")
+	dsn := ResolveDSN()
+	if dsn != "root@tcp(full:9999)/fulldb" {
+		t.Errorf("full DSN should take precedence, got %s", dsn)
 	}
 }

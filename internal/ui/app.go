@@ -191,6 +191,10 @@ type Model struct {
 	approvalAlways map[string]bool // tools the user has permanently allowed this session
 
 
+	// Application-scoped context (cancelled on quit).
+	appCtx    context.Context
+	appCancel context.CancelFunc
+
 	// Mission orchestration state.
 	missionCtrl      *mission.Controller
 	activeMissionID  string
@@ -234,7 +238,11 @@ func New(cfg *config.Config) *Model {
 	}
 	ps.clarifyFirst = cfg.PaceClarifyFirst
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &Model{
+		appCtx:         ctx,
+		appCancel:      cancel,
 		cfg:            cfg,
 		runtime:        agent.InitialRuntimeState(cfg),
 		input:          ti,
@@ -607,7 +615,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, errMsg)
 			m.currentRunMessages = append(m.currentRunMessages, errMsg)
 		}
-		m.completeMissionPlanRun(msg.err)
+		m.completeMissionPlanRun(msg.err, msg.messages)
 		if msg.err == nil && msg.messages != nil {
 			m.history = msg.messages
 			m.toolState = msg.toolState

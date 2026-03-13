@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -24,7 +23,7 @@ func (m *Model) missionController() *mission.Controller {
 	}
 
 	// Initialize mission store on first use (connects to Dolt server).
-	store, err := mission.OpenDoltStore(mission.DefaultDSN())
+	store, err := mission.OpenDoltStore(mission.ResolveDSN())
 	if err != nil {
 		return nil
 	}
@@ -43,7 +42,7 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 		return nil
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	summary, err := ctrl.GetMissionSummary(ctx, m.activeMissionID)
 	if err != nil {
 		return []string{m.sty.Panel.Progress.Render("Mission: error")}
@@ -166,7 +165,7 @@ func (m *Model) missionPanelSummary() string {
 		return ""
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	summary, err := ctrl.GetMissionSummary(ctx, m.activeMissionID)
 	if err != nil {
 		return ""

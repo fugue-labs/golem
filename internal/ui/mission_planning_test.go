@@ -77,7 +77,7 @@ func TestCompleteMissionPlanRunAppliesPlanAndEnablesApproval(t *testing.T) {
 	m.missionPlanRun = &missionPlanRun{MissionID: created.ID, PreviousStatus: mission.MissionDraft}
 	m.currentRunMessages = []*chat.Message{{Kind: chat.KindAssistant, Content: validMissionPlanJSON()}}
 
-	m.completeMissionPlanRun(nil)
+	m.completeMissionPlanRun(nil, nil)
 
 	updated, err := ctrl.GetMission(ctx, created.ID)
 	if err != nil {
@@ -154,7 +154,7 @@ func TestCompleteMissionPlanRunRestoresDraftOnParseFailure(t *testing.T) {
 	m.missionPlanRun = &missionPlanRun{MissionID: created.ID, PreviousStatus: mission.MissionDraft}
 	m.currentRunMessages = []*chat.Message{{Kind: chat.KindAssistant, Content: "this is not valid plan json"}}
 
-	m.completeMissionPlanRun(nil)
+	m.completeMissionPlanRun(nil, nil)
 
 	updated, err := ctrl.GetMission(ctx, created.ID)
 	if err != nil {
@@ -216,7 +216,7 @@ func TestCompleteMissionPlanRunRestoresDraftOnApplyFailure(t *testing.T) {
 	m.missionPlanRun = &missionPlanRun{MissionID: created.ID, PreviousStatus: mission.MissionDraft}
 	m.currentRunMessages = []*chat.Message{{Kind: chat.KindAssistant, Content: validMissionPlanJSON()}}
 
-	m.completeMissionPlanRun(nil)
+	m.completeMissionPlanRun(nil, nil)
 
 	updated, err := ctrl.GetMission(ctx, created.ID)
 	if err != nil {

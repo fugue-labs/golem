@@ -8,6 +8,7 @@ import (
 
 	"github.com/fugue-labs/golem/internal/mission"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/gollem/core"
 )
 
 type missionPlanRun struct {
@@ -15,7 +16,7 @@ type missionPlanRun struct {
 	PreviousStatus mission.MissionStatus
 }
 
-func (m *Model) completeMissionPlanRun(runErr error) {
+func (m *Model) completeMissionPlanRun(runErr error, messages []core.ModelMessage) {
 	if m.missionPlanRun == nil {
 		return
 	}
@@ -28,7 +29,7 @@ func (m *Model) completeMissionPlanRun(runErr error) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	if runErr != nil {
 		m.restoreMissionPlanStatus(ctx, ctrl, planRun)
 		if errors.Is(runErr, context.Canceled) {
@@ -37,7 +38,13 @@ func (m *Model) completeMissionPlanRun(runErr error) {
 		return
 	}
 
-	assistantText := lastAssistantMessageContent(m.currentRunMessages)
+	assistantText := lastAssistantModelText(messages)
+	if assistantText == "" {
+		assistantText = lastAssistantMessageContent(m.currentRunMessages)
+	}
+	if assistantText == "" {
+		assistantText = lastAssistantMessageContent(m.messages)
+	}
 	if assistantText == "" {
 		m.restoreMissionPlanStatus(ctx, ctrl, planRun)
 		m.messages = append(m.messages, &chat.Message{Kind: chat.KindError, Content: "Mission planning completed without any assistant output to parse."})
@@ -75,6 +82,19 @@ func (m *Model) restoreMissionPlanStatus(ctx context.Context, ctrl *mission.Cont
 	ms.Status = planRun.PreviousStatus
 	ms.UpdatedAt = time.Now().UTC()
 	_ = ctrl.Store().UpdateMission(ctx, ms)
+}
+
+func lastAssistantModelText(messages []core.ModelMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		resp, ok := messages[i].(core.ModelResponse)
+		if !ok {
+			continue
+		}
+		if text := resp.TextContent(); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func lastAssistantMessageContent(messages []*chat.Message) string {

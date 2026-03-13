@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -83,7 +82,7 @@ func (m *Model) handleMissionNew(goal string) *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	title := goal
 	if len(title) > 80 {
 		title = title[:77] + "..."
@@ -124,7 +123,7 @@ func (m *Model) handleMissionStatus() *chat.Message {
 		return &chat.Message{Kind: chat.KindAssistant, Content: "No active mission. Use `/mission new <goal>` to create one."}
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	summary, err := ctrl.GetMissionSummary(ctx, m.activeMissionID)
 	if err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission status: %v", err)}
@@ -193,7 +192,7 @@ func (m *Model) handleMissionTasks() *chat.Message {
 		return &chat.Message{Kind: chat.KindAssistant, Content: "No active mission."}
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	tasks, err := ctrl.Store().ListTasks(ctx, m.activeMissionID)
 	if err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to list tasks: %v", err)}
@@ -259,7 +258,7 @@ func (m *Model) handleMissionPlan() (*chat.Message, tea.Cmd) {
 		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}, nil
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	ms, err := ctrl.GetMission(ctx, m.activeMissionID)
 	if err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission: %v", err)}, nil
@@ -320,7 +319,7 @@ func (m *Model) handleMissionApprove() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	if err := ctrl.StartMission(ctx, m.activeMissionID); err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to approve/start mission: %v", err)}
 	}
@@ -341,7 +340,7 @@ func (m *Model) handleMissionStart() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	ms, err := ctrl.GetMission(ctx, m.activeMissionID)
 	if err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission: %v", err)}
@@ -391,7 +390,7 @@ func (m *Model) handleMissionPause() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	if err := ctrl.PauseMission(ctx, m.activeMissionID); err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to pause mission: %v", err)}
 	}
@@ -409,7 +408,7 @@ func (m *Model) handleMissionCancel() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	if err := ctrl.CancelMission(ctx, m.activeMissionID); err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to cancel mission: %v", err)}
 	}
@@ -424,7 +423,7 @@ func (m *Model) handleMissionList() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
 	}
 
-	ctx := context.Background()
+	ctx := m.appCtx
 	missions, err := ctrl.Store().ListMissions(ctx)
 	if err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to list missions: %v", err)}

@@ -29,6 +29,9 @@ const (
 
 // Model is the Bubble Tea model for the mission dashboard.
 type Model struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	ctrl   *mission.Controller
 	sty    *styles.Styles
 	width  int
@@ -57,7 +60,10 @@ type Model struct {
 // If missionID is empty, displays the most recent active mission.
 func New(missionID string) *Model {
 	sty := styles.New(nil)
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Model{
+		ctx:       ctx,
+		cancel:    cancel,
 		missionID: missionID,
 		sty:       sty,
 	}
@@ -84,7 +90,7 @@ func (m *Model) initStore() tea.Cmd {
 		if m.ctrl != nil {
 			return m.doRefresh()
 		}
-		store, err := mission.OpenDoltStore(mission.DefaultDSN())
+		store, err := mission.OpenDoltStore(mission.ResolveDSN())
 		if err != nil {
 			return refreshDoneMsg{err: fmt.Errorf("open mission store: %w", err)}
 		}
@@ -98,7 +104,7 @@ func (m *Model) doRefresh() tea.Msg {
 		return refreshDoneMsg{err: fmt.Errorf("store not initialized")}
 	}
 
-	ctx := context.Background()
+	ctx := m.ctx
 
 	// If no specific mission, find the most recent active one.
 	if m.missionID == "" {
@@ -194,6 +200,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
+			m.cancel()
 			if m.ctrl != nil {
 				m.ctrl.Close()
 			}

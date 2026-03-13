@@ -43,6 +43,9 @@ func (m *Model) cancelActiveRun(asyncCleanup bool) {
 }
 
 func (m *Model) cleanupSession() {
+	if m.appCancel != nil {
+		m.appCancel()
+	}
 	session := m.runtime.Session
 	m.runtime.Session = nil
 	if session != nil {
