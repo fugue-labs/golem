@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/fugue-labs/golem/internal/agent"
@@ -32,6 +33,7 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/diff` — show git diff of uncommitted changes\n")
 	b.WriteString("- `/undo [path]` — revert one unstaged git-tracked file change\n")
 	b.WriteString("- `/mission [new|status|tasks|plan|approve|start|pause|cancel|list]` — mission orchestration\n")
+	b.WriteString("- `/rewind [N]` — rewind to turn N (or list checkpoints)\n")
 	b.WriteString("- `/doctor` — diagnose setup issues\n")
 	b.WriteString("- `/config` — show effective configuration\n")
 	b.WriteString("- `/team` — show team member status\n")
@@ -321,6 +323,64 @@ func (m *Model) handleUndo(text string) *chat.Message {
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
 		Content: fmt.Sprintf("Reverted %d file(s) to last committed state:\n```\n%s\n```", count, files),
+	}
+}
+
+func (m *Model) handleRewind(text string) *chat.Message {
+	if m.busy {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot rewind while agent is running."}
+	}
+
+	arg := strings.TrimSpace(strings.TrimPrefix(text, "/rewind"))
+
+	// No argument: list available checkpoints.
+	if arg == "" {
+		if m.checkpoints.Len() == 0 {
+			return &chat.Message{
+				Kind:    chat.KindAssistant,
+				Content: "No checkpoints yet. Checkpoints are created after each agent turn.",
+			}
+		}
+		var b strings.Builder
+		b.WriteString("**Checkpoints**\n\n")
+		for _, summary := range m.checkpoints.List() {
+			fmt.Fprintf(&b, "- %s\n", summary)
+		}
+		b.WriteString("\nUse `/rewind N` to restore turn N.")
+		return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+	}
+
+	// Parse turn number.
+	turn, err := strconv.Atoi(arg)
+	if err != nil {
+		return &chat.Message{
+			Kind:    chat.KindError,
+			Content: fmt.Sprintf("Invalid turn number: %q. Use `/rewind` to list checkpoints.", arg),
+		}
+	}
+
+	cp, err := m.checkpoints.RewindTo(turn)
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Rewind failed: %v", err)}
+	}
+
+	// Restore all session state from the checkpoint.
+	m.history = cp.History
+	m.toolState = cp.ToolState
+	m.planState = cp.PlanState
+	m.invariantState = cp.InvariantState
+	m.verificationState = cp.VerificationState
+	m.sessionUsage = cp.SessionUsage
+	m.lastCost = cp.LastCost
+	m.turnCount = cp.Turn
+	m.lastPrompt = cp.Prompt
+
+	// Restore messages to the checkpoint state, then append a rewind confirmation.
+	m.messages = cp.Messages
+
+	return &chat.Message{
+		Kind:    chat.KindAssistant,
+		Content: fmt.Sprintf("Rewound to turn %d. Conversation, tool state, plan, invariants, verification, and files restored.", turn),
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/fugue-labs/golem/internal/mission"
 	"github.com/fugue-labs/golem/internal/skills"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/golem/internal/ui/checkpoint"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
 	"github.com/fugue-labs/golem/internal/ui/styles"
@@ -230,6 +231,10 @@ type Model struct {
 	tabMatches []string // current set of matching commands
 	tabIdx     int      // current index in tabMatches
 
+	// Checkpoint/rewind state — captures full session snapshots after each agent turn.
+	checkpoints *checkpoint.Store
+	turnCount   int // increments with each successful agent completion
+
 	// Tool approval state.
 	approvalCh     chan toolApprovalRequest
 	approvalDone   chan struct{}
@@ -273,6 +278,7 @@ func New(cfg *config.Config) *Model {
 		approvalAlways: make(map[string]bool),
 		costTracker:    core.NewCostTracker(modelPricing()),
 		teamEventBus:   core.NewEventBus(),
+		checkpoints:    checkpoint.NewStore(cfg.WorkingDir),
 		historyIdx:     -1,
 		allSkills:      allSkills,
 	}
@@ -583,6 +589,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go func() {
 				_ = agent.SaveSession(m.cfg.WorkingDir, msg.messages, msg.toolState, m.sessionUsage, m.cfg.Model, string(m.cfg.Provider), m.lastPrompt)
 			}()
+
+			// Create a checkpoint capturing the full session state at this turn.
+			m.turnCount++
+			m.checkpoints.Save(checkpoint.Checkpoint{
+				Turn:              m.turnCount,
+				Prompt:            m.lastPrompt,
+				History:           msg.messages,
+				Messages:          m.messages,
+				ToolState:         msg.toolState,
+				PlanState:         m.planState,
+				InvariantState:    m.invariantState,
+				VerificationState: m.verificationState,
+				SessionUsage:      m.sessionUsage,
+				LastCost:          m.lastCost,
+			})
 		}
 		validation := config.ValidationResult{}
 		if m.cfg != nil {
@@ -808,6 +829,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
+		if text == "/rewind" || strings.HasPrefix(text, "/rewind ") {
+			m.input.Reset()
+			m.messages = append(m.messages, m.handleRewind(text))
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
 		if text == "/doctor" {
 			m.input.Reset()
 			m.messages = append(m.messages, m.renderDoctorMessage())
@@ -935,7 +962,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 var slashCommands = []string{
 	"/clear", "/compact", "/config", "/context", "/cost", "/diff",
 	"/doctor", "/exit", "/help", "/invariants", "/mission", "/model",
-	"/plan", "/quit", "/resume", "/runtime", "/search", "/skill", "/skills",
+	"/plan", "/quit", "/resume", "/rewind", "/runtime", "/search", "/skill", "/skills",
 	"/team", "/undo", "/verify",
 }
 
@@ -1004,6 +1031,8 @@ func (m *Model) clearSessionState() {
 	m.lastPrompt = ""
 	m.lastRunSummary = nil
 	m.currentRunMessages = nil
+	m.checkpoints.Clear()
+	m.turnCount = 0
 	m.pendingMu.Lock()
 	m.pendingMsgs = nil
 	m.pendingMu.Unlock()
