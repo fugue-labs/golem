@@ -297,7 +297,53 @@ func (m *Model) handleMissionApprove() *chat.Message {
 }
 
 func (m *Model) handleMissionStart() *chat.Message {
-	return m.handleMissionApprove() // Same as approve for now.
+	if m.activeMissionID == "" {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No active mission. Use `/mission new <goal>` to create one."}
+	}
+
+	ctrl := m.missionController()
+	if ctrl == nil {
+		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
+	}
+
+	ctx := context.Background()
+	ms, err := ctrl.GetMission(ctx, m.activeMissionID)
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission: %v", err)}
+	}
+
+	switch ms.Status {
+	case mission.MissionDraft:
+		return &chat.Message{
+			Kind: chat.KindAssistant,
+			Content: fmt.Sprintf("Mission `%s` is in **draft** state.\n\n"+
+				"To start a mission, follow these steps:\n"+
+				"1. `/mission plan` — generate a task DAG\n"+
+				"2. `/mission approve` — approve the plan and start execution\n\n"+
+				"Run `/mission plan` to continue.",
+				ms.ID),
+		}
+	case mission.MissionPlanning:
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: fmt.Sprintf("Mission `%s` is still being **planned**. Wait for planning to complete, then run `/mission approve`.", ms.ID),
+		}
+	case mission.MissionRunning:
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: fmt.Sprintf("Mission `%s` is already **running**.", ms.ID),
+		}
+	}
+
+	// For awaiting_approval or paused, proceed with start.
+	if err := ctrl.StartMission(ctx, m.activeMissionID); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to start mission: %v", err)}
+	}
+
+	return &chat.Message{
+		Kind:    chat.KindAssistant,
+		Content: fmt.Sprintf("Mission `%s` started.", m.activeMissionID),
+	}
 }
 
 func (m *Model) handleMissionPause() *chat.Message {
