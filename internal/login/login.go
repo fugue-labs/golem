@@ -33,7 +33,11 @@ var supportedProviders = []struct {
 
 // SavedConfig stores the user's provider preference from `golem login`.
 type SavedConfig struct {
-	Provider string `json:"provider"` // chatgpt, anthropic, openai, xai
+	Provider       string  `json:"provider"`                  // chatgpt, anthropic, openai, xai
+	SessionBudget  float64 `json:"session_budget,omitempty"`  // per-session cost limit in USD (0 = unlimited)
+	ProjectBudget  float64 `json:"project_budget,omitempty"`  // per-project cost limit in USD (0 = unlimited)
+	BudgetWarnPct  float64 `json:"budget_warn_pct,omitempty"` // warning threshold as fraction (default 0.8)
+	FallbackModel  string  `json:"fallback_model,omitempty"`  // explicit fallback model override
 }
 
 // Run executes the login flow for the given provider name.

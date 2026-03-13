@@ -61,6 +61,12 @@ type Config struct {
 	AutoContextMaxTokens int
 	AutoContextKeepLastN int
 
+	// Budget limits (USD). Zero means unlimited.
+	SessionBudget float64 // per-session cost cap
+	ProjectBudget float64 // per-project cost cap (persisted across sessions)
+	BudgetWarnPct float64 // fraction at which to warn (default 0.8)
+	FallbackModel string  // explicit model to downgrade to (empty = auto-select)
+
 	// ChatGPT subscription auth (populated from ~/.golem/auth.json).
 	ChatGPTCreds *openaiauth.Credentials // nil when not using ChatGPT auth
 
@@ -202,6 +208,43 @@ func Load() (*Config, error) {
 	cfg.DisableGreedyThinkingPressure = isTruthyEnv("GOLEM_DISABLE_GREEDY_THINKING_PRESSURE")
 	cfg.PermissionMode = permissionModeEnvOr("GOLEM_PERMISSION_MODE", "suggest")
 
+	// --- Budget configuration (env vars override config.json) ---
+	if sc := login.LoadConfig(); sc != nil {
+		if sc.SessionBudget > 0 {
+			cfg.SessionBudget = sc.SessionBudget
+		}
+		if sc.ProjectBudget > 0 {
+			cfg.ProjectBudget = sc.ProjectBudget
+		}
+		if sc.BudgetWarnPct > 0 {
+			cfg.BudgetWarnPct = sc.BudgetWarnPct
+		}
+		if sc.FallbackModel != "" {
+			cfg.FallbackModel = sc.FallbackModel
+		}
+	}
+	if v, err := floatEnvOr("GOLEM_SESSION_BUDGET", cfg.SessionBudget); err != nil {
+		return nil, err
+	} else {
+		cfg.SessionBudget = v
+	}
+	if v, err := floatEnvOr("GOLEM_PROJECT_BUDGET", cfg.ProjectBudget); err != nil {
+		return nil, err
+	} else {
+		cfg.ProjectBudget = v
+	}
+	if v, err := floatEnvOr("GOLEM_BUDGET_WARN_PCT", cfg.BudgetWarnPct); err != nil {
+		return nil, err
+	} else {
+		cfg.BudgetWarnPct = v
+	}
+	if cfg.BudgetWarnPct <= 0 {
+		cfg.BudgetWarnPct = 0.8
+	}
+	if v := envOr("GOLEM_FALLBACK_MODEL", cfg.FallbackModel); v != "" {
+		cfg.FallbackModel = v
+	}
+
 	return cfg, nil
 }
 
@@ -303,6 +346,45 @@ func (c *Config) AuthStatus() (string, string) {
 	}
 }
 
+// EffectiveBudget returns the tightest budget limit (session or project), or 0 if unlimited.
+func (c *Config) EffectiveBudget() float64 {
+	switch {
+	case c.SessionBudget > 0 && c.ProjectBudget > 0:
+		if c.SessionBudget < c.ProjectBudget {
+			return c.SessionBudget
+		}
+		return c.ProjectBudget
+	case c.SessionBudget > 0:
+		return c.SessionBudget
+	case c.ProjectBudget > 0:
+		return c.ProjectBudget
+	default:
+		return 0
+	}
+}
+
+// CheaperModel returns a cheaper model for the given provider, or empty string if already cheapest.
+// The hierarchy is ordered from most to least expensive.
+func CheaperModel(provider Provider, currentModel string) string {
+	hierarchies := map[Provider][]string{
+		ProviderAnthropic:       {"claude-opus-4-20250514", "claude-sonnet-4-20250514", "claude-haiku-4-5"},
+		ProviderOpenAI:          {"o3", "gpt-5.4", "gpt-4o", "gpt-4o-mini"},
+		ProviderOpenAICompatible: {"grok-3", "grok-4-0709", "grok-code-fast-1"},
+		ProviderVertexAI:        {"gemini-2.5-pro", "gemini-2.5-flash"},
+		ProviderVertexAnthropic: {"claude-opus-4", "claude-sonnet-4-5", "claude-haiku-4-5"},
+	}
+	hierarchy, ok := hierarchies[provider]
+	if !ok {
+		return ""
+	}
+	for i, model := range hierarchy {
+		if model == currentModel && i+1 < len(hierarchy) {
+			return hierarchy[i+1]
+		}
+	}
+	return ""
+}
+
 func detectProvider(savedKeys map[string]string) (Provider, ProviderSource) {
 	// Check env vars.
 	switch {
@@ -369,6 +451,18 @@ func durationEnvOr(key string, fallback time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid %s duration %q: %w", key, v, err)
 	}
 	return d, nil
+}
+
+func floatEnvOr(key string, fallback float64) (float64, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s float %q: %w", key, v, err)
+	}
+	return f, nil
 }
 
 func intEnvOr(key string, fallback int) (int, error) {

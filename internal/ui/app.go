@@ -210,9 +210,12 @@ type Model struct {
 	historyIdx   int // -1 = current input, 0..N = browsing history
 
 	// Cost tracking across the session.
-	costTracker  *core.CostTracker
-	sessionUsage core.RunUsage  // accumulated across all runs
-	lastCost     float64        // cost at end of previous run (for per-request delta)
+	costTracker   *core.CostTracker
+	sessionUsage  core.RunUsage // accumulated across all runs
+	lastCost      float64       // cost at end of previous run (for per-request delta)
+	originalModel string        // model before any budget-driven downgrade
+	downgraded    bool          // true if model was auto-downgraded for budget
+	budgetWarned  bool          // true if budget warning was already shown
 
 	// Context window tracking.
 	estimatedTokens int // estimated token count of current conversation
@@ -717,6 +720,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, warnMsg)
 		}
 
+		// Post-run budget check: warn or downgrade for next run.
+		if budget := m.cfg.EffectiveBudget(); budget > 0 {
+			cost := m.costTracker.TotalCost()
+			pct := cost / budget
+			if pct >= m.cfg.BudgetWarnPct && !m.budgetWarned {
+				m.budgetWarned = true
+				remaining := budget - cost
+				if remaining < 0 {
+					remaining = 0
+				}
+				m.messages = append(m.messages, &chat.Message{
+					Kind:    chat.KindSystem,
+					Content: fmt.Sprintf("Budget warning: %.0f%% used ($%.4f of $%.2f) — $%.4f remaining. Model may downgrade on next run.", pct*100, cost, budget, remaining),
+				})
+			}
+		}
+
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 	}
@@ -851,6 +871,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
+		if text == "/budget" {
+			m.input.Reset()
+			m.messages = append(m.messages, m.renderBudgetMessage())
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
 		if text == "/resume" {
 			m.input.Reset()
 			msg := m.resumeSession()
@@ -961,6 +987,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Check budget and potentially downgrade model before starting.
+		if budgetMsgs := m.checkBudgetAndDowngrade(); len(budgetMsgs) > 0 {
+			m.messages = append(m.messages, budgetMsgs...)
+		}
+
 		m.busy = true
 		m.startTime = time.Now()
 		m.lastPrompt = text
@@ -1025,7 +1056,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // slashCommands is the sorted list of available slash commands for tab completion.
 var slashCommands = []string{
-	"/clear", "/compact", "/config", "/context", "/cost", "/diff",
+	"/budget", "/clear", "/compact", "/config", "/context", "/cost", "/diff",
 	"/doctor", "/exit", "/help", "/invariants", "/mission", "/model",
 	"/plan", "/quit", "/replay", "/resume", "/rewind", "/runtime",
 	"/search", "/skill", "/skills", "/team", "/undo", "/verify",
@@ -1101,6 +1132,13 @@ func (m *Model) clearSessionState() {
 	m.pendingMu.Lock()
 	m.pendingMsgs = nil
 	m.pendingMu.Unlock()
+	// Restore original model if it was downgraded.
+	if m.downgraded && m.originalModel != "" {
+		m.cfg.Model = m.originalModel
+	}
+	m.originalModel = ""
+	m.downgraded = false
+	m.budgetWarned = false
 }
 
 // steeringMiddleware injects queued user messages before each model turn.
@@ -1127,6 +1165,79 @@ func (m *Model) steeringMiddleware() core.AgentMiddleware {
 		}
 		return next(ctx, messages, settings, params)
 	}
+}
+
+// checkBudgetAndDowngrade checks whether the session is approaching the budget
+// cap and, if so, auto-downgrades to a cheaper model. It returns system messages
+// to display (warnings or downgrade notices). Call before each run.
+func (m *Model) checkBudgetAndDowngrade() []*chat.Message {
+	budget := m.cfg.EffectiveBudget()
+	if budget <= 0 {
+		return nil
+	}
+
+	cost := m.costTracker.TotalCost()
+	pct := cost / budget
+	var msgs []*chat.Message
+
+	// Warning threshold.
+	if pct >= m.cfg.BudgetWarnPct && !m.budgetWarned {
+		m.budgetWarned = true
+		remaining := budget - cost
+		msgs = append(msgs, &chat.Message{
+			Kind:    chat.KindSystem,
+			Content: fmt.Sprintf("Budget warning: %.0f%% used ($%.4f of $%.2f) — $%.4f remaining", pct*100, cost, budget, remaining),
+		})
+	}
+
+	// Downgrade threshold (90% of budget).
+	if pct >= 0.9 {
+		var target string
+		if m.cfg.FallbackModel != "" {
+			// Use explicit fallback if configured and not already using it.
+			if m.cfg.Model != m.cfg.FallbackModel {
+				target = m.cfg.FallbackModel
+			}
+		} else {
+			target = config.CheaperModel(m.cfg.Provider, m.cfg.Model)
+		}
+
+		if target != "" {
+			if m.originalModel == "" {
+				m.originalModel = m.cfg.Model
+			}
+			old := m.cfg.Model
+			m.cfg.Model = target
+			m.downgraded = true
+			msgs = append(msgs, &chat.Message{
+				Kind:    chat.KindSystem,
+				Content: fmt.Sprintf("Budget cap approaching — downgraded from %s to %s for cost savings", old, target),
+			})
+		}
+	}
+
+	return msgs
+}
+
+// projectedCostRate returns the estimated cost per hour based on session usage so far.
+func (m *Model) projectedCostRate() float64 {
+	cost := m.costTracker.TotalCost()
+	if cost <= 0 || m.sessionUsage.Requests == 0 {
+		return 0
+	}
+	elapsed := time.Since(m.startTime)
+	if m.sessionUsage.Requests > 1 {
+		// Use the total session duration rather than just the latest run.
+		elapsed = time.Since(m.startTime) // approximation; we only have latest run start
+	}
+	if elapsed <= 0 {
+		return 0
+	}
+	hours := elapsed.Hours()
+	if hours < 0.001 { // less than ~4 seconds
+		return 0
+	}
+	return cost / hours
 }
 
 func (m *Model) prepareRun(prompt string) tea.Cmd {
@@ -1829,8 +1940,26 @@ func (m *Model) renderStatusBar() string {
 		if cost < 0.01 {
 			costStr = fmt.Sprintf("$%.4f", cost)
 		}
-		costPart := m.sty.StatusBar.Value.Render(costStr)
-		leftParts = append(leftParts, divider, costPart)
+		// Show budget remaining if configured.
+		if budget := m.cfg.EffectiveBudget(); budget > 0 {
+			remaining := budget - cost
+			if remaining < 0 {
+				remaining = 0
+			}
+			costStr += fmt.Sprintf("/$%.2f", budget)
+			costPart := m.sty.StatusBar.Value.Render(costStr)
+			leftParts = append(leftParts, divider, costPart)
+		} else {
+			costPart := m.sty.StatusBar.Value.Render(costStr)
+			leftParts = append(leftParts, divider, costPart)
+		}
+	}
+
+	// Show downgrade indicator when model was auto-downgraded.
+	if m.downgraded && m.originalModel != "" {
+		downgrade := m.sty.StatusBar.Key.Render("downgraded ") +
+			m.sty.StatusBar.Value.Render(m.originalModel+" → "+m.cfg.Model)
+		leftParts = append(leftParts, divider, downgrade)
 	}
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top, leftParts...)

@@ -28,6 +28,7 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/compact` — compress conversation context\n")
 	b.WriteString("- `/cost` — show session cost breakdown\n")
 	b.WriteString("- `/replay [file|list]` — replay a recorded session trace\n")
+	b.WriteString("- `/budget` — show budget status and limits\n")
 	b.WriteString("- `/resume` — restore the last saved session\n")
 	b.WriteString("- `/search <query>` — search across all saved sessions\n")
 	b.WriteString("- `/model [name]` — show or switch the active model\n")
@@ -163,6 +164,84 @@ func (m *Model) renderCostSummaryMessage() *chat.Message {
 	}
 
 	fmt.Fprintf(&b, "**Total: $%.4f**\n", total)
+
+	// Budget summary if configured.
+	if budget := m.cfg.EffectiveBudget(); budget > 0 {
+		remaining := budget - total
+		if remaining < 0 {
+			remaining = 0
+		}
+		pct := total / budget * 100
+		fmt.Fprintf(&b, "\n**Budget: $%.2f** — %.1f%% used, $%.4f remaining\n", budget, pct, remaining)
+		if m.downgraded && m.originalModel != "" {
+			fmt.Fprintf(&b, "Model downgraded: `%s` → `%s`\n", m.originalModel, m.cfg.Model)
+		}
+	}
+
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) renderBudgetMessage() *chat.Message {
+	var b strings.Builder
+	b.WriteString("**Budget status**\n\n")
+
+	cost := m.costTracker.TotalCost()
+	sessionBudget := m.cfg.SessionBudget
+	projectBudget := m.cfg.ProjectBudget
+	effectiveBudget := m.cfg.EffectiveBudget()
+
+	fmt.Fprintf(&b, "- Current cost: $%.4f\n", cost)
+
+	if sessionBudget > 0 {
+		pct := cost / sessionBudget * 100
+		fmt.Fprintf(&b, "- Session budget: $%.2f (%.1f%% used)\n", sessionBudget, pct)
+	} else {
+		b.WriteString("- Session budget: unlimited\n")
+	}
+
+	if projectBudget > 0 {
+		pct := cost / projectBudget * 100
+		fmt.Fprintf(&b, "- Project budget: $%.2f (%.1f%% used)\n", projectBudget, pct)
+	} else {
+		b.WriteString("- Project budget: unlimited\n")
+	}
+
+	if effectiveBudget > 0 {
+		remaining := effectiveBudget - cost
+		if remaining < 0 {
+			remaining = 0
+		}
+		fmt.Fprintf(&b, "- Remaining: $%.4f\n", remaining)
+		fmt.Fprintf(&b, "- Warning threshold: %.0f%%\n", m.cfg.BudgetWarnPct*100)
+	}
+
+	fmt.Fprintf(&b, "- Current model: `%s`\n", m.cfg.Model)
+	if m.downgraded && m.originalModel != "" {
+		fmt.Fprintf(&b, "- Original model: `%s` (downgraded for budget)\n", m.originalModel)
+	}
+
+	if fallback := config.CheaperModel(m.cfg.Provider, m.cfg.Model); fallback != "" {
+		fmt.Fprintf(&b, "- Next fallback: `%s`\n", fallback)
+	} else if !m.downgraded {
+		b.WriteString("- Next fallback: none (already cheapest)\n")
+	}
+
+	if m.cfg.FallbackModel != "" {
+		fmt.Fprintf(&b, "- Configured fallback: `%s`\n", m.cfg.FallbackModel)
+	}
+
+	b.WriteString("\n**Configuration**\n\n")
+	b.WriteString("Set in `~/.golem/config.json`:\n")
+	b.WriteString("```json\n")
+	b.WriteString("{\n")
+	b.WriteString("  \"session_budget\": 1.00,\n")
+	b.WriteString("  \"project_budget\": 10.00,\n")
+	b.WriteString("  \"budget_warn_pct\": 0.8,\n")
+	b.WriteString("  \"fallback_model\": \"claude-haiku-4-5\"\n")
+	b.WriteString("}\n")
+	b.WriteString("```\n\n")
+	b.WriteString("Or via env vars: `GOLEM_SESSION_BUDGET`, `GOLEM_PROJECT_BUDGET`, `GOLEM_BUDGET_WARN_PCT`, `GOLEM_FALLBACK_MODEL`\n")
+
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
 
@@ -559,12 +638,21 @@ func (m *Model) renderConfigMessage() *chat.Message {
 	if cfg.AutoContextMaxTokens > 0 {
 		fmt.Fprintf(&b, "- Auto-context: `%d` tokens, keep last `%d` turns\n", cfg.AutoContextMaxTokens, cfg.AutoContextKeepLastN)
 	}
+	if cfg.SessionBudget > 0 {
+		fmt.Fprintf(&b, "- Session budget: `$%.2f`\n", cfg.SessionBudget)
+	}
+	if cfg.ProjectBudget > 0 {
+		fmt.Fprintf(&b, "- Project budget: `$%.2f`\n", cfg.ProjectBudget)
+	}
+	if cfg.FallbackModel != "" {
+		fmt.Fprintf(&b, "- Fallback model: `%s`\n", cfg.FallbackModel)
+	}
 	fmt.Fprintf(&b, "- Top-level personality: `%t`\n", cfg.TopLevelPersonality)
 	fmt.Fprintf(&b, "- Disable delegate: `%t`\n", cfg.DisableDelegate)
 	fmt.Fprintf(&b, "- Disable code mode: `%t`\n", cfg.DisableCodeMode)
 
 	b.WriteString("\n**Environment**\n\n")
-	envVars := []string{"GOLEM_PROVIDER", "GOLEM_MODEL", "GOLEM_API_KEY", "GOLEM_TIMEOUT", "GOLEM_TEAM_MODE", "GOLEM_PERMISSION_MODE", "GOLEM_MCP_SERVERS"}
+	envVars := []string{"GOLEM_PROVIDER", "GOLEM_MODEL", "GOLEM_API_KEY", "GOLEM_TIMEOUT", "GOLEM_TEAM_MODE", "GOLEM_PERMISSION_MODE", "GOLEM_MCP_SERVERS", "GOLEM_SESSION_BUDGET", "GOLEM_PROJECT_BUDGET", "GOLEM_FALLBACK_MODEL"}
 	for _, env := range envVars {
 		val := os.Getenv(env)
 		if val == "" {
