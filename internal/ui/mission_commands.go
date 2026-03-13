@@ -3,8 +3,13 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/mission"
 	"github.com/fugue-labs/golem/internal/ui/chat"
 )
@@ -242,37 +247,229 @@ func taskStatusIcon(s mission.TaskStatus) string {
 }
 
 func (m *Model) handleMissionPlan() *chat.Message {
+	// This is a fallback for the old dispatch path; real work is in handleMissionPlanRun.
+	return &chat.Message{Kind: chat.KindAssistant, Content: "Use `/mission plan` to invoke the planner."}
+}
+
+// handleMissionPlanRun validates the goal, gathers codebase context, and
+// triggers the agent to produce a streaming task DAG.
+func (m *Model) handleMissionPlanRun() (tea.Model, tea.Cmd) {
 	if m.activeMissionID == "" {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No active mission. Use `/mission new <goal>` first."}
+		m.messages = append(m.messages, &chat.Message{
+			Kind: chat.KindAssistant, Content: "No active mission. Use `/mission new <goal>` first.",
+		})
+		m.scroll = 0
+		return m, m.input.Focus()
+	}
+	if m.busy {
+		m.messages = append(m.messages, &chat.Message{
+			Kind: chat.KindAssistant, Content: "Cannot plan while the agent is running.",
+		})
+		m.scroll = 0
+		return m, m.input.Focus()
 	}
 
 	ctrl := m.missionController()
 	if ctrl == nil {
-		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindError, Content: "Mission store not available."})
+		m.scroll = 0
+		return m, m.input.Focus()
 	}
 
 	ctx := context.Background()
 	ms, err := ctrl.GetMission(ctx, m.activeMissionID)
 	if err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission: %v", err)}
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission: %v", err)})
+		m.scroll = 0
+		return m, m.input.Focus()
 	}
 
-	// Queue a planning prompt for the agent.
-	planPrompt := fmt.Sprintf(
-		"You are planning a mission. The user's goal is:\n\n%s\n\n"+
-			"Analyze the codebase and create a task DAG for this mission. "+
-			"For each task, specify: ID, title, kind (code/test/docs/investigation), "+
-			"objective, priority (higher=more important), writable scope (file paths), "+
-			"acceptance criteria, estimated effort, and risk level.\n"+
-			"Also specify task dependencies (which tasks depend on which).\n\n"+
-			"Respond with a structured plan that can be reviewed before execution begins.",
-		ms.Goal,
-	)
-
-	return &chat.Message{
-		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Planning mission `%s`...\n\nSending goal to agent for task decomposition:\n> %s", ms.ID, planPrompt),
+	// (1) Reject vague goals.
+	if isVagueGoal(ms.Goal) {
+		m.messages = append(m.messages, &chat.Message{
+			Kind: chat.KindAssistant,
+			Content: fmt.Sprintf("The mission goal is too vague to plan:\n> %s\n\n"+
+				"Please update the mission with a specific, actionable goal. For example:\n"+
+				"- \"Add pagination to the /api/users endpoint\"\n"+
+				"- \"Refactor the auth middleware to support OAuth2\"\n"+
+				"- \"Fix the race condition in the worker pool shutdown\"\n\n"+
+				"Use `/mission new <specific goal>` to create a new mission with a clearer goal.", ms.Goal),
+		})
+		m.scroll = 0
+		return m, m.input.Focus()
 	}
+
+	// (2) Gather codebase context.
+	codebaseCtx := gatherCodebaseContext(m.cfg.WorkingDir, m.runtime.Git)
+
+	// (3) Build enriched planning prompt.
+	prompt := buildPlanPrompt(ms, codebaseCtx)
+
+	// (4) Trigger agent execution — same pattern as /spec.
+	userMsg := &chat.Message{Kind: chat.KindUser, Content: "/mission plan"}
+	m.messages = append(m.messages, userMsg)
+	m.messages = append(m.messages, &chat.Message{
+		Kind:    chat.KindSystem,
+		Content: fmt.Sprintf("Planning mission `%s`: %s", ms.ID, ms.Goal),
+	})
+	m.inputHistory = append(m.inputHistory, "/mission plan")
+	m.busy = true
+	m.startTime = time.Now()
+	m.lastPrompt = prompt
+	m.currentRunMessages = []*chat.Message{userMsg}
+	m.runID++
+	m.hookRID.Store(int64(m.runID))
+	m.runCtx, m.cancel = context.WithCancel(context.Background())
+	m.scroll = 0
+	return m, m.prepareRun(prompt)
+}
+
+// isVagueGoal returns true if the goal is too short or generic to plan against.
+func isVagueGoal(goal string) bool {
+	g := strings.TrimSpace(goal)
+	if len(g) < 10 {
+		return true
+	}
+	// Reject common non-actionable phrases.
+	lower := strings.ToLower(g)
+	vaguePhrases := []string{
+		"do it", "let's do it", "let's go", "make it work",
+		"fix it", "just do it", "go ahead", "start", "begin",
+		"help me", "do something", "do the thing",
+	}
+	for _, vp := range vaguePhrases {
+		if lower == vp {
+			return true
+		}
+	}
+	return false
+}
+
+// gatherCodebaseContext collects directory structure, key files, and git info
+// for injection into the planning prompt.
+func gatherCodebaseContext(workDir string, gitInfo *agent.GitInfo) string {
+	var b strings.Builder
+
+	// Git context.
+	if gitInfo != nil && gitInfo.IsRepo {
+		b.WriteString(agent.FormatGitContext(gitInfo))
+		b.WriteString("\n\n")
+	}
+
+	// Directory structure (top 2 levels, skip hidden/vendor dirs).
+	if workDir != "" {
+		b.WriteString("# Directory Structure\n\n")
+		b.WriteString("```\n")
+		b.WriteString(scanDirectoryTree(workDir, 2))
+		b.WriteString("```\n\n")
+
+		// Key files — look for common entry points and config files.
+		keyFiles := findKeyFiles(workDir)
+		if len(keyFiles) > 0 {
+			b.WriteString("# Key Files\n\n")
+			for _, f := range keyFiles {
+				fmt.Fprintf(&b, "- `%s`\n", f)
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	return b.String()
+}
+
+// scanDirectoryTree returns a textual directory tree up to maxDepth levels.
+func scanDirectoryTree(root string, maxDepth int) string {
+	var b strings.Builder
+	walkDir(root, root, 0, maxDepth, &b)
+	return b.String()
+}
+
+func walkDir(root, dir string, depth, maxDepth int, b *strings.Builder) {
+	if depth > maxDepth {
+		return
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	skipDirs := map[string]bool{
+		".git": true, "node_modules": true, "vendor": true,
+		".next": true, "__pycache__": true, ".cache": true,
+		"dist": true, "build": true, ".idea": true, ".vscode": true,
+	}
+
+	indent := strings.Repeat("  ", depth)
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") && depth == 0 && name != ".github" {
+			continue
+		}
+		if e.IsDir() {
+			if skipDirs[name] {
+				continue
+			}
+			fmt.Fprintf(b, "%s%s/\n", indent, name)
+			walkDir(root, filepath.Join(dir, name), depth+1, maxDepth, b)
+		} else if depth < maxDepth {
+			fmt.Fprintf(b, "%s%s\n", indent, name)
+		}
+	}
+}
+
+// findKeyFiles identifies important files in the project root.
+func findKeyFiles(root string) []string {
+	candidates := []string{
+		"go.mod", "go.sum", "package.json", "Cargo.toml", "pyproject.toml",
+		"Makefile", "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+		"README.md", "CLAUDE.md", "GOLEM.md",
+		"main.go", "cmd/main.go",
+	}
+	var found []string
+	for _, c := range candidates {
+		p := filepath.Join(root, c)
+		if _, err := os.Stat(p); err == nil {
+			found = append(found, c)
+		}
+	}
+	return found
+}
+
+func buildPlanPrompt(ms *mission.Mission, codebaseCtx string) string {
+	var b strings.Builder
+
+	b.WriteString("# Mission Planning\n\n")
+	b.WriteString("You are planning a mission for this codebase. Your job is to analyze the goal,\n")
+	b.WriteString("understand the codebase, and produce a detailed task DAG.\n\n")
+
+	b.WriteString("## Mission Goal\n\n")
+	fmt.Fprintf(&b, "%s\n\n", ms.Goal)
+
+	if codebaseCtx != "" {
+		b.WriteString("## Codebase Context\n\n")
+		b.WriteString(codebaseCtx)
+	}
+
+	b.WriteString("## Instructions\n\n")
+	b.WriteString("1. Analyze the codebase to understand its structure, conventions, and relevant code paths.\n")
+	b.WriteString("2. Break the goal into concrete, atomic tasks.\n")
+	b.WriteString("3. For each task, specify:\n")
+	b.WriteString("   - **ID**: Short unique identifier (e.g., t1, t2)\n")
+	b.WriteString("   - **Title**: Concise description\n")
+	b.WriteString("   - **Kind**: code, test, docs, or investigation\n")
+	b.WriteString("   - **Objective**: What this task accomplishes\n")
+	b.WriteString("   - **Priority**: 1 (highest) to 5 (lowest)\n")
+	b.WriteString("   - **Scope**: File paths this task will modify\n")
+	b.WriteString("   - **Acceptance criteria**: How to verify completion\n")
+	b.WriteString("   - **Estimated effort**: small, medium, or large\n")
+	b.WriteString("   - **Risk level**: low, medium, or high\n")
+	b.WriteString("4. Specify task dependencies (which tasks depend on which).\n")
+	b.WriteString("5. Present the plan clearly so it can be reviewed before execution.\n\n")
+	b.WriteString("Use the codebase tools (glob, grep, view) to examine relevant files before producing your plan.\n")
+	b.WriteString("Do NOT guess at file contents — read the actual code.\n")
+
+	return b.String()
 }
 
 func (m *Model) handleMissionApprove() *chat.Message {

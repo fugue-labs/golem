@@ -981,6 +981,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if text == "/mission" || strings.HasPrefix(text, "/mission ") {
 			m.input.Reset()
+			// /mission plan triggers agent execution; handle it specially.
+			if strings.TrimSpace(strings.TrimPrefix(text, "/mission")) == "plan" {
+				return m.handleMissionPlanRun()
+			}
 			m.messages = append(m.messages, m.handleMissionCommand(text))
 			m.scroll = 0
 			return m, m.input.Focus()
