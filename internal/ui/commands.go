@@ -10,6 +10,7 @@ import (
 
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
+	"github.com/fugue-labs/golem/internal/search"
 	"github.com/fugue-labs/golem/internal/ui/chat"
 	"github.com/fugue-labs/gollem/core"
 )
@@ -26,6 +27,7 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/compact` — compress conversation context\n")
 	b.WriteString("- `/cost` — show session cost breakdown\n")
 	b.WriteString("- `/resume` — restore the last saved session\n")
+	b.WriteString("- `/search <query>` — search across all saved sessions\n")
 	b.WriteString("- `/model [name]` — show or switch the active model\n")
 	b.WriteString("- `/diff` — show git diff of uncommitted changes\n")
 	b.WriteString("- `/undo [path]` — revert one unstaged git-tracked file change\n")
@@ -419,6 +421,55 @@ func (m *Model) renderDoctorMessage() *chat.Message {
 	}
 
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) handleSearchCommand(text string) *chat.Message {
+	query := strings.TrimSpace(strings.TrimPrefix(text, "/search"))
+	if query == "" {
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: "Usage: `/search <query>` — search across all saved sessions.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`",
+		}
+	}
+
+	results, err := search.SearchSessions(query, "", 10)
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Search failed: %v", err)}
+	}
+
+	if len(results) == 0 {
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: fmt.Sprintf("No sessions found matching %q.", query),
+		}
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "**Search results for** %q — %d match(es)\n\n", query, len(results))
+	for i, r := range results {
+		fmt.Fprintf(&sb, "**%d.** ", i+1)
+		if r.Prompt != "" {
+			prompt := r.Prompt
+			if len(prompt) > 120 {
+				prompt = prompt[:120] + "…"
+			}
+			fmt.Fprintf(&sb, "%s\n", prompt)
+		}
+		fmt.Fprintf(&sb, "   %s", r.Timestamp.Format("Jan 2, 2006 15:04"))
+		if r.ProjectDir != "" {
+			fmt.Fprintf(&sb, " · `%s`", r.ProjectDir)
+		}
+		fmt.Fprintf(&sb, " · score %.1f\n", r.Score)
+		if r.Snippet != "" {
+			snippet := r.Snippet
+			if len(snippet) > 300 {
+				snippet = snippet[:300] + "…"
+			}
+			fmt.Fprintf(&sb, "   > %s\n", snippet)
+		}
+		sb.WriteString("\n")
+	}
+	return &chat.Message{Kind: chat.KindAssistant, Content: sb.String()}
 }
 
 func (m *Model) renderConfigMessage() *chat.Message {

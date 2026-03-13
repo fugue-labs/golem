@@ -750,6 +750,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
+		if text == "/search" || strings.HasPrefix(text, "/search ") {
+			m.input.Reset()
+			m.messages = append(m.messages, m.handleSearchCommand(text))
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
 		if text == "/diff" {
 			m.input.Reset()
 			m.messages = append(m.messages, m.renderDiffMessage())

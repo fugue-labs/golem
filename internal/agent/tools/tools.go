@@ -16,6 +16,7 @@ func CodingTools(workingDir string) []core.Tool {
 		GlobTool(workingDir),
 		GrepTool(workingDir),
 		LsTool(workingDir),
+		SessionSearchTool(workingDir),
 	}
 }
 
