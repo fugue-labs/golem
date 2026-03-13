@@ -27,6 +27,7 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/verify` — show the latest verification summary\n")
 	b.WriteString("- `/compact` — compress conversation context\n")
 	b.WriteString("- `/cost` — show session cost breakdown\n")
+	b.WriteString("- `/replay [file|list]` — replay a recorded session trace\n")
 	b.WriteString("- `/resume` — restore the last saved session\n")
 	b.WriteString("- `/search <query>` — search across all saved sessions\n")
 	b.WriteString("- `/model [name]` — show or switch the active model\n")

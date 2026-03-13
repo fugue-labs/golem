@@ -251,6 +251,13 @@ type Model struct {
 
 	// File watcher for detecting external file changes.
 	fileWatcher *watcher.Watcher
+
+	// Replay trace recording and playback.
+	trace       *agent.ReplayTrace // active recording trace (nil when not recording)
+	replayMode  bool               // true during replay playback
+	replayTrace *agent.ReplayTrace // trace being replayed
+	replayIdx   int                // current event index during replay
+	replayStart time.Time          // when replay started
 }
 
 // New creates the initial app model.
@@ -392,6 +399,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.runID++
 			m.hookRID.Store(int64(m.runID))
 			m.runCtx, m.cancel = context.WithCancel(context.Background())
+			m.startRecording()
+			m.recordEvent(agent.EventUserInput, agent.UserInputData{Text: prompt})
 			return m, m.prepareRun(prompt)
 		}
 		return m, nil
@@ -477,11 +486,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scroll = 0
 		return m, nil
 
+	// Replay events.
+	case replayTickMsg:
+		if m.replayMode {
+			return m.handleReplayTick()
+		}
+		return m, nil
+
+	case replayDoneMsg:
+		if m.replayMode {
+			return m.handleReplayDone()
+		}
+		return m, nil
+
 	// Agent streaming events.
 	case textDeltaMsg:
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		m.recordEvent(agent.EventTextDelta, agent.TextDeltaData{Text: msg.text})
 		m.appendOrUpdateAssistant(msg.text)
 		m.scroll = 0
 		return m, nil
@@ -490,6 +513,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		m.recordEvent(agent.EventThinkDelta, agent.ThinkDeltaData{Text: msg.text})
 		m.appendOrUpdateThinking(msg.text)
 		m.scroll = 0
 		return m, nil
@@ -498,6 +522,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		m.recordEvent(agent.EventToolCall, agent.ToolCallData{
+			CallID:  msg.callID,
+			Name:    msg.name,
+			Args:    msg.args,
+			RawArgs: msg.rawArgs,
+		})
 		toolMsg := &chat.Message{
 			Kind:      chat.KindToolCall,
 			CallID:    msg.callID,
@@ -518,6 +548,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		m.recordEvent(agent.EventToolResult, agent.ToolResultData{
+			CallID: msg.callID,
+			Name:   msg.name,
+			Result: msg.result,
+			Error:  msg.errText,
+		})
 		m.activeToolName = ""
 		m.activeToolArgs = ""
 		m.finishLastTool(msg.callID, msg.name, msg.result, msg.errText)
@@ -553,6 +589,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		// Record agent completion in trace.
+		errText := ""
+		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
+			errText = msg.err.Error()
+		}
+		m.recordEvent(agent.EventAgentDone, agent.AgentDoneData{
+			InputTokens:  msg.usage.InputTokens,
+			OutputTokens: msg.usage.OutputTokens,
+			ToolCalls:    msg.usage.ToolCalls,
+			Error:        errText,
+		})
+		m.flushTrace()
+
 		// Ring terminal bell if the task took >5 seconds.
 		if time.Since(m.startTime) > 5*time.Second {
 			fmt.Print("\a")
@@ -701,6 +750,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "escape":
+		if m.replayMode {
+			m.stopReplay()
+			return m, m.input.Focus()
+		}
 		if m.busy && m.cancel != nil {
 			m.cancelActiveRun(true)
 			return m, m.input.Focus()
@@ -865,6 +918,16 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
+		if text == "/replay" || strings.HasPrefix(text, "/replay ") {
+			m.input.Reset()
+			msg, cmd := m.handleReplayCommand(text)
+			m.messages = append(m.messages, msg)
+			m.scroll = 0
+			if cmd != nil {
+				return m, tea.Batch(cmd, m.input.Focus())
+			}
+			return m, m.input.Focus()
+		}
 		// Catch unknown slash commands.
 		if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") && !m.busy {
 			m.input.Reset()
@@ -905,6 +968,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.runID++
 		m.hookRID.Store(int64(m.runID))
 		m.runCtx, m.cancel = context.WithCancel(context.Background())
+		m.startRecording()
+		m.recordEvent(agent.EventUserInput, agent.UserInputData{Text: text})
 		return m, m.prepareRun(text)
 
 	case "up":
@@ -962,8 +1027,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 var slashCommands = []string{
 	"/clear", "/compact", "/config", "/context", "/cost", "/diff",
 	"/doctor", "/exit", "/help", "/invariants", "/mission", "/model",
-	"/plan", "/quit", "/resume", "/rewind", "/runtime", "/search", "/skill", "/skills",
-	"/team", "/undo", "/verify",
+	"/plan", "/quit", "/replay", "/resume", "/rewind", "/runtime",
+	"/search", "/skill", "/skills", "/team", "/undo", "/verify",
 }
 
 func (m *Model) completeSlashCommand(text string) (tea.Model, tea.Cmd) {
