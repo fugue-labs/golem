@@ -8,7 +8,7 @@ import (
 
 // CodingTools returns the standard set of coding agent tools.
 func CodingTools(workingDir string) []core.Tool {
-	return []core.Tool{
+	tools := []core.Tool{
 		BashTool(workingDir),
 		ViewTool(workingDir),
 		EditTool(workingDir),
@@ -18,6 +18,8 @@ func CodingTools(workingDir string) []core.Tool {
 		LsTool(workingDir),
 		SessionSearchTool(workingDir),
 	}
+	tools = append(tools, CodeGraphTools(workingDir)...)
+	return tools
 }
 
 func writableMode(path string) os.FileMode {
