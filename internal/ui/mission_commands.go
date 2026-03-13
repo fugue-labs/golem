@@ -242,48 +242,32 @@ func taskStatusIcon(s mission.TaskStatus) string {
 	}
 }
 
+// handleMissionPlan validates the goal, gathers codebase context, and
+// returns a tea.Cmd that triggers the planner agent run. It flows through
+// the same dispatch path as all other /mission subcommands.
 func (m *Model) handleMissionPlan() (*chat.Message, tea.Cmd) {
-	// This is a fallback for the old dispatch path; real work is in handleMissionPlanRun.
-	return &chat.Message{Kind: chat.KindAssistant, Content: "Use `/mission plan` to invoke the planner."}, nil
-}
-
-// handleMissionPlanRun validates the goal, gathers codebase context, and
-// triggers the agent to produce a streaming task DAG.
-func (m *Model) handleMissionPlanRun() (tea.Model, tea.Cmd) {
 	if m.activeMissionID == "" {
-		m.messages = append(m.messages, &chat.Message{
-			Kind: chat.KindAssistant, Content: "No active mission. Use `/mission new <goal>` first.",
-		})
-		m.scroll = 0
-		return m, m.input.Focus()
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No active mission. Use `/mission new <goal>` first."}, nil
 	}
 	if m.busy {
-		m.messages = append(m.messages, &chat.Message{
-			Kind: chat.KindAssistant, Content: "Cannot plan while the agent is running.",
-		})
-		m.scroll = 0
-		return m, m.input.Focus()
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot plan while the agent is running."}, nil
 	}
 
 	ctrl := m.missionController()
 	if ctrl == nil {
-		m.messages = append(m.messages, &chat.Message{Kind: chat.KindError, Content: "Mission store not available."})
-		m.scroll = 0
-		return m, m.input.Focus()
+		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}, nil
 	}
 
 	ctx := context.Background()
 	ms, err := ctrl.GetMission(ctx, m.activeMissionID)
 	if err != nil {
-		m.messages = append(m.messages, &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission: %v", err)})
-		m.scroll = 0
-		return m, m.input.Focus()
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission: %v", err)}, nil
 	}
 
-	// (1) Build planner and reject vague goals.
+	// Build planner and reject vague goals.
 	planner := &mission.Planner{GitInfo: m.runtime.Git}
 	if planner.IsVagueGoal(ms.Goal) {
-		m.messages = append(m.messages, &chat.Message{
+		return &chat.Message{
 			Kind: chat.KindAssistant,
 			Content: fmt.Sprintf("The mission goal is too vague to plan:\n> %s\n\n"+
 				"Please update the mission with a specific, actionable goal. For example:\n"+
@@ -291,24 +275,21 @@ func (m *Model) handleMissionPlanRun() (tea.Model, tea.Cmd) {
 				"- \"Refactor the auth middleware to support OAuth2\"\n"+
 				"- \"Fix the race condition in the worker pool shutdown\"\n\n"+
 				"Use `/mission new <specific goal>` to create a new mission with a clearer goal.", ms.Goal),
-		})
-		m.scroll = 0
-		return m, m.input.Focus()
+		}, nil
 	}
 
-	// (2) Build enriched planning prompt (gathers codebase context internally).
+	// Build enriched planning prompt (gathers codebase context internally).
 	prompt := planner.BuildPlanPrompt(ms.Goal, m.cfg.WorkingDir)
 
-	// (4) Trigger agent execution — same pattern as /spec.
-	userMsg := &chat.Message{Kind: chat.KindUser, Content: "/mission plan"}
-	m.messages = append(m.messages, userMsg)
+	// Add planning status message and trigger agent run.
 	m.messages = append(m.messages, &chat.Message{
 		Kind:    chat.KindSystem,
 		Content: fmt.Sprintf("Planning mission `%s`: %s", ms.ID, ms.Goal),
 	})
 	m.inputHistory = append(m.inputHistory, "/mission plan")
-	m.scroll = 0
-	return m, m.beginRun(prompt, []*chat.Message{userMsg})
+
+	statusMsg := &chat.Message{Kind: chat.KindUser, Content: "/mission plan"}
+	return statusMsg, m.beginRun(prompt, []*chat.Message{statusMsg})
 }
 
 func (m *Model) handleMissionApprove() *chat.Message {
