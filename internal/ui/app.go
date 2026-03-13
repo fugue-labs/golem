@@ -1893,8 +1893,12 @@ func (m *Model) compactContext() tea.Cmd {
 		if len(history) < 3 {
 			return compactDoneMsg{err: fmt.Errorf("not enough history to compact (%d messages)", len(history))}
 		}
+		model, err := agent.CreateModel(m.cfg)
+		if err != nil {
+			return compactDoneMsg{err: fmt.Errorf("creating model for compaction: %w", err)}
+		}
 		beforeCount := len(history)
-		compressed, err := compactMessages(history, 4)
+		compressed, err := compactMessages(context.Background(), history, model, 4)
 		if err != nil {
 			return compactDoneMsg{err: err}
 		}
@@ -1907,17 +1911,105 @@ func (m *Model) compactContext() tea.Cmd {
 	}
 }
 
-// compactMessages reduces a message history by keeping the first message
-// (system context) and the last keepLastN messages, dropping the middle.
-func compactMessages(msgs []core.ModelMessage, keepLastN int) ([]core.ModelMessage, error) {
-	if len(msgs) <= keepLastN+1 {
-		return msgs, nil
+// compactMessages summarizes older messages, keeping the first message and the
+// last keepN messages. The model is used to generate a summary of the middle
+// messages.
+func compactMessages(ctx context.Context, messages []core.ModelMessage, model core.Model, keepN int) ([]core.ModelMessage, error) {
+	if keepN >= len(messages) {
+		return messages, nil
 	}
-	result := make([]core.ModelMessage, 0, 1+keepLastN)
-	result = append(result, msgs[0])
-	result = append(result, msgs[len(msgs)-keepLastN:]...)
+
+	firstMsg := messages[0]
+
+	// Ensure recent messages start with a ModelRequest (user role) to maintain
+	// proper alternation required by providers like Anthropic.
+	startRecent := len(messages) - keepN
+	if startRecent > 1 {
+		if _, isResp := messages[startRecent].(core.ModelResponse); isResp {
+			startRecent--
+		}
+	}
+
+	oldMessages := messages[1:startRecent]
+	recentMessages := messages[startRecent:]
+	if len(oldMessages) == 0 {
+		return messages, nil
+	}
+
+	// Build a summary prompt from old messages.
+	var sb strings.Builder
+	sb.WriteString("Summarize this conversation concisely, preserving:\n")
+	sb.WriteString("- What files were created, edited, or read (include EXACT file paths)\n")
+	sb.WriteString("- What commands were run and their results\n")
+	sb.WriteString("- Key decisions made and current approach\n")
+	sb.WriteString("- What approaches were tried and whether they succeeded or failed\n")
+	sb.WriteString("- Current state: what's done, what's remaining\n\n")
+	for _, msg := range oldMessages {
+		switch m := msg.(type) {
+		case core.ModelRequest:
+			for _, part := range m.Parts {
+				switch p := part.(type) {
+				case core.UserPromptPart:
+					content := p.Content
+					if len(content) > 500 {
+						content = content[:500] + "..."
+					}
+					fmt.Fprintf(&sb, "User: %s\n", content)
+				case core.ToolReturnPart:
+					content := fmt.Sprintf("%v", p.Content)
+					if len(content) > 800 {
+						content = content[:800] + "..."
+					}
+					fmt.Fprintf(&sb, "[Tool result: %s] %s\n", p.ToolName, content)
+				}
+			}
+		case core.ModelResponse:
+			if text := m.TextContent(); text != "" {
+				if len(text) > 500 {
+					text = text[:500] + "..."
+				}
+				fmt.Fprintf(&sb, "Assistant: %s\n", text)
+			}
+			for _, part := range m.Parts {
+				if tc, ok := part.(core.ToolCallPart); ok {
+					args := tc.ArgsJSON
+					if len(args) > 500 {
+						args = args[:500] + "..."
+					}
+					fmt.Fprintf(&sb, "[Tool call: %s] %s\n", tc.ToolName, args)
+				}
+			}
+		}
+	}
+
+	summaryReq := []core.ModelMessage{
+		core.ModelRequest{
+			Parts:     []core.ModelRequestPart{core.UserPromptPart{Content: sb.String(), Timestamp: time.Now()}},
+			Timestamp: time.Now(),
+		},
+	}
+	summaryResp, err := model.Request(ctx, summaryReq, nil, &core.ModelRequestParameters{AllowTextOutput: true})
+	if err != nil {
+		return messages, err
+	}
+	if summaryResp.TextContent() == "" {
+		return messages, nil
+	}
+
+	summaryMsg := core.ModelResponse{
+		Parts: []core.ModelResponsePart{
+			core.TextPart{Content: "[Conversation Summary] " + summaryResp.TextContent()},
+		},
+		Timestamp: time.Now(),
+	}
+
+	result := make([]core.ModelMessage, 0, 2+len(recentMessages))
+	result = append(result, firstMsg)
+	result = append(result, summaryMsg)
+	result = append(result, recentMessages...)
 	return result, nil
 }
+
 
 func (m *Model) renderStatusBar() string {
 	accent := m.sty.StatusBar.Accent.Render(" GOLEM ")
