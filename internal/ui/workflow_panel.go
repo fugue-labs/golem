@@ -73,7 +73,7 @@ func (m *Model) pendingCount() int {
 }
 
 func (m *Model) hasWorkflowPanel() bool {
-	return m.planState.HasTasks() || m.invariantState.HasItems() || m.verificationState.HasEntries() || m.hasTeamMembers() || m.hasMissionState()
+	return m.planState.HasTasks() || m.invariantState.HasItems() || m.verificationState.HasEntries() || m.hasTeamMembers() || m.hasMissionState() || m.specState.IsActive()
 }
 
 func (m *Model) hasTeamMembers() bool {
@@ -110,6 +110,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 
 	var body []string
 	showMission := m.hasMissionState()
+	showSpec := m.specState.IsActive()
 	showPlan := m.planState.HasTasks()
 	showInv := m.invariantState.HasItems()
 	showVerify := m.verificationState.HasEntries()
@@ -119,6 +120,9 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	// Count how many sections we need to render.
 	sections := 0
 	if showMission {
+		sections++
+	}
+	if showSpec {
 		sections++
 	}
 	if showPlan {
@@ -151,6 +155,14 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 				remainder--
 			}
 			body = append(body, m.renderMissionPanelLines(budget, contentWidth)...)
+		}
+		if showSpec {
+			budget := perSection
+			if remainder > 0 {
+				budget++
+				remainder--
+			}
+			body = append(body, m.renderSpecPanelLines(budget, contentWidth)...)
 		}
 		if showTeam {
 			if len(body) > 0 {
@@ -219,6 +231,9 @@ func workflowPanelSummary(m *Model) string {
 	var parts []string
 	if missionSummary := m.missionPanelSummary(); missionSummary != "" {
 		parts = append(parts, missionSummary)
+	}
+	if m.specState.IsActive() {
+		parts = append(parts, fmt.Sprintf("spec %s · %s", m.specState.PhaseLabel(), m.specState.GateSummary()))
 	}
 	if m.hasTeamMembers() {
 		members := m.runtime.Session.Team.Members()
@@ -424,6 +439,40 @@ func (m *Model) renderVerificationPanelLines(limit, width int) []string {
 	remaining := len(m.verificationState.Entries) - maxItems
 	if remaining > 0 && len(lines) < limit {
 		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("... +%d verifications", remaining)))
+	}
+	for len(lines) < limit {
+		lines = append(lines, "")
+	}
+	return lines[:limit]
+}
+
+func (m *Model) renderSpecPanelLines(limit, width int) []string {
+	if limit <= 0 || !m.specState.IsActive() {
+		return nil
+	}
+	header := fmt.Sprintf("Spec — %s · %s", m.specState.PhaseLabel(), m.specState.GateSummary())
+	lines := []string{m.sty.Panel.Progress.Render(header)}
+	if limit == 1 {
+		return lines
+	}
+	itemBudget := limit - 1
+	maxItems := min(itemBudget, len(m.specState.Gates))
+	if len(m.specState.Gates) > itemBudget && itemBudget > 0 {
+		maxItems = itemBudget - 1
+	}
+	for i := range maxItems {
+		g := m.specState.Gates[i]
+		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
+		if g.Status == "passed" {
+			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+		}
+		label := ansi.Truncate(g.Name, max(1, width-4), "...")
+		if g.Status == "passed" {
+			label = m.sty.Panel.TaskDone.Render(label)
+		} else {
+			label = m.sty.Panel.TaskText.Render(label)
+		}
+		lines = append(lines, fmt.Sprintf(" %s %s", icon, label))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")

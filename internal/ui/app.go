@@ -25,6 +25,7 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/checkpoint"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
+	"github.com/fugue-labs/golem/internal/ui/spec"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
 	"github.com/fugue-labs/golem/internal/ui/watcher"
@@ -185,10 +186,11 @@ type Model struct {
 	hookRID    atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
 	lastPrompt string
 
-	// Plan/invariant/verification state — mirrored from tool messages.
+	// Plan/invariant/verification/spec state — mirrored from tool messages.
 	planState          plan.State
 	invariantState     uiinvariants.State
 	verificationState  uiverification.State
+	specState          spec.State
 	toolState          map[string]any // raw tool state for restoration across runs
 	lastRunSummary     *eval.RunSummary
 	currentRunMessages []*chat.Message
@@ -614,6 +616,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.errText == "" && isMutatingToolName(msg.name) && m.fileWatcher != nil {
 			m.markAgentFiles(msg.callID, msg.name)
 		}
+		// Auto-advance spec phase based on tool state changes.
+		m.advanceSpecPhase()
 		m.scroll = 0
 		return m, nil
 
@@ -691,6 +695,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				SessionUsage:      m.sessionUsage,
 				LastCost:          m.lastCost,
 			})
+			// Auto-advance spec phase based on final tool state.
+			m.advanceSpecPhase()
 		}
 		validation := config.ValidationResult{}
 		if m.cfg != nil {
@@ -989,6 +995,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.input.Focus()
 		}
+		if text == "/spec" || strings.HasPrefix(text, "/spec ") {
+			m.input.Reset()
+			return m.handleSpecCommand(text)
+		}
 		// Catch unknown slash commands.
 		if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") && !m.busy {
 			m.input.Reset()
@@ -1094,7 +1104,7 @@ var slashCommands = []string{
 	"/budget", "/clear", "/compact", "/config", "/context", "/cost", "/diff",
 	"/doctor", "/exit", "/help", "/invariants", "/mission", "/model",
 	"/plan", "/quit", "/replay", "/resume", "/rewind", "/runtime",
-	"/search", "/skill", "/skills", "/team", "/undo", "/verify",
+	"/search", "/skill", "/skills", "/spec", "/team", "/undo", "/verify",
 }
 
 func (m *Model) completeSlashCommand(text string) (tea.Model, tea.Cmd) {
@@ -1412,6 +1422,51 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 			return agentDoneMsg{runID: runID, err: err}
 		}
 		return agentDoneMsg{runID: runID, usage: result.Usage, messages: result.Messages, toolState: result.ToolState}
+	}
+}
+
+// advanceSpecPhase automatically advances the spec workflow phase based on
+// changes to plan and invariant state from agent tool calls.
+func (m *Model) advanceSpecPhase() {
+	if !m.specState.IsActive() {
+		return
+	}
+	// Sync task progress from plan state.
+	if m.planState.HasTasks() {
+		completed, total := m.planState.Progress()
+		m.specState.SetTaskProgress(completed, total)
+	}
+	// Phase transitions based on accumulated state.
+	switch m.specState.Phase {
+	case spec.PhaseDraft:
+		// When invariants are extracted, the agent has analyzed the spec.
+		if m.invariantState.HasItems() {
+			m.specState.AdvanceGate("Spec Approval")
+			m.specState.SetPhase(spec.PhaseApproved)
+		}
+	case spec.PhaseApproved:
+		// When plan tasks appear, decomposition has happened.
+		if m.planState.HasTasks() {
+			m.specState.AdvanceGate("Task Decomposition")
+			m.specState.SetPhase(spec.PhaseDecomposed)
+		}
+	case spec.PhaseDecomposed, spec.PhaseAccepted:
+		// Once implementation starts (tasks in progress).
+		if m.planState.HasTasks() {
+			completed, total := m.planState.Progress()
+			if completed > 0 || total > 0 {
+				m.specState.SetPhase(spec.PhaseImplementing)
+			}
+		}
+	case spec.PhaseImplementing:
+		// When all tasks are completed, move to reviewing.
+		if m.planState.HasTasks() {
+			completed, total := m.planState.Progress()
+			if total > 0 && completed == total {
+				m.specState.AdvanceGate("Final Diff Review")
+				m.specState.SetPhase(spec.PhaseReviewing)
+			}
+		}
 	}
 }
 

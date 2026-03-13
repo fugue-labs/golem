@@ -2,17 +2,22 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/search"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/golem/internal/ui/spec"
 	"github.com/fugue-labs/gollem/core"
 )
 
@@ -42,6 +47,7 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/context` — show context window usage\n")
 	b.WriteString("- `/skills` — list detected skills\n")
 	b.WriteString("- `/skill <name>` — toggle a skill on or off\n")
+	b.WriteString("- `/spec [file]` — start or show spec-driven development\n")
 	b.WriteString("- `/quit` or `/exit` — quit the app\n\n")
 	b.WriteString("**Keys**\n\n")
 	b.WriteString("- `Enter` — send\n")
@@ -792,5 +798,130 @@ func (m *Model) renderVerificationSummaryMessage() *chat.Message {
 		}
 		b.WriteString("\n")
 	}
+	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+func (m *Model) handleSpecCommand(text string) (tea.Model, tea.Cmd) {
+	arg := strings.TrimSpace(strings.TrimPrefix(text, "/spec"))
+
+	// No argument: show current spec status.
+	if arg == "" {
+		m.messages = append(m.messages, m.renderSpecSummaryMessage())
+		m.scroll = 0
+		return m, m.input.Focus()
+	}
+
+	if m.busy {
+		m.messages = append(m.messages, &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: "Cannot start a spec workflow while agent is running.",
+		})
+		m.scroll = 0
+		return m, m.input.Focus()
+	}
+
+	// Resolve file path.
+	specPath := arg
+	if !filepath.IsAbs(specPath) {
+		dir := m.cfg.WorkingDir
+		if dir == "" {
+			dir = "."
+		}
+		specPath = filepath.Join(dir, specPath)
+	}
+
+	content, err := os.ReadFile(specPath)
+	if err != nil {
+		m.messages = append(m.messages, &chat.Message{
+			Kind:    chat.KindError,
+			Content: fmt.Sprintf("Failed to read spec file: %v", err),
+		})
+		m.scroll = 0
+		return m, m.input.Focus()
+	}
+
+	// Initialize spec state.
+	m.specState = spec.New(specPath)
+
+	// Build a prompt that drives the spec workflow.
+	prompt := buildSpecPrompt(specPath, string(content))
+
+	// Submit the spec as a user message to kick off the agent workflow.
+	userMsg := &chat.Message{Kind: chat.KindUser, Content: fmt.Sprintf("/spec %s", arg)}
+	m.messages = append(m.messages, userMsg)
+	m.inputHistory = append(m.inputHistory, text)
+	m.busy = true
+	m.startTime = time.Now()
+	m.lastPrompt = prompt
+	m.currentRunMessages = []*chat.Message{userMsg}
+	m.runID++
+	m.hookRID.Store(int64(m.runID))
+	m.runCtx, m.cancel = context.WithCancel(context.Background())
+	m.scroll = 0
+	return m, m.prepareRun(prompt)
+}
+
+func buildSpecPrompt(filePath, content string) string {
+	var b strings.Builder
+	b.WriteString("# Spec-Driven Development Mode\n\n")
+	b.WriteString("The user has loaded a spec file for implementation. Follow this structured workflow:\n\n")
+	b.WriteString("## Spec file\n")
+	fmt.Fprintf(&b, "Path: `%s`\n\n", filePath)
+	b.WriteString("```\n")
+	b.WriteString(content)
+	b.WriteString("\n```\n\n")
+	b.WriteString("## Workflow (3 gates)\n\n")
+	b.WriteString("### Gate 1: Spec Approval\n")
+	b.WriteString("1. Read and analyze the spec thoroughly\n")
+	b.WriteString("2. Identify any ambiguities, missing requirements, or contradictions\n")
+	b.WriteString("3. Extract hard and soft invariants from the spec using the invariants tool\n")
+	b.WriteString("4. Present a summary to the user with any questions or concerns\n")
+	b.WriteString("5. Ask the user to approve the spec before proceeding\n\n")
+	b.WriteString("### Gate 2: Task Decomposition\n")
+	b.WriteString("1. Decompose the spec into concrete implementation tasks using the plan tool\n")
+	b.WriteString("2. Each task should be atomic and independently verifiable\n")
+	b.WriteString("3. Order tasks by dependency (implement foundations first)\n")
+	b.WriteString("4. Present the task plan to the user for review\n")
+	b.WriteString("5. Ask the user to approve the task plan before implementing\n\n")
+	b.WriteString("### Gate 3: Implementation & Final Review\n")
+	b.WriteString("1. Implement each task in order, updating the plan as you go\n")
+	b.WriteString("2. After all tasks are complete, verify invariants\n")
+	b.WriteString("3. Show a diff summary of all changes\n")
+	b.WriteString("4. Update the spec file to reflect what was actually built\n")
+	b.WriteString("5. Present the final review for user approval\n\n")
+	b.WriteString("## Important\n")
+	b.WriteString("- Wait for explicit user approval at each gate before proceeding\n")
+	b.WriteString("- Use the plan tool for task tracking and the invariants tool for requirements\n")
+	b.WriteString("- Keep the spec file as the living source of truth\n")
+	b.WriteString("- After implementation, update the spec to reflect what was actually built\n")
+	return b.String()
+}
+
+func (m *Model) renderSpecSummaryMessage() *chat.Message {
+	if !m.specState.IsActive() {
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: "No active spec. Use `/spec <file>` to start spec-driven development.",
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Spec-driven development** — %s\n\n", m.specState.PhaseLabel())
+	fmt.Fprintf(&b, "- File: `%s`\n", m.specState.FilePath)
+	fmt.Fprintf(&b, "- Phase: %s\n\n", m.specState.PhaseLabel())
+
+	b.WriteString("**Gates**\n\n")
+	for _, g := range m.specState.Gates {
+		icon := "○"
+		if g.Status == "passed" {
+			icon = "✓"
+		}
+		fmt.Fprintf(&b, "- %s %s — %s\n", icon, g.Name, g.Status)
+	}
+
+	if completed, total := m.specState.Progress(); total > 0 {
+		fmt.Fprintf(&b, "\n**Tasks**: %d/%d completed\n", completed, total)
+	}
+
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
