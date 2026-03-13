@@ -19,6 +19,7 @@ import (
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/eval"
+	"github.com/fugue-labs/golem/internal/mission"
 	"github.com/fugue-labs/golem/internal/skills"
 	"github.com/fugue-labs/golem/internal/ui/chat"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
@@ -144,7 +145,8 @@ type (
 		questions []codetool.AskUserQuestion
 		response  chan<- []codetool.AskUserAnswer
 	}
-	askUserShutdownMsg struct{}
+	askUserShutdownMsg  struct{}
+	missionChangedMsg   struct{} // fired by mission controller when state changes
 )
 
 // Model is the main BubbleTea model.
@@ -233,6 +235,11 @@ type Model struct {
 	approvalArgs   string
 	approvalRespCh chan<- bool
 	approvalAlways map[string]bool // tools the user has permanently allowed this session
+
+	// Mission orchestration state.
+	missionCtrl      *mission.Controller
+	activeMissionID  string
+	missionSnap      *mission.MissionSnapshot
 }
 
 // New creates the initial app model.
@@ -417,6 +424,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Content: msg.text,
 		})
 		m.scroll = 0
+		return m, nil
+
+	case missionChangedMsg:
+		m.refreshMissionSnapshot()
 		return m, nil
 
 	case contextCompactedMsg:
@@ -786,6 +797,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			return m, m.input.Focus()
 		}
+		if text == "/mission" || strings.HasPrefix(text, "/mission ") {
+			m.input.Reset()
+			m.messages = append(m.messages, m.handleMissionCommand(text))
+			m.scroll = 0
+			return m, m.input.Focus()
+		}
 		// Catch unknown slash commands.
 		if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") && !m.busy {
 			m.input.Reset()
@@ -882,9 +899,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // slashCommands is the sorted list of available slash commands for tab completion.
 var slashCommands = []string{
 	"/clear", "/compact", "/config", "/context", "/cost", "/diff",
-	"/doctor", "/exit", "/help", "/invariants", "/model", "/plan",
-	"/quit", "/resume", "/runtime", "/skill", "/skills", "/team",
-	"/undo", "/verify",
+	"/doctor", "/exit", "/help", "/invariants", "/mission", "/model",
+	"/plan", "/quit", "/resume", "/runtime", "/skill", "/skills",
+	"/team", "/undo", "/verify",
 }
 
 func (m *Model) completeSlashCommand(text string) (tea.Model, tea.Cmd) {

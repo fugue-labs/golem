@@ -32,6 +32,7 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/doctor` — diagnose setup issues\n")
 	b.WriteString("- `/config` — show effective configuration\n")
 	b.WriteString("- `/team` — show team member status\n")
+	b.WriteString("- `/mission [sub]` — mission orchestration (new, status, start, pause, resume, cancel)\n")
 	b.WriteString("- `/context` — show context window usage\n")
 	b.WriteString("- `/skills` — list detected skills\n")
 	b.WriteString("- `/skill <name>` — toggle a skill on or off\n")
