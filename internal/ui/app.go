@@ -1317,7 +1317,6 @@ func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cm
 	if m.cfg.PermissionMode == "suggest" {
 		extraOpts = append(extraOpts,
 			core.WithToolApproval[string](makeToolApprovalFunc(msg.runID, m.approvalCh)),
-			core.WithGlobalToolApproval[string](),
 		)
 	}
 	a, err := agent.NewWithRuntime(
@@ -1907,17 +1906,12 @@ func (m *Model) resumeSession() *chat.Message {
 
 func (m *Model) compactContext() tea.Cmd {
 	history := m.history
-	cfg := m.cfg
 	return func() tea.Msg {
 		if len(history) < 3 {
 			return compactDoneMsg{err: fmt.Errorf("not enough history to compact (%d messages)", len(history))}
 		}
-		model, err := agent.CreateModel(cfg)
-		if err != nil {
-			return compactDoneMsg{err: fmt.Errorf("creating model for compaction: %w", err)}
-		}
 		beforeCount := len(history)
-		compressed, err := core.CompactMessages(context.Background(), history, model, 4)
+		compressed, err := compactMessages(history, 4)
 		if err != nil {
 			return compactDoneMsg{err: err}
 		}
@@ -1928,6 +1922,18 @@ func (m *Model) compactContext() tea.Cmd {
 			messages:    compressed,
 		}
 	}
+}
+
+// compactMessages reduces a message history by keeping the first message
+// (system context) and the last keepLastN messages, dropping the middle.
+func compactMessages(msgs []core.ModelMessage, keepLastN int) ([]core.ModelMessage, error) {
+	if len(msgs) <= keepLastN+1 {
+		return msgs, nil
+	}
+	result := make([]core.ModelMessage, 0, 1+keepLastN)
+	result = append(result, msgs[0])
+	result = append(result, msgs[len(msgs)-keepLastN:]...)
+	return result, nil
 }
 
 func (m *Model) renderStatusBar() string {
