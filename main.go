@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/fugue-labs/golem/internal/acp"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/automations"
 	"github.com/fugue-labs/golem/internal/config"
@@ -50,6 +51,8 @@ func run(args []string, out, errOut io.Writer) int {
 				return 1
 			}
 			return 0
+		case "acp":
+			return runACP(errOut)
 		case "dashboard":
 			var missionID string
 			if len(args) >= 2 {
@@ -233,4 +236,13 @@ func runAutomationsCommand(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "usage: golem automations [list|start|status|init]")
 		return 1
 	}
+}
+
+func runACP(errOut io.Writer) int {
+	srv := acp.NewServer(os.Stdin, os.Stdout)
+	if err := srv.Run(); err != nil {
+		fmt.Fprintf(errOut, "acp error: %v\n", err)
+		return 1
+	}
+	return 0
 }
