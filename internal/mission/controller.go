@@ -65,6 +65,11 @@ func (c *Controller) GetMissionSummary(ctx context.Context, id string) (*Mission
 // ApplyPlan applies a planning result to a draft/planning mission, creating
 // tasks and dependencies in the store.
 func (c *Controller) ApplyPlan(ctx context.Context, missionID string, plan *PlanResult) error {
+	NormalizePlanResult(plan)
+	if err := ValidatePlanResult(plan); err != nil {
+		return fmt.Errorf("validate plan: %w", err)
+	}
+
 	m, err := c.store.GetMission(ctx, missionID)
 	if err != nil {
 		return fmt.Errorf("get mission: %w", err)

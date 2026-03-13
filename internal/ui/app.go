@@ -134,6 +134,7 @@ type Model struct {
 	toolState          map[string]any // raw tool state for restoration across runs
 	lastRunSummary     *eval.RunSummary
 	currentRunMessages []*chat.Message
+	missionPlanRun     *missionPlanRun
 
 	// Pending user messages queued while the agent is working.
 	// Drained by middleware before each model turn.
@@ -605,7 +606,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.messages = append(m.messages, errMsg)
 			m.currentRunMessages = append(m.currentRunMessages, errMsg)
-		} else if msg.messages != nil {
+		}
+		m.completeMissionPlanRun(msg.err)
+		if msg.err == nil && msg.messages != nil {
 			m.history = msg.messages
 			m.toolState = msg.toolState
 			m.applyWorkflowToolState(msg.toolState)

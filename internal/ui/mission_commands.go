@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/mission"
@@ -277,6 +278,23 @@ func (m *Model) handleMissionPlan() (*chat.Message, tea.Cmd) {
 				"Use `/mission new <specific goal>` to create a new mission with a clearer goal.", ms.Goal),
 		}, nil
 	}
+
+	switch ms.Status {
+	case mission.MissionAwaitingApproval:
+		return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("Mission `%s` already has a pending plan. Run `/mission approve` to start execution.", ms.ID)}, nil
+	case mission.MissionRunning:
+		return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("Mission `%s` is already running. Re-planning through `/mission plan` is not supported yet.", ms.ID)}, nil
+	case mission.MissionPaused, mission.MissionBlocked, mission.MissionCompleting, mission.MissionCompleted, mission.MissionFailed, mission.MissionCancelled:
+		return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("Mission `%s` is %s. Create a new mission to plan a fresh DAG.", ms.ID, ms.Status)}, nil
+	}
+
+	previousStatus := ms.Status
+	ms.Status = mission.MissionPlanning
+	ms.UpdatedAt = time.Now().UTC()
+	if err := ctrl.Store().UpdateMission(ctx, ms); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to mark mission as planning: %v", err)}, nil
+	}
+	m.missionPlanRun = &missionPlanRun{MissionID: ms.ID, PreviousStatus: previousStatus}
 
 	// Build enriched planning prompt (gathers codebase context internally).
 	prompt := planner.BuildPlanPrompt(ms.Goal, m.cfg.WorkingDir)

@@ -306,6 +306,11 @@ func (rm *MissionRecoveryManager) BuildReplanPrompt(ctx context.Context, mission
 // tasks, wires up dependencies, resolves ready tasks, and increments the
 // mission's replan counter.
 func (rm *MissionRecoveryManager) ApplyReplan(ctx context.Context, missionID string, plan *PlanResult) error {
+	NormalizePlanResult(plan)
+	if err := ValidatePlanResult(plan); err != nil {
+		return fmt.Errorf("apply replan: validate plan: %w", err)
+	}
+
 	m, err := rm.store.GetMission(ctx, missionID)
 	if err != nil {
 		return fmt.Errorf("apply replan: get mission: %w", err)
