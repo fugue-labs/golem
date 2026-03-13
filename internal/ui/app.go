@@ -1032,6 +1032,17 @@ func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cm
 
 	m.agent = a
 	m.runtime = msg.runtime
+
+	// Show model routing info when a different model was selected for this turn.
+	if msg.runtime.RoutedModel != "" && msg.runtime.RoutedModel != m.cfg.Model {
+		routeMsg := &chat.Message{
+			Kind:    chat.KindSystem,
+			Content: fmt.Sprintf("model: %s (%s)", msg.runtime.RoutedModel, msg.runtime.RoutingReason),
+		}
+		m.messages = append(m.messages, routeMsg)
+		m.currentRunMessages = append(m.currentRunMessages, routeMsg)
+	}
+
 	return m, m.runAgent(msg.prompt)
 }
 

@@ -53,6 +53,9 @@ type RuntimeReport struct {
 	MCPServers           []string                `json:"mcp_servers,omitempty"`
 	MCPStatus            string                  `json:"mcp_status,omitempty"`
 	MemoryStatus         string                  `json:"memory_status,omitempty"`
+	ModelRouting         string                  `json:"model_routing,omitempty"`
+	RoutedModel          string                  `json:"routed_model,omitempty"`
+	RoutingReason        string                  `json:"routing_reason,omitempty"`
 	RuntimeError         string                  `json:"runtime_error,omitempty"`
 	ToolSurfaces         ToolSurfaceReport       `json:"tool_surfaces"`
 	Validation           config.ValidationResult `json:"validation,omitempty"`
@@ -115,6 +118,13 @@ func BuildRuntimeReport(cfg *config.Config, runtime RuntimeState, validation con
 		report.MemoryStatus = "off"
 	}
 	report.ToolSurfaces.Delegate = onOff(!cfg.DisableDelegate && runtime.EffectiveTeamMode)
+	if IsRoutingEnabled(cfg, runtime.RoutingConfig) {
+		report.ModelRouting = "on"
+		report.RoutedModel = runtime.RoutedModel
+		report.RoutingReason = runtime.RoutingReason
+	} else {
+		report.ModelRouting = "off"
+	}
 	return report
 }
 
@@ -221,6 +231,15 @@ func runtimeProfileLines(report RuntimeReport) []string {
 	}
 	if report.MemoryStatus == "on" {
 		lines = append(lines, fmt.Sprintf("Memory: `%s`", report.MemoryStatus))
+	}
+	if report.ModelRouting == "on" {
+		lines = append(lines, fmt.Sprintf("Model routing: `on`"))
+		if report.RoutedModel != "" {
+			lines = append(lines, fmt.Sprintf("Routed model: `%s`", report.RoutedModel))
+		}
+		if report.RoutingReason != "" {
+			lines = append(lines, fmt.Sprintf("Routing reason: %s", report.RoutingReason))
+		}
 	}
 	return lines
 }

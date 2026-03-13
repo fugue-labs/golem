@@ -28,6 +28,12 @@ type RuntimeState struct {
 	AskUserStatus     string
 	AskUserFunc       codetool.AskUserFunc
 
+	// Model routing: per-turn model selection based on task complexity.
+	RoutedModel      string    // model name selected for this turn
+	RoutedModelTier  ModelTier // "fast" or "strong"
+	RoutingReason    string    // human-readable explanation
+	RoutingConfig    RoutingConfig
+
 	// Project instructions discovered from GOLEM.md / CLAUDE.md files.
 	Instructions []InstructionFile
 
@@ -87,6 +93,38 @@ func PrepareRuntime(ctx context.Context, cfg *config.Config, prompt string) (Run
 	state.OpenImageStatus = openImageStatus
 	if routerFallback != "" && strings.HasPrefix(state.TeamModeReason, "auto router") {
 		state.TeamModeReason += routerFallback
+	}
+
+	// Model routing: select fast or strong model based on task complexity.
+	rc := LoadRoutingConfig()
+	state.RoutingConfig = rc
+	if IsRoutingEnabled(cfg, rc) && strings.TrimSpace(prompt) != "" {
+		// Try heuristic first (zero latency), then use router classification.
+		complexity := ClassifyPromptHeuristic(prompt)
+		if complexity == "" {
+			// Use the router's complexity classification if available.
+			// The router already ran during decideTeamMode; run it again cheaply
+			// only if team mode auto-routing was used (the result carries complexity).
+			if routerModel != nil {
+				route, routeErr := promptRouterFunc(ctx, cfg, routerModel, prompt)
+				if routeErr == nil {
+					complexity = route.Complexity
+				}
+			}
+		}
+		if complexity == "" {
+			complexity = "complex" // conservative default
+		}
+		state.RoutedModel, state.RoutedModelTier, state.RoutingReason = RouteModel(cfg, rc, complexity)
+	} else {
+		// Routing disabled or no prompt — use default model.
+		state.RoutedModel = cfg.Model
+		state.RoutedModelTier = TierStrong
+		if !IsRoutingEnabled(cfg, rc) {
+			state.RoutingReason = "routing disabled"
+		} else {
+			state.RoutingReason = "no prompt"
+		}
 	}
 
 	// Discover project instructions.

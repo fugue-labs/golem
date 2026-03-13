@@ -12,6 +12,7 @@
 - Auto-context: `100` tokens, keep last `2` turns
 - Top-level personality: `true`
 - Git repo: `off`
+- Model routing: `on`
 
 ## Tool surfaces
 - Guaranteed repo tools: `bash`, `bash_status`, `bash_kill`, `view`, `edit`, `write`, `multi_edit`, `glob`, `grep`, `ls`, `lsp`

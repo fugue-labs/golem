@@ -165,6 +165,20 @@ func (m *Model) handleModelCommand(text string) *chat.Message {
 	if arg == "" {
 		var b strings.Builder
 		fmt.Fprintf(&b, "Current model: `%s` (provider: `%s`)\n\n", m.cfg.Model, m.cfg.Provider)
+
+		// Show model routing status.
+		rc := m.runtime.RoutingConfig
+		if agent.IsRoutingEnabled(m.cfg, rc) {
+			fastModel := agent.ResolveFastModel(m.cfg, rc)
+			fmt.Fprintf(&b, "Model routing: on\n")
+			fmt.Fprintf(&b, "  Fast model:   `%s`\n", fastModel)
+			fmt.Fprintf(&b, "  Strong model: `%s`\n", m.cfg.Model)
+			if m.runtime.RoutedModel != "" {
+				fmt.Fprintf(&b, "  Last routed:  `%s` (%s)\n", m.runtime.RoutedModel, m.runtime.RoutingReason)
+			}
+			b.WriteString("\n")
+		}
+
 		if models := knownModels(m.cfg.Provider); len(models) > 0 {
 			b.WriteString("Available models:\n")
 			for _, name := range models {
