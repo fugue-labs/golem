@@ -23,20 +23,39 @@ func testStore(t *testing.T) *DoltStore {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := rootDB.PingContext(ctx); err != nil {
+	// Use a single connection to avoid database/sql retry loop on ErrBadConn.
+	conn, err := rootDB.Conn(ctx)
+	if err != nil {
 		rootDB.Close()
 		t.Skip("Dolt server not reachable:", err)
 	}
-	if _, err := rootDB.ExecContext(ctx, "CREATE DATABASE `"+dbName+"`"); err != nil {
+	if _, err := conn.ExecContext(ctx, "CREATE DATABASE `"+dbName+"`"); err != nil {
+		conn.Close()
 		rootDB.Close()
 		t.Skip("Cannot create test database:", err)
 	}
+	conn.Close()
 	rootDB.Close()
 
 	dsn := "root@tcp(127.0.0.1:3307)/" + dbName + dsnParams
-	s, err := OpenDoltStore(dsn)
-	if err != nil {
-		t.Skip("Cannot open Dolt store:", err)
+	type storeResult struct {
+		store *DoltStore
+		err   error
+	}
+	ch := make(chan storeResult, 1)
+	go func() {
+		st, e := OpenDoltStore(dsn)
+		ch <- storeResult{st, e}
+	}()
+	var s *DoltStore
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			t.Skip("Cannot open Dolt store:", res.err)
+		}
+		s = res.store
+	case <-time.After(15 * time.Second):
+		t.Skip("Dolt store open timed out")
 	}
 	t.Cleanup(func() {
 		s.Close()

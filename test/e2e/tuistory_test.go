@@ -246,8 +246,8 @@ func TestTuistoryMissionNew(t *testing.T) {
 	typeText(t, session, "/mission new Build a REST API with authentication")
 	press(t, session, "enter")
 
-	// Wait for mission creation confirmation.
-	waitFor(t, session, "Mission created", 10000)
+	// Wait for mission creation confirmation (includes lazy Dolt init).
+	waitFor(t, session, "Mission created", 20000)
 
 	snap = snapshot(t, session)
 	assertContains(t, snap, "Mission created")

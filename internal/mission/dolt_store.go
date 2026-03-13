@@ -21,7 +21,7 @@ const (
 
 // DefaultDSN returns the default MySQL DSN for the mission Dolt store.
 func DefaultDSN() string {
-	return "root@tcp(" + DefaultDoltHost + ")/" + DefaultDoltDB
+	return "root@tcp(" + DefaultDoltHost + ")/" + DefaultDoltDB + "?timeout=5s&readTimeout=10s&writeTimeout=10s"
 }
 
 // DoltStore implements Store backed by a Dolt database (MySQL-protocol).
@@ -50,7 +50,11 @@ func OpenDoltStore(dsn string) (*DoltStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open root connection: %w", err)
 	}
-	if _, err := rootDB.Exec("CREATE DATABASE IF NOT EXISTS `" + sanitizeDBName(dbName) + "`"); err != nil {
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if _, err := rootDB.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS `"+sanitizeDBName(dbName)+"`"); err != nil {
 		rootDB.Close()
 		return nil, fmt.Errorf("create database %s: %w", dbName, err)
 	}
@@ -62,7 +66,7 @@ func OpenDoltStore(dsn string) (*DoltStore, error) {
 		return nil, fmt.Errorf("open dolt: %w", err)
 	}
 
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping dolt: %w", err)
 	}
