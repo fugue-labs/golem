@@ -449,6 +449,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleFileChange(msg)
 
 	case contextCompactedMsg:
+		m.estimatedTokens = msg.tokensAfter
+		// History processor normalization (image stripping, orphan cleanup)
+		// is routine housekeeping — don't show a message for it.
+		if msg.strategy == core.CompactionStrategyHistoryProcessor {
+			return m, nil
+		}
 		label := "Auto-compact"
 		if msg.strategy == core.CompactionStrategyEmergencyTruncation {
 			label = "Emergency truncation"
@@ -460,7 +466,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Kind:    chat.KindSystem,
 			Content: summary,
 		})
-		m.estimatedTokens = msg.tokensAfter
 		m.scroll = 0
 		return m, nil
 
@@ -474,6 +479,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case replayDoneMsg:
 		if m.replayMode {
 			return m.handleReplayDone()
+		}
+		return m, nil
+
+	case usageUpdateMsg:
+		if msg.runID == m.runID && msg.inputTokens > 0 {
+			m.estimatedTokens = msg.inputTokens
 		}
 		return m, nil
 
@@ -535,15 +546,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeToolName = ""
 		m.activeToolArgs = ""
 		m.finishLastTool(msg.callID, msg.name, msg.result, msg.errText)
-		if currentPlan, ok := deep.PlanFromToolState(msg.toolState); ok {
-			m.planState = plan.FromDeepPlan(currentPlan)
-		}
-		if currentInv, ok := codetool.InvariantsFromToolState(msg.toolState); ok {
-			m.invariantState = uiinvariants.FromToolState(currentInv)
-		}
-		if currentVerify, ok := codetool.VerificationFromToolState(msg.toolState); ok {
-			m.verificationState = uiverification.FromToolState(currentVerify)
-		}
+		m.applyWorkflowToolState(msg.toolState)
 		// Auto-mark verification stale when a successful mutating tool completes,
 		// so the UI reflects staleness immediately rather than waiting for the
 		// model to explicitly call "verification stale".
@@ -605,18 +608,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.messages != nil {
 			m.history = msg.messages
 			m.toolState = msg.toolState
-			if currentPlan, ok := deep.PlanFromToolState(msg.toolState); ok {
-				m.planState = plan.FromDeepPlan(currentPlan)
-			}
-			if currentInv, ok := codetool.InvariantsFromToolState(msg.toolState); ok {
-				m.invariantState = uiinvariants.FromToolState(currentInv)
-			}
-			if currentVerify, ok := codetool.VerificationFromToolState(msg.toolState); ok {
-				m.verificationState = uiverification.FromToolState(currentVerify)
-			}
+			m.applyWorkflowToolState(msg.toolState)
 			// Auto-save session after each successful run.
 			go func() {
-				_ = agent.SaveSession(m.cfg.WorkingDir, msg.messages, msg.toolState, m.sessionUsage, m.cfg.Model, string(m.cfg.Provider), m.lastPrompt)
+				_ = agent.SaveSession(m.cfg.WorkingDir, msg.messages, m.messages, msg.toolState, m.sessionUsage, m.cfg.Model, string(m.cfg.Provider), m.lastPrompt, m.planState, m.invariantState, m.verificationState, m.specState)
 			}()
 
 			// Create a checkpoint capturing the full session state at this turn.
@@ -1462,6 +1457,57 @@ func (m *Model) renderInputBusyOrIdle() string {
 	return prompt + m.input.View()
 }
 
+func (m *Model) applyWorkflowToolState(toolState map[string]any) {
+	m.toolState = toolState
+	if currentPlan, ok := deep.PlanFromToolState(toolState); ok {
+		m.planState = plan.FromDeepPlan(currentPlan)
+	}
+	if currentInv, ok := codetool.InvariantsFromToolState(toolState); ok {
+		m.invariantState = uiinvariants.FromToolState(currentInv)
+	}
+	if currentVerify, ok := codetool.VerificationFromToolState(toolState); ok {
+		m.verificationState = uiverification.FromToolState(currentVerify)
+	}
+}
+
+func (m *Model) restoreSessionState(session *agent.SessionData, msgs []core.ModelMessage) error {
+	m.history = msgs
+	m.sessionUsage = session.Usage
+	m.lastPrompt = session.Prompt
+	m.applyWorkflowToolState(session.ToolState)
+
+	if len(session.Transcript) > 0 {
+		var transcript []*chat.Message
+		if err := agent.RestoreJSON(session.Transcript, &transcript); err != nil {
+			return fmt.Errorf("restoring transcript: %w", err)
+		}
+		m.messages = transcript
+	}
+	if len(session.PlanState) > 0 {
+		if err := agent.RestoreJSON(session.PlanState, &m.planState); err != nil {
+			return fmt.Errorf("restoring plan state: %w", err)
+		}
+	}
+	if len(session.InvariantState) > 0 {
+		if err := agent.RestoreJSON(session.InvariantState, &m.invariantState); err != nil {
+			return fmt.Errorf("restoring invariant state: %w", err)
+		}
+	}
+	if len(session.VerificationState) > 0 {
+		if err := agent.RestoreJSON(session.VerificationState, &m.verificationState); err != nil {
+			return fmt.Errorf("restoring verification state: %w", err)
+		}
+	}
+	if len(session.SpecState) > 0 {
+		if err := agent.RestoreJSON(session.SpecState, &m.specState); err != nil {
+			return fmt.Errorf("restoring spec state: %w", err)
+		}
+	}
+	m.advanceSpecPhase()
+	m.turnCount = 0
+	return nil
+}
+
 func (m *Model) resumeSession() *chat.Message {
 	if m.busy {
 		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot resume while agent is running."}
@@ -1480,9 +1526,9 @@ func (m *Model) resumeSession() *chat.Message {
 	if err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to restore messages: %v", err)}
 	}
-	m.history = msgs
-	m.toolState = session.ToolState
-	m.sessionUsage = session.Usage
+	if err := m.restoreSessionState(session, msgs); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to restore session state: %v", err)}
+	}
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
 		Content: fmt.Sprintf("Resumed session from %s (%d messages, %d requests).", session.Timestamp.Format("Jan 2 15:04"), len(msgs), session.Usage.Requests),
@@ -1672,12 +1718,9 @@ func (m *Model) renderStatusBar() string {
 		leftParts = append(leftParts, divider, scrolled)
 	}
 
-	// Context window usage — use estimated tokens for real-time tracking.
+	// Context window usage — use real provider token count when available.
 	if ctxWindow := modelContextWindow(m.cfg.Model); ctxWindow > 0 {
 		tokenCount := m.estimatedTokens
-		if tokenCount == 0 && m.usage.InputTokens > 0 {
-			tokenCount = m.usage.InputTokens
-		}
 		if tokenCount > 0 {
 			pct := tokenCount * 100 / ctxWindow
 			bar := contextBar(pct)
@@ -1849,6 +1892,8 @@ func (m *Model) activateSkill(name string) *chat.Message {
 
 // formatDuration is in agent_runner.go.
 
+// isMutatingToolName returns true for tools that modify repo files.
+// Used to auto-mark verification entries stale in the UI.
 func isMutatingToolName(name string) bool {
 	switch name {
 	case "edit", "multi_edit", "write":

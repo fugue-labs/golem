@@ -6,7 +6,8 @@
 //
 // Message types for agent events are also defined here:
 // textDeltaMsg, thinkingDeltaMsg, toolCallMsg, toolResultMsg,
-// runtimePreparedMsg, agentDoneMsg, compactDoneMsg, contextCompactedMsg.
+// runtimePreparedMsg, agentDoneMsg, compactDoneMsg, contextCompactedMsg,
+// usageUpdateMsg.
 
 package ui
 
@@ -75,6 +76,10 @@ type (
 		msgsAfter    int
 		tokensBefore int
 		tokensAfter  int
+	}
+	usageUpdateMsg struct {
+		runID       int
+		inputTokens int // input tokens from the most recent model request (= context size)
 	}
 	teamEventMsg struct {
 		text string // pre-formatted event description
@@ -195,6 +200,11 @@ func (m *Model) agentHooks() core.Hook {
 					}
 				}
 			}
+			// Send real provider input token count for accurate context
+			// window tracking in the status bar.
+			if resp.Usage.InputTokens > 0 {
+				p.Send(usageUpdateMsg{runID: rid, inputTokens: resp.Usage.InputTokens})
+			}
 		},
 		OnToolStart: func(_ context.Context, _ *core.RunContext, toolCallID, toolName, argsJSON string) {
 			if p != nil {
@@ -257,7 +267,7 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 
 // steeringMiddleware injects queued user messages before each model turn.
 func (m *Model) steeringMiddleware() core.AgentMiddleware {
-	return func(
+	return core.RequestOnlyMiddleware(func(
 		ctx context.Context,
 		messages []core.ModelMessage,
 		settings *core.ModelSettings,
@@ -278,7 +288,7 @@ func (m *Model) steeringMiddleware() core.AgentMiddleware {
 			}
 		}
 		return next(ctx, messages, settings, params)
-	}
+	})
 }
 
 // ─── Budget management ──────────────────────────────────────────────────────

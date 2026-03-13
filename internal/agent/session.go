@@ -16,14 +16,19 @@ import (
 
 // SessionData holds the full serializable state of a golem session.
 type SessionData struct {
-	Messages  json.RawMessage        `json:"messages"`
-	ToolState map[string]any         `json:"tool_state,omitempty"`
-	Usage     core.RunUsage          `json:"usage"`
-	Model     string                 `json:"model"`
-	Provider  string                 `json:"provider"`
-	WorkDir   string                 `json:"work_dir"`
-	Timestamp time.Time              `json:"timestamp"`
-	Prompt    string                 `json:"prompt,omitempty"`
+	Messages          json.RawMessage        `json:"messages"`
+	Transcript        json.RawMessage        `json:"transcript,omitempty"`
+	ToolState         map[string]any         `json:"tool_state,omitempty"`
+	Usage             core.RunUsage          `json:"usage"`
+	Model             string                 `json:"model"`
+	Provider          string                 `json:"provider"`
+	WorkDir           string                 `json:"work_dir"`
+	Timestamp         time.Time              `json:"timestamp"`
+	Prompt            string                 `json:"prompt,omitempty"`
+	PlanState         json.RawMessage        `json:"plan_state,omitempty"`
+	InvariantState    json.RawMessage        `json:"invariant_state,omitempty"`
+	VerificationState json.RawMessage        `json:"verification_state,omitempty"`
+	SpecState         json.RawMessage        `json:"spec_state,omitempty"`
 }
 
 // SessionDir returns the session directory for the given working directory.
@@ -39,7 +44,7 @@ func SessionDir(workDir string) (string, error) {
 }
 
 // SaveSession writes the current session state to disk.
-func SaveSession(workDir string, messages []core.ModelMessage, toolState map[string]any, usage core.RunUsage, model, provider, prompt string) error {
+func SaveSession(workDir string, messages []core.ModelMessage, transcript any, toolState map[string]any, usage core.RunUsage, model, provider, prompt string, planState, invariantState, verificationState, specState any) error {
 	dir, err := SessionDir(workDir)
 	if err != nil {
 		return err
@@ -62,6 +67,42 @@ func SaveSession(workDir string, messages []core.ModelMessage, toolState map[str
 		WorkDir:   workDir,
 		Timestamp: time.Now(),
 		Prompt:    prompt,
+	}
+
+	if transcript != nil {
+		if transcriptData, err := json.Marshal(transcript); err == nil {
+			data.Transcript = transcriptData
+		} else {
+			return fmt.Errorf("marshaling transcript: %w", err)
+		}
+	}
+	if planState != nil {
+		if planData, err := json.Marshal(planState); err == nil {
+			data.PlanState = planData
+		} else {
+			return fmt.Errorf("marshaling plan state: %w", err)
+		}
+	}
+	if invariantState != nil {
+		if invariantData, err := json.Marshal(invariantState); err == nil {
+			data.InvariantState = invariantData
+		} else {
+			return fmt.Errorf("marshaling invariant state: %w", err)
+		}
+	}
+	if verificationState != nil {
+		if verificationData, err := json.Marshal(verificationState); err == nil {
+			data.VerificationState = verificationData
+		} else {
+			return fmt.Errorf("marshaling verification state: %w", err)
+		}
+	}
+	if specState != nil {
+		if specData, err := json.Marshal(specState); err == nil {
+			data.SpecState = specData
+		} else {
+			return fmt.Errorf("marshaling spec state: %w", err)
+		}
 	}
 
 	raw, err := json.Marshal(data)
@@ -117,6 +158,15 @@ func LoadLatestSession(workDir string) (*SessionData, error) {
 // RestoreMessages deserializes the messages from a session.
 func (s *SessionData) RestoreMessages() ([]core.ModelMessage, error) {
 	return core.UnmarshalMessages(s.Messages)
+}
+
+// RestoreJSON decodes an optional JSON payload into out, leaving out unchanged
+// when the payload is absent so older session files continue to load.
+func RestoreJSON[T any](raw json.RawMessage, out *T) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	return json.Unmarshal(raw, out)
 }
 
 // projectHash returns a short hash of the working directory for session grouping.
