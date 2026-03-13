@@ -82,6 +82,9 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) initStore() tea.Cmd {
 	return func() tea.Msg {
+		if m.ctrl != nil {
+			return m.doRefresh()
+		}
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return refreshDoneMsg{err: fmt.Errorf("home dir: %w", err)}
