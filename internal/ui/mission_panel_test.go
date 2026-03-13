@@ -287,7 +287,7 @@ func TestMissionNewCommandCreatesMission(t *testing.T) {
 	m, _ := testMissionModel(t)
 	m.cfg.WorkingDir = "/tmp/test-repo"
 
-	msg := m.handleMissionCommand("/mission new Build a REST API server")
+	msg, _ := m.handleMissionCommand("/mission new Build a REST API server")
 
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant message, got %v", msg.Kind)
@@ -308,7 +308,7 @@ func TestMissionNewCommandTruncatesLongTitle(t *testing.T) {
 	m.cfg.WorkingDir = "/tmp/repo"
 
 	longGoal := strings.Repeat("x", 100)
-	msg := m.handleMissionCommand("/mission new " + longGoal)
+	msg, _ := m.handleMissionCommand("/mission new " + longGoal)
 
 	if !strings.Contains(msg.Content, "Mission created") {
 		t.Fatalf("expected mission created\n%s", msg.Content)
@@ -323,7 +323,7 @@ func TestMissionNewCommandEmptyGoal(t *testing.T) {
 	m, _ := testMissionModel(t)
 	// "/mission new " with only a trailing space trims to "new" which doesn't
 	// match "new " prefix, so falls through to unknown-command error.
-	msg := m.handleMissionCommand("/mission new ")
+	msg, _ := m.handleMissionCommand("/mission new ")
 
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected error for empty goal, got kind=%v", msg.Kind)
@@ -335,7 +335,7 @@ func TestMissionNewCommandEmptyGoal(t *testing.T) {
 
 func TestMissionStatusDisplayNoMission(t *testing.T) {
 	m, _ := testMissionModel(t)
-	msg := m.handleMissionCommand("/mission status")
+	msg, _ := m.handleMissionCommand("/mission status")
 
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant message, got %v", msg.Kind)
@@ -356,7 +356,7 @@ func TestMissionStatusDisplayWithTasks(t *testing.T) {
 	missionID := seedMission(t, ctrl, mission.MissionRunning, tasks)
 	m.activeMissionID = missionID
 
-	msg := m.handleMissionCommand("/mission status")
+	msg, _ := m.handleMissionCommand("/mission status")
 
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant message, got %v", msg.Kind)
@@ -394,7 +394,7 @@ func TestMissionTasksDisplayWithDependencies(t *testing.T) {
 	}
 
 	m.activeMissionID = created.ID
-	msg := m.handleMissionCommand("/mission tasks")
+	msg, _ := m.handleMissionCommand("/mission tasks")
 
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant, got %v", msg.Kind)
@@ -409,7 +409,7 @@ func TestMissionTasksDisplayWithDependencies(t *testing.T) {
 
 func TestMissionHelpCommand(t *testing.T) {
 	m, _ := testMissionModel(t)
-	msg := m.handleMissionCommand("/mission help")
+	msg, _ := m.handleMissionCommand("/mission help")
 
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant, got %v", msg.Kind)
@@ -423,7 +423,7 @@ func TestMissionHelpCommand(t *testing.T) {
 
 func TestMissionUnknownSubcommand(t *testing.T) {
 	m, _ := testMissionModel(t)
-	msg := m.handleMissionCommand("/mission foobar")
+	msg, _ := m.handleMissionCommand("/mission foobar")
 
 	if msg.Kind != chat.KindError {
 		t.Fatalf("expected error, got %v", msg.Kind)
@@ -562,7 +562,7 @@ func TestMissionCancelCommand(t *testing.T) {
 	}
 
 	m.activeMissionID = created.ID
-	msg := m.handleMissionCommand("/mission cancel")
+	msg, _ := m.handleMissionCommand("/mission cancel")
 
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant, got %v", msg.Kind)
@@ -597,7 +597,7 @@ func TestMissionPauseCommand(t *testing.T) {
 	}
 
 	m.activeMissionID = created.ID
-	msg := m.handleMissionCommand("/mission pause")
+	msg, _ := m.handleMissionCommand("/mission pause")
 
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant, got %v", msg.Kind)
@@ -620,7 +620,7 @@ func TestMissionListCommand(t *testing.T) {
 	}
 
 	m.activeMissionID = m1.ID
-	msg := m.handleMissionCommand("/mission list")
+	msg, _ := m.handleMissionCommand("/mission list")
 
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant, got %v", msg.Kind)

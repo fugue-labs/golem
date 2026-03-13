@@ -487,7 +487,7 @@ func TestTuistoryDashboard(t *testing.T) {
 		assertContains(t, snap, "Mission Control")
 
 		// Shift+Tab to go backwards.
-		press(t, session, "shift+tab")
+		press(t, session, "shift", "tab")
 		time.Sleep(300 * time.Millisecond)
 		snap = snapshot(t, session)
 		assertContains(t, snap, "Mission Control")
