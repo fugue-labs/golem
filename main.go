@@ -162,7 +162,7 @@ func runRuntimeCommand(name string, args []string, out, errOut io.Writer) int {
 
 func runDashboard(missionID string, errOut io.Writer) int {
 	m := dashboard.New(missionID)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(errOut, "dashboard error: %v\n", err)
 		return 1
@@ -224,7 +224,7 @@ func runAutomationsCommand(args []string, out, errOut io.Writer) int {
 		return 0
 
 	case "init":
-		fmt.Fprintln(out, "Example ~/.golem/automations.json:\n")
+		fmt.Fprintln(out, "Example ~/.golem/automations.json:")
 		fmt.Fprintln(out, automations.ExampleConfig())
 		return 0
 

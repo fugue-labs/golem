@@ -11,6 +11,7 @@
 - Auto-context: `100` tokens, keep last `2` turns
 - Top-level personality: `true`
 - Git repo: `off`
+- Model routing: `on`
 
 **Tool surfaces**
 

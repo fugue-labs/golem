@@ -1,5 +1,9 @@
 .claude
 
+# Go workspace (local development only)
+go.work
+go.work.sum
+
 # Gas Town (added by gt)
 .beads/
 .runtime/

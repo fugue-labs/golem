@@ -61,7 +61,12 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 		runtime = &state
 	}
 
-	model, err := createModel(cfg)
+	// Use the routed model if model routing selected a different model for this turn.
+	modelName := cfg.Model
+	if runtime.RoutedModel != "" && runtime.RoutedModel != cfg.Model {
+		modelName = runtime.RoutedModel
+	}
+	model, err := createModelWithName(cfg, modelName)
 	if err != nil {
 		return nil, fmt.Errorf("creating model: %w", err)
 	}
@@ -88,9 +93,6 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 	}
 	if runtime.EffectiveTeamMode {
 		toolOpts = append(toolOpts, codetool.WithTeamMode())
-		if runtime.EventBus != nil {
-			toolOpts = append(toolOpts, codetool.WithTeamEventBus(runtime.EventBus))
-		}
 	}
 	if cfg.DisableGreedyThinkingPressure {
 		toolOpts = append(toolOpts, codetool.WithDisableGreedyThinkingPressure())
@@ -160,9 +162,11 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 		}))
 	}
 
+	// Apply model-specific options, adjusting for routed fast models.
+	isFastModel := runtime.RoutedModelTier == TierFast && modelName != cfg.Model
 	switch cfg.Provider {
 	case config.ProviderAnthropic, config.ProviderVertexAnthropic, config.ProviderVertexAI:
-		if cfg.ThinkingBudget > 0 {
+		if cfg.ThinkingBudget > 0 && !isFastModel {
 			maxTokens := cfg.ThinkingBudget + thinkingBudgetResponsePaddingTokens
 			opts = append(opts,
 				core.WithThinkingBudget[string](cfg.ThinkingBudget),
@@ -170,9 +174,9 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 			)
 		}
 	case config.ProviderOpenAI, config.ProviderOpenAICompatible:
-		if cfg.ReasoningEffort != "" {
+		if cfg.ReasoningEffort != "" && !isFastModel {
 			opts = append(opts, core.WithReasoningEffort[string](cfg.ReasoningEffort))
-			if strings.Contains(strings.ToLower(cfg.Model), "codex") {
+			if strings.Contains(strings.ToLower(modelName), "codex") {
 				opts = append(opts,
 					core.WithMaxTokens[string](50000),
 					core.WithTemperature[string](0),
