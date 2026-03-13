@@ -985,8 +985,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if strings.TrimSpace(strings.TrimPrefix(text, "/mission")) == "plan" {
 				return m.handleMissionPlanRun()
 			}
-			m.messages = append(m.messages, m.handleMissionCommand(text))
+			msg, cmd := m.handleMissionCommand(text)
+			m.messages = append(m.messages, msg)
 			m.scroll = 0
+			if cmd != nil {
+				return m, tea.Batch(cmd, m.input.Focus())
+			}
 			return m, m.input.Focus()
 		}
 		if text == "/replay" || strings.HasPrefix(text, "/replay ") {

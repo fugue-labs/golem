@@ -10,3 +10,4 @@ go.work.sum
 .logs/
 __pycache__/
 state.json
+golem

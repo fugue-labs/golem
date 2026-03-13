@@ -15,46 +15,46 @@ import (
 )
 
 // handleMissionCommand dispatches /mission subcommands.
-func (m *Model) handleMissionCommand(text string) *chat.Message {
+func (m *Model) handleMissionCommand(text string) (*chat.Message, tea.Cmd) {
 	args := strings.TrimSpace(strings.TrimPrefix(text, "/mission"))
 
 	switch {
 	case args == "" || args == "help":
-		return m.renderMissionHelpMessage()
+		return m.renderMissionHelpMessage(), nil
 
 	case strings.HasPrefix(args, "new "):
 		goal := strings.TrimSpace(strings.TrimPrefix(args, "new "))
-		return m.handleMissionNew(goal)
+		return m.handleMissionNew(goal), nil
 
 	case args == "status":
-		return m.handleMissionStatus()
+		return m.handleMissionStatus(), nil
 
 	case args == "tasks":
-		return m.handleMissionTasks()
+		return m.handleMissionTasks(), nil
 
 	case args == "plan":
 		return m.handleMissionPlan()
 
 	case args == "approve":
-		return m.handleMissionApprove()
+		return m.handleMissionApprove(), nil
 
 	case args == "start":
-		return m.handleMissionStart()
+		return m.handleMissionStart(), nil
 
 	case args == "pause":
-		return m.handleMissionPause()
+		return m.handleMissionPause(), nil
 
 	case args == "cancel":
-		return m.handleMissionCancel()
+		return m.handleMissionCancel(), nil
 
 	case args == "list":
-		return m.handleMissionList()
+		return m.handleMissionList(), nil
 
 	default:
 		return &chat.Message{
 			Kind:    chat.KindError,
 			Content: fmt.Sprintf("Unknown mission command: `/mission%s`\nUse `/mission help` for available commands.", args),
-		}
+		}, nil
 	}
 }
 
@@ -246,9 +246,9 @@ func taskStatusIcon(s mission.TaskStatus) string {
 	}
 }
 
-func (m *Model) handleMissionPlan() *chat.Message {
+func (m *Model) handleMissionPlan() (*chat.Message, tea.Cmd) {
 	// This is a fallback for the old dispatch path; real work is in handleMissionPlanRun.
-	return &chat.Message{Kind: chat.KindAssistant, Content: "Use `/mission plan` to invoke the planner."}
+	return &chat.Message{Kind: chat.KindAssistant, Content: "Use `/mission plan` to invoke the planner."}, nil
 }
 
 // handleMissionPlanRun validates the goal, gathers codebase context, and
