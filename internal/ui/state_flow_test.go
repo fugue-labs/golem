@@ -408,3 +408,217 @@ func TestVerifyCommandRendersVerificationSummary(t *testing.T) {
 		t.Fatal("expected input to be reset")
 	}
 }
+
+// ---------- usageUpdateMsg tests ----------
+
+func TestUsageUpdateMsgSetsEstimatedTokens(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 10
+
+	updated, _ := m.Update(usageUpdateMsg{runID: 10, inputTokens: 42000})
+	model := updated.(*Model)
+
+	if model.estimatedTokens != 42000 {
+		t.Fatalf("estimatedTokens=%d, want 42000", model.estimatedTokens)
+	}
+}
+
+func TestUsageUpdateMsgIgnoresStaleRunID(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 10
+	m.estimatedTokens = 5000
+
+	updated, _ := m.Update(usageUpdateMsg{runID: 9, inputTokens: 99000})
+	model := updated.(*Model)
+
+	if model.estimatedTokens != 5000 {
+		t.Fatalf("estimatedTokens=%d, want 5000 (stale runID should be ignored)", model.estimatedTokens)
+	}
+}
+
+func TestUsageUpdateMsgIgnoresZeroTokens(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 10
+	m.estimatedTokens = 5000
+
+	updated, _ := m.Update(usageUpdateMsg{runID: 10, inputTokens: 0})
+	model := updated.(*Model)
+
+	if model.estimatedTokens != 5000 {
+		t.Fatalf("estimatedTokens=%d, want 5000 (zero tokens should be ignored)", model.estimatedTokens)
+	}
+}
+
+// ---------- applyWorkflowToolState tests ----------
+
+func TestApplyWorkflowToolStatePreservesStateWhenKeysAbsent(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.planState = plan.State{Tasks: []plan.Task{
+		{ID: "T1", Description: "existing task", Status: "completed"},
+	}}
+	m.invariantState = uiinvariants.State{
+		Extracted: true,
+		Items:     []uiinvariants.Item{{ID: "I1", Description: "existing", Kind: "hard", Status: "pass"}},
+	}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
+		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
+	}}
+
+	// Apply empty tool state — no planning/invariants/verification keys.
+	m.applyWorkflowToolState(map[string]any{})
+
+	if len(m.planState.Tasks) != 1 || m.planState.Tasks[0].ID != "T1" {
+		t.Fatalf("plan state was mutated by empty tool state")
+	}
+	if len(m.invariantState.Items) != 1 || m.invariantState.Items[0].ID != "I1" {
+		t.Fatalf("invariant state was mutated by empty tool state")
+	}
+	if len(m.verificationState.Entries) != 1 || m.verificationState.Entries[0].ID != "V1" {
+		t.Fatalf("verification state was mutated by empty tool state")
+	}
+}
+
+func TestApplyWorkflowToolStateUpdatesWhenKeysPresent(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.planState = plan.State{Tasks: []plan.Task{
+		{ID: "T-OLD", Description: "old task", Status: "completed"},
+	}}
+
+	toolState := map[string]any{
+		"planning": map[string]any{
+			"tasks": []map[string]any{{
+				"id":          "T-NEW",
+				"description": "new task",
+				"status":      "in_progress",
+			}},
+		},
+		"invariants": map[string]any{
+			"extracted": true,
+			"items": []map[string]any{{
+				"id":          "I-NEW",
+				"description": "new invariant",
+				"kind":        "hard",
+				"status":      "pass",
+			}},
+		},
+		"verification": map[string]any{
+			"entries": []map[string]any{{
+				"id":        "V-NEW",
+				"command":   "go build ./...",
+				"status":    "pass",
+				"freshness": "fresh",
+			}},
+		},
+	}
+
+	m.applyWorkflowToolState(toolState)
+
+	if len(m.planState.Tasks) != 1 || m.planState.Tasks[0].Description != "new task" {
+		t.Fatalf("plan state not updated: %+v", m.planState)
+	}
+	if len(m.invariantState.Items) != 1 || m.invariantState.Items[0].Description != "new invariant" {
+		t.Fatalf("invariant state not updated: %+v", m.invariantState)
+	}
+	if len(m.verificationState.Entries) != 1 || m.verificationState.Entries[0].Command != "go build ./..." {
+		t.Fatalf("verification state not updated: %+v", m.verificationState)
+	}
+}
+
+func TestApplyWorkflowToolStateNilToolState(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.planState = plan.State{Tasks: []plan.Task{
+		{ID: "T1", Description: "existing", Status: "completed"},
+	}}
+
+	// nil tool state should not panic or mutate existing state.
+	m.applyWorkflowToolState(nil)
+
+	if len(m.planState.Tasks) != 1 || m.planState.Tasks[0].ID != "T1" {
+		t.Fatalf("plan state mutated by nil tool state")
+	}
+}
+
+// ---------- contextCompactedMsg tests ----------
+
+func TestContextCompactedMsgUpdatesEstimatedTokens(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.estimatedTokens = 100000
+
+	updated, _ := m.Update(contextCompactedMsg{
+		strategy:     "auto_summary",
+		msgsBefore:   50,
+		msgsAfter:    20,
+		tokensBefore: 100000,
+		tokensAfter:  30000,
+	})
+	model := updated.(*Model)
+
+	if model.estimatedTokens != 30000 {
+		t.Fatalf("estimatedTokens=%d, want 30000", model.estimatedTokens)
+	}
+}
+
+func TestContextCompactedMsgSuppressesHistoryProcessorMessages(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	msgsBefore := len(m.messages)
+
+	updated, _ := m.Update(contextCompactedMsg{
+		strategy:     "history_processor",
+		msgsBefore:   50,
+		msgsAfter:    48,
+		tokensBefore: 100000,
+		tokensAfter:  95000,
+	})
+	model := updated.(*Model)
+
+	if len(model.messages) != msgsBefore {
+		t.Fatalf("history_processor should not append a message, got %d messages (was %d)", len(model.messages), msgsBefore)
+	}
+	// But tokens should still update.
+	if model.estimatedTokens != 95000 {
+		t.Fatalf("estimatedTokens=%d, want 95000", model.estimatedTokens)
+	}
+}
+
+func TestContextCompactedMsgShowsMessageForAutoSummary(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	msgsBefore := len(m.messages)
+
+	updated, _ := m.Update(contextCompactedMsg{
+		strategy:     "auto_summary",
+		msgsBefore:   50,
+		msgsAfter:    20,
+		tokensBefore: 100000,
+		tokensAfter:  30000,
+	})
+	model := updated.(*Model)
+
+	if len(model.messages) != msgsBefore+1 {
+		t.Fatalf("auto_summary should append a message, got %d messages (was %d)", len(model.messages), msgsBefore)
+	}
+	content := model.messages[len(model.messages)-1].Content
+	if !strings.Contains(content, "Auto-compact") {
+		t.Fatalf("expected Auto-compact label, got %q", content)
+	}
+}
+
+func TestContextCompactedMsgShowsEmergencyLabel(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+
+	updated, _ := m.Update(contextCompactedMsg{
+		strategy:     "emergency_truncation",
+		msgsBefore:   50,
+		msgsAfter:    10,
+		tokensBefore: 200000,
+		tokensAfter:  50000,
+	})
+	model := updated.(*Model)
+
+	if len(model.messages) == 0 {
+		t.Fatal("expected a message to be appended")
+	}
+	content := model.messages[len(model.messages)-1].Content
+	if !strings.Contains(content, "Emergency truncation") {
+		t.Fatalf("expected Emergency truncation label, got %q", content)
+	}
+}
