@@ -8,6 +8,7 @@ import (
 
 	"github.com/fugue-labs/golem/internal/mission"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/gollem/core"
 )
 
 func TestMissionPlanCommandMarksMissionPlanning(t *testing.T) {
@@ -126,6 +127,46 @@ func TestCompleteMissionPlanRunAppliesPlanAndEnablesApproval(t *testing.T) {
 	}
 	if updated.Status != mission.MissionRunning {
 		t.Fatalf("mission status after approve = %s, want %s", updated.Status, mission.MissionRunning)
+	}
+}
+
+func TestCompleteMissionPlanRunUsesFinalModelMessages(t *testing.T) {
+	m, ctrl := testMissionModel(t)
+	ctx := context.Background()
+
+	created, err := ctrl.CreateMission(ctx, mission.CreateMissionRequest{
+		Title: "Final model message test",
+		Goal:  "Plan from final response text",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := ctrl.GetMission(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Status = mission.MissionPlanning
+	stored.UpdatedAt = time.Now().UTC()
+	if err := ctrl.Store().UpdateMission(ctx, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	m.activeMissionID = created.ID
+	m.missionPlanRun = &missionPlanRun{MissionID: created.ID, PreviousStatus: mission.MissionDraft}
+	m.currentRunMessages = []*chat.Message{{Kind: chat.KindUser, Content: "/mission plan"}}
+	m.messages = []*chat.Message{{Kind: chat.KindUser, Content: "/mission plan"}}
+
+	m.completeMissionPlanRun(nil, []core.ModelMessage{
+		core.ModelResponse{Parts: []core.ModelResponsePart{core.TextPart{Content: validMissionPlanJSON()}}},
+	})
+
+	updated, err := ctrl.GetMission(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != mission.MissionAwaitingApproval {
+		t.Fatalf("mission status = %s, want %s", updated.Status, mission.MissionAwaitingApproval)
 	}
 }
 
