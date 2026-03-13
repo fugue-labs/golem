@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/mission"
@@ -308,15 +307,8 @@ func (m *Model) handleMissionPlanRun() (tea.Model, tea.Cmd) {
 		Content: fmt.Sprintf("Planning mission `%s`: %s", ms.ID, ms.Goal),
 	})
 	m.inputHistory = append(m.inputHistory, "/mission plan")
-	m.busy = true
-	m.startTime = time.Now()
-	m.lastPrompt = prompt
-	m.currentRunMessages = []*chat.Message{userMsg}
-	m.runID++
-	m.hookRID.Store(int64(m.runID))
-	m.runCtx, m.cancel = context.WithCancel(context.Background())
 	m.scroll = 0
-	return m, m.prepareRun(prompt)
+	return m, m.beginRun(prompt, []*chat.Message{userMsg})
 }
 
 func (m *Model) handleMissionApprove() *chat.Message {
