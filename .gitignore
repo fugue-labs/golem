@@ -11,3 +11,7 @@ go.work.sum
 __pycache__/
 state.json
 golem
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
