@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/mission"
 )
+
+func stripANSI(s string) string {
+	re := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	return re.ReplaceAllString(s, "")
+}
 
 // setupTeatestModel creates a dashboard model with a real SQLite store and
 // pre-injected controller, suitable for teatest integration tests that run
@@ -280,11 +286,12 @@ func TestTeatestTaskStatusIcons(t *testing.T) {
 		}
 	}
 
-	// Verify task titles still appear.
-	if !strings.Contains(view, "Scaffold OAuth2 types") {
+	// Verify task titles still appear (strip ANSI — done tasks use per-char strikethrough).
+	plainView := stripANSI(view)
+	if !strings.Contains(plainView, "Scaffold OAuth2 types") {
 		t.Errorf("expected done task title in view, view=\n%s", view)
 	}
-	if !strings.Contains(view, "Implement token handler") {
+	if !strings.Contains(plainView, "Implement token handler") {
 		t.Error("expected running task title in view")
 	}
 }
@@ -978,10 +985,11 @@ func TestTeatestFooterKeybindings(t *testing.T) {
 	m.missionID = ms.ID
 	refreshModel(t, m)
 
-	view := viewString(m)
+	// Test footer content directly — the full View() may truncate it depending on height.
+	footer := stripANSI(m.renderFooter())
 	for _, hint := range []string{"q:quit", "r:refresh", "tab:switch pane", "j/k:scroll"} {
-		if !strings.Contains(view, hint) {
-			t.Errorf("expected key hint %q in footer", hint)
+		if !strings.Contains(footer, hint) {
+			t.Errorf("expected key hint %q in footer, got %q", hint, footer)
 		}
 	}
 }
