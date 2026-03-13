@@ -889,7 +889,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 var slashCommands = []string{
 	"/clear", "/compact", "/config", "/context", "/cost", "/diff",
 	"/doctor", "/exit", "/help", "/invariants", "/model", "/plan",
-	"/quit", "/resume", "/runtime", "/skill", "/skills", "/team",
+	"/quit", "/resume", "/runtime", "/search", "/skill", "/skills", "/team",
 	"/undo", "/verify",
 }
 
