@@ -69,6 +69,11 @@ func ParsePlanResult(text string) (*PlanResult, error) {
 	}
 
 	NormalizePlanResult(plan)
+	// Remap short planner-generated IDs (e.g. "t1", "t2") to globally unique
+	// IDs so they don't collide across missions in the shared Dolt store.
+	// This only applies to LLM planner output (this function), not to
+	// programmatic callers like ApplyPlan/ApplyReplan.
+	remapShortTaskIDs(plan)
 	if err := ValidatePlanResult(plan); err != nil {
 		return nil, err
 	}

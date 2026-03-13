@@ -22,11 +22,12 @@ func NewReviewLauncher(store Store) *ReviewLauncher {
 
 // ReviewSpec describes a provisioned review run ready for execution by the TUI.
 type ReviewSpec struct {
-	Run       *Run
-	Task      *Task
-	WorkerRun *Run
-	Prompt    string
-	DiffText  string
+	Run          *Run
+	Task         *Task
+	WorkerRun    *Run
+	WorktreePath string
+	Prompt       string
+	DiffText     string
 }
 
 // DispatchPendingReviews creates review runs for tasks in TaskAwaitingReview.
@@ -120,11 +121,12 @@ func (rl *ReviewLauncher) provisionReview(ctx context.Context, m *Mission, task 
 	prompt := BuildReviewPrompt(task, workerRun, diff)
 
 	return &ReviewSpec{
-		Run:       run,
-		Task:      task,
-		WorkerRun: workerRun,
-		Prompt:    prompt,
-		DiffText:  diff,
+		Run:          run,
+		Task:         task,
+		WorkerRun:    workerRun,
+		WorktreePath: workerRun.WorktreePath,
+		Prompt:       prompt,
+		DiffText:     diff,
 	}, nil
 }
 
@@ -236,7 +238,8 @@ func (rl *ReviewLauncher) handleReject(ctx context.Context, spec *ReviewSpec, re
 }
 
 func (rl *ReviewLauncher) handleRequestChanges(ctx context.Context, spec *ReviewSpec, result *ReviewResult, resultJSON json.RawMessage, now time.Time) error {
-	spec.Task.Status = TaskRejected
+	// Set back to ready so the orchestrator auto-retries with the feedback.
+	spec.Task.Status = TaskReady
 	spec.Task.BlockingReason = result.Suggestion
 	if spec.Task.BlockingReason == "" {
 		spec.Task.BlockingReason = result.Summary

@@ -297,18 +297,30 @@ func TestControllerApplyPlan(t *testing.T) {
 		t.Errorf("mission status = %s, want awaiting_approval", updated.Status)
 	}
 
-	// t_impl should be ready (no deps), t_test should be pending (depends on t_impl).
+	// Look up tasks by title since ApplyPlan generates unique IDs.
 	tasks, _ := s.ListTasks(ctx, m.ID)
-	taskMap := make(map[string]*Task)
-	for _, t := range tasks {
-		taskMap[t.ID] = t
+	taskByTitle := make(map[string]*Task)
+	for _, tk := range tasks {
+		taskByTitle[tk.Title] = tk
 	}
 
-	if taskMap["t_impl"].Status != TaskReady {
-		t.Errorf("t_impl status = %s, want ready", taskMap["t_impl"].Status)
+	implTask := taskByTitle["Implement feature"]
+	testTask := taskByTitle["Write tests"]
+	if implTask == nil || testTask == nil {
+		t.Fatalf("expected tasks by title, got titles: %v", func() []string {
+			var names []string
+			for n := range taskByTitle {
+				names = append(names, n)
+			}
+			return names
+		}())
 	}
-	if taskMap["t_test"].Status != TaskPending {
-		t.Errorf("t_test status = %s, want pending", taskMap["t_test"].Status)
+
+	if implTask.Status != TaskReady {
+		t.Errorf("impl task status = %s, want ready", implTask.Status)
+	}
+	if testTask.Status != TaskPending {
+		t.Errorf("test task status = %s, want pending", testTask.Status)
 	}
 }
 

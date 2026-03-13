@@ -372,6 +372,14 @@ func BuildWorkerPrompt(task *Task, worktreePath string) string {
 		b.WriteString("\n")
 	}
 
+	if task.BlockingReason != "" {
+		b.WriteString("## Previous Review Feedback\n\n")
+		b.WriteString("A previous attempt was reviewed and changes were requested.\n")
+		b.WriteString("Address the following feedback:\n\n")
+		b.WriteString(task.BlockingReason)
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString("## Rules\n\n")
 	b.WriteString("1. Work ONLY within your worktree — do not modify the main branch directly.\n")
 	b.WriteString("2. Commit your changes with clear, descriptive commit messages.\n")

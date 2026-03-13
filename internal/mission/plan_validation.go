@@ -75,6 +75,51 @@ func NormalizePlanResult(plan *PlanResult) {
 	}
 }
 
+// remapShortTaskIDs detects short planner-generated IDs like "t1", "t2" and
+// replaces them in-place with globally unique IDs so they don't collide across
+// missions in the shared Dolt store.
+// IDs that are already unique (e.g. "task-impl", "t_abc123") are left alone.
+func remapShortTaskIDs(plan *PlanResult) {
+	idMap := make(map[string]string)
+	for _, t := range plan.Tasks {
+		id := strings.TrimSpace(t.ID)
+		if isShortPlannerID(id) {
+			idMap[id] = generateID("t")
+		}
+	}
+	if len(idMap) == 0 {
+		return
+	}
+	for i := range plan.Tasks {
+		if newID, ok := idMap[plan.Tasks[i].ID]; ok {
+			plan.Tasks[i].ID = newID
+		}
+	}
+	for i := range plan.Dependencies {
+		if newID, ok := idMap[plan.Dependencies[i].TaskID]; ok {
+			plan.Dependencies[i].TaskID = newID
+		}
+		if newID, ok := idMap[plan.Dependencies[i].DependsOnID]; ok {
+			plan.Dependencies[i].DependsOnID = newID
+		}
+	}
+}
+
+// isShortPlannerID returns true for IDs like "t1", "t2", "task1" — short
+// auto-generated IDs from LLM planners that would collide across missions.
+func isShortPlannerID(id string) bool {
+	if len(id) > 10 {
+		return false // long enough to be unique
+	}
+	// Match patterns like "t1", "t2", "t10", "task1", "task_1"
+	for _, c := range id {
+		if c >= '0' && c <= '9' {
+			return true // has digits — likely a planner sequence ID
+		}
+	}
+	return false
+}
+
 // ValidatePlanResult checks that a plan is internally consistent before it is
 // written to durable mission state.
 func ValidatePlanResult(plan *PlanResult) error {

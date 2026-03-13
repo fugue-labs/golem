@@ -486,24 +486,31 @@ func TestMissionLifecycle(t *testing.T) {
 		t.Fatalf("expected awaiting_approval, got %s", mission.Status)
 	}
 
-	// task-impl should be ready (no deps), task-test should be pending.
-	implTask, err := store.GetTask(ctx, "task-impl")
+	// Look up tasks by title since ApplyPlan generates unique IDs.
+	allTasks, err := store.ListTasks(ctx, mission.ID)
 	if err != nil {
-		t.Fatalf("GetTask task-impl: %v", err)
+		t.Fatalf("ListTasks: %v", err)
 	}
-	if implTask.Status != TaskReady {
-		t.Fatalf("expected task-impl ready, got %s", implTask.Status)
+	taskByTitle := make(map[string]*Task)
+	for _, tk := range allTasks {
+		taskByTitle[tk.Title] = tk
 	}
+	implTask := taskByTitle["Implement widget"]
+	testTask := taskByTitle["Add widget tests"]
+	if implTask == nil || testTask == nil {
+		t.Fatalf("expected tasks by title, got %v", taskByTitle)
+	}
+	implTaskID := implTask.ID
+	testTaskID := testTask.ID
 
-	testTask, err := store.GetTask(ctx, "task-test")
-	if err != nil {
-		t.Fatalf("GetTask task-test: %v", err)
+	if implTask.Status != TaskReady {
+		t.Fatalf("expected impl task ready, got %s", implTask.Status)
 	}
 	if testTask.Status != TaskPending {
-		t.Fatalf("expected task-test pending, got %s", testTask.Status)
+		t.Fatalf("expected test task pending, got %s", testTask.Status)
 	}
-	t.Logf("Step 2: plan applied, mission %s, task-impl=%s, task-test=%s",
-		mission.Status, implTask.Status, testTask.Status)
+	t.Logf("Step 2: plan applied, mission %s, impl=%s(%s), test=%s(%s)",
+		mission.Status, implTaskID, implTask.Status, testTaskID, testTask.Status)
 
 	// -----------------------------------------------------------------------
 	// 3. Start mission → running
@@ -527,8 +534,8 @@ func TestMissionLifecycle(t *testing.T) {
 	if len(selected) != 1 {
 		t.Fatalf("expected 1 ready task, got %d", len(selected))
 	}
-	if selected[0].ID != "task-impl" {
-		t.Fatalf("expected task-impl, got %s", selected[0].ID)
+	if selected[0].ID != implTaskID {
+		t.Fatalf("expected %s, got %s", implTaskID, selected[0].ID)
 	}
 	t.Logf("Step 4: scheduler selected %s", selected[0].ID)
 
@@ -540,11 +547,11 @@ func TestMissionLifecycle(t *testing.T) {
 	workerRun := &Run{
 		ID:           generateID("r"),
 		MissionID:    mission.ID,
-		TaskID:       "task-impl",
+		TaskID:       implTaskID,
 		Mode:         RunModeWorker,
 		Status:       RunRunning,
-		LeaseOwner:   "task-impl",
-		WorktreePath: "/tmp/fake-worktree/task-impl",
+		LeaseOwner:   implTaskID,
+		WorktreePath: "/tmp/fake-worktree/" + implTaskID,
 		StartedAt:    &now,
 	}
 	if err := store.CreateRun(ctx, workerRun); err != nil {
@@ -552,7 +559,7 @@ func TestMissionLifecycle(t *testing.T) {
 	}
 
 	// Transition task to running (simulating what DispatchReadyTasks does).
-	implTask, _ = store.GetTask(ctx, "task-impl")
+	implTask, _ = store.GetTask(ctx, implTaskID)
 	implTask.Status = TaskRunning
 	implTask.AttemptCount = 1
 	implTask.UpdatedAt = now
@@ -576,16 +583,16 @@ func TestMissionLifecycle(t *testing.T) {
 	}
 
 	// Verify task is now awaiting_review.
-	implTask, _ = store.GetTask(ctx, "task-impl")
+	implTask, _ = store.GetTask(ctx, implTaskID)
 	if implTask.Status != TaskAwaitingReview {
-		t.Fatalf("expected task-impl awaiting_review, got %s", implTask.Status)
+		t.Fatalf("expected impl task awaiting_review, got %s", implTask.Status)
 	}
 	// Verify run is succeeded.
 	workerRun, _ = store.GetRun(ctx, workerRun.ID)
 	if workerRun.Status != RunSucceeded {
 		t.Fatalf("expected run succeeded, got %s", workerRun.Status)
 	}
-	t.Logf("Step 5: worker completed, task-impl=%s, run=%s",
+	t.Logf("Step 5: worker completed, impl=%s, run=%s",
 		implTask.Status, workerRun.Status)
 
 	// -----------------------------------------------------------------------
@@ -598,7 +605,7 @@ func TestMissionLifecycle(t *testing.T) {
 	reviewRun := &Run{
 		ID:        generateID("r"),
 		MissionID: mission.ID,
-		TaskID:    "task-impl",
+		TaskID:    implTaskID,
 		Mode:      RunModeReview,
 		Status:    RunRunning,
 		StartedAt: &now,
@@ -625,11 +632,11 @@ func TestMissionLifecycle(t *testing.T) {
 	}
 
 	// Verify task is now accepted.
-	implTask, _ = store.GetTask(ctx, "task-impl")
+	implTask, _ = store.GetTask(ctx, implTaskID)
 	if implTask.Status != TaskAccepted {
-		t.Fatalf("expected task-impl accepted, got %s", implTask.Status)
+		t.Fatalf("expected impl task accepted, got %s", implTask.Status)
 	}
-	t.Logf("Step 6: review passed, task-impl=%s", implTask.Status)
+	t.Logf("Step 6: review passed, impl=%s", implTask.Status)
 
 	// -----------------------------------------------------------------------
 	// 7. Integration: set task to integrated, resolve dependent tasks
@@ -647,12 +654,12 @@ func TestMissionLifecycle(t *testing.T) {
 		t.Fatalf("resolveReadyTasks: %v", err)
 	}
 
-	// Verify task-test is now ready.
-	testTask, _ = store.GetTask(ctx, "task-test")
+	// Verify test task is now ready.
+	testTask, _ = store.GetTask(ctx, testTaskID)
 	if testTask.Status != TaskReady {
-		t.Fatalf("expected task-test ready after dependency resolved, got %s", testTask.Status)
+		t.Fatalf("expected test task ready after dependency resolved, got %s", testTask.Status)
 	}
-	t.Logf("Step 7: task-impl integrated, task-test=%s (dependency resolved)", testTask.Status)
+	t.Logf("Step 7: impl integrated, test=%s (dependency resolved)", testTask.Status)
 
 	// -----------------------------------------------------------------------
 	// 8. Repeat steps 4-7 for the dependent task (task-test)
@@ -663,12 +670,12 @@ func TestMissionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectTasks (round 2): %v", err)
 	}
-	if len(selected) != 1 || selected[0].ID != "task-test" {
+	if len(selected) != 1 || selected[0].ID != testTaskID {
 		var ids []string
 		for _, s := range selected {
 			ids = append(ids, s.ID)
 		}
-		t.Fatalf("expected [task-test], got %v", ids)
+		t.Fatalf("expected [%s], got %v", testTaskID, ids)
 	}
 	t.Logf("Step 8a: scheduler selected %s", selected[0].ID)
 
@@ -677,23 +684,23 @@ func TestMissionLifecycle(t *testing.T) {
 	workerRun2 := &Run{
 		ID:           generateID("r"),
 		MissionID:    mission.ID,
-		TaskID:       "task-test",
+		TaskID:       testTaskID,
 		Mode:         RunModeWorker,
 		Status:       RunRunning,
-		LeaseOwner:   "task-test",
-		WorktreePath: "/tmp/fake-worktree/task-test",
+		LeaseOwner:   testTaskID,
+		WorktreePath: "/tmp/fake-worktree/" + testTaskID,
 		StartedAt:    &now2,
 	}
 	if err := store.CreateRun(ctx, workerRun2); err != nil {
 		t.Fatalf("CreateRun (worker2): %v", err)
 	}
 
-	testTask, _ = store.GetTask(ctx, "task-test")
+	testTask, _ = store.GetTask(ctx, testTaskID)
 	testTask.Status = TaskRunning
 	testTask.AttemptCount = 1
 	testTask.UpdatedAt = now2
 	if err := store.UpdateTask(ctx, testTask); err != nil {
-		t.Fatalf("UpdateTask task-test to running: %v", err)
+		t.Fatalf("UpdateTask test task to running: %v", err)
 	}
 
 	workerSpec2 := &WorkerSpec{
@@ -707,17 +714,17 @@ func TestMissionLifecycle(t *testing.T) {
 		t.Fatalf("CompleteWorker (task-test): %v", err)
 	}
 
-	testTask, _ = store.GetTask(ctx, "task-test")
+	testTask, _ = store.GetTask(ctx, testTaskID)
 	if testTask.Status != TaskAwaitingReview {
-		t.Fatalf("expected task-test awaiting_review, got %s", testTask.Status)
+		t.Fatalf("expected test task awaiting_review, got %s", testTask.Status)
 	}
-	t.Logf("Step 8b: worker completed task-test → %s", testTask.Status)
+	t.Logf("Step 8b: worker completed test task → %s", testTask.Status)
 
 	// 8c. Review task-test.
 	reviewRun2 := &Run{
 		ID:        generateID("r"),
 		MissionID: mission.ID,
-		TaskID:    "task-test",
+		TaskID:    testTaskID,
 		Mode:      RunModeReview,
 		Status:    RunRunning,
 		StartedAt: &now2,
@@ -742,11 +749,11 @@ func TestMissionLifecycle(t *testing.T) {
 		t.Fatalf("CompleteReview (task-test): %v", err)
 	}
 
-	testTask, _ = store.GetTask(ctx, "task-test")
+	testTask, _ = store.GetTask(ctx, testTaskID)
 	if testTask.Status != TaskAccepted {
-		t.Fatalf("expected task-test accepted, got %s", testTask.Status)
+		t.Fatalf("expected test task accepted, got %s", testTask.Status)
 	}
-	t.Logf("Step 8c: review passed, task-test=%s", testTask.Status)
+	t.Logf("Step 8c: review passed, test=%s", testTask.Status)
 
 	// 8d. Integrate task-test.
 	testTask.Status = TaskIntegrated

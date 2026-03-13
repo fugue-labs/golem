@@ -153,8 +153,8 @@ func TestCompleteReview_RequestChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if spec.Task.Status != TaskRejected {
-		t.Errorf("expected task status rejected, got %s", spec.Task.Status)
+	if spec.Task.Status != TaskReady {
+		t.Errorf("expected task status ready (auto-retry), got %s", spec.Task.Status)
 	}
 	if spec.Task.BlockingReason != "Add unit tests for edge cases" {
 		t.Errorf("expected blocking reason from suggestion, got %s", spec.Task.BlockingReason)

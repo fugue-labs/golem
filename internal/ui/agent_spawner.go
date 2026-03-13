@@ -36,7 +36,7 @@ func (s *gollemSpawner) SpawnWorker(ctx context.Context, spec *mission.WorkerSpe
 }
 
 func (s *gollemSpawner) SpawnReviewer(ctx context.Context, spec *mission.ReviewSpec) (mission.AgentHandle, error) {
-	cfg := s.reviewerConfig()
+	cfg := s.reviewerConfig(spec.WorktreePath)
 	a, _, err := agent.New(cfg, spec.Prompt, s.skills)
 	if err != nil {
 		return nil, err
@@ -52,9 +52,12 @@ func (s *gollemSpawner) workerConfig(worktreePath string) *config.Config {
 }
 
 // reviewerConfig clones the base config for a reviewer agent.
-// Reviewers run in the main repo (they only read code and diffs).
-func (s *gollemSpawner) reviewerConfig() *config.Config {
+// Reviewers run in the worker's worktree so they can inspect files and run tests.
+func (s *gollemSpawner) reviewerConfig(worktreePath string) *config.Config {
 	cfg := *s.baseCfg
+	if worktreePath != "" {
+		cfg.WorkingDir = worktreePath
+	}
 	return &cfg
 }
 
