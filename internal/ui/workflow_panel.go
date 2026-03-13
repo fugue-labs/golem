@@ -59,6 +59,10 @@ func (m *Model) cleanupSession() {
 		closer.Close()
 		m.runtime.MemoryStore = nil
 	}
+	if m.orchestrator != nil {
+		m.orchestrator.Stop()
+		m.orchestrator = nil
+	}
 	if m.missionCtrl != nil {
 		m.missionCtrl.Close()
 		m.missionCtrl = nil

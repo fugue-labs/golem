@@ -24,6 +24,10 @@ func testMissionModel(t *testing.T) (*Model, *mission.Controller) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
 	m.missionCtrl = ctrl
+	t.Cleanup(func() {
+		m.stopOrchestrator()
+		m.appCancel()
+	})
 	return m, ctrl
 }
 

@@ -198,6 +198,7 @@ type Model struct {
 	// Mission orchestration state.
 	missionCtrl      *mission.Controller
 	activeMissionID  string
+	orchestrator     *mission.Orchestrator
 
 	// File watcher for detecting external file changes.
 	fileWatcher *watcher.Watcher
@@ -453,6 +454,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		m.scroll = 0
 		return m, nil
+
+	case orchestratorEventMsg:
+		return m.handleOrchestratorEvent(mission.OrchestratorEvent(msg)), nil
 
 	case fileChangeMsg:
 		return m.handleFileChange(msg)

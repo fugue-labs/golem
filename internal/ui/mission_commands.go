@@ -324,9 +324,11 @@ func (m *Model) handleMissionApprove() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to approve/start mission: %v", err)}
 	}
 
+	m.startOrchestrator()
+
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Mission `%s` approved and started.", m.activeMissionID),
+		Content: fmt.Sprintf("Mission `%s` approved and started. Orchestrator is running.", m.activeMissionID),
 	}
 }
 
@@ -374,9 +376,11 @@ func (m *Model) handleMissionStart() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to start mission: %v", err)}
 	}
 
+	m.startOrchestrator()
+
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Mission `%s` started.", m.activeMissionID),
+		Content: fmt.Sprintf("Mission `%s` started. Orchestrator is running.", m.activeMissionID),
 	}
 }
 
@@ -390,12 +394,14 @@ func (m *Model) handleMissionPause() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
 	}
 
+	m.stopOrchestrator()
+
 	ctx := m.appCtx
 	if err := ctrl.PauseMission(ctx, m.activeMissionID); err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to pause mission: %v", err)}
 	}
 
-	return &chat.Message{Kind: chat.KindAssistant, Content: "Mission paused."}
+	return &chat.Message{Kind: chat.KindAssistant, Content: "Mission paused. Orchestrator stopped."}
 }
 
 func (m *Model) handleMissionCancel() *chat.Message {
@@ -407,6 +413,8 @@ func (m *Model) handleMissionCancel() *chat.Message {
 	if ctrl == nil {
 		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
 	}
+
+	m.stopOrchestrator()
 
 	ctx := m.appCtx
 	if err := ctrl.CancelMission(ctx, m.activeMissionID); err != nil {
@@ -442,6 +450,87 @@ func (m *Model) handleMissionList() *chat.Message {
 		fmt.Fprintf(&b, "- `%s` [%s] %s%s\n", ms.ID, ms.Status, ms.Title, active)
 	}
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
+}
+
+// startOrchestrator creates and starts the mission orchestrator.
+// It wires orchestrator events back to the TUI via tea.Program.Send.
+func (m *Model) startOrchestrator() {
+	m.stopOrchestrator() // stop any existing orchestrator
+
+	ctrl := m.missionController()
+	if ctrl == nil {
+		return
+	}
+
+	worktrees := mission.NewWorktreeManager(m.cfg.WorkingDir)
+	spawner := newGollemSpawner(m.cfg, m.activeSkills)
+
+	cfg := mission.OrchestratorConfig{
+		MissionID: m.activeMissionID,
+		RepoRoot:  m.cfg.WorkingDir,
+	}
+
+	m.orchestrator = mission.NewOrchestrator(cfg, ctrl.Store(), spawner, worktrees, func(e mission.OrchestratorEvent) {
+		if m.prog != nil {
+			m.prog.Send(orchestratorEventMsg(e))
+		}
+	})
+	m.orchestrator.Start(m.appCtx)
+}
+
+// stopOrchestrator stops the orchestrator if running.
+func (m *Model) stopOrchestrator() {
+	if m.orchestrator != nil {
+		m.orchestrator.Stop()
+		m.orchestrator = nil
+	}
+}
+
+// orchestratorEventMsg wraps an OrchestratorEvent as a BubbleTea message.
+type orchestratorEventMsg mission.OrchestratorEvent
+
+// handleOrchestratorEvent displays orchestrator lifecycle events in the chat.
+func (m *Model) handleOrchestratorEvent(e mission.OrchestratorEvent) *Model {
+	var content string
+	kind := chat.KindSystem
+
+	switch e.Type {
+	case "worker.started":
+		content = fmt.Sprintf("Worker started for task `%s`: %s", e.TaskID, e.Message)
+	case "worker.completed":
+		content = fmt.Sprintf("Worker completed task `%s`", e.TaskID)
+	case "worker.failed":
+		content = fmt.Sprintf("Worker failed for task `%s`: %v", e.TaskID, e.Error)
+		kind = chat.KindError
+	case "worker.spawn_failed":
+		content = fmt.Sprintf("Failed to spawn worker for task `%s`: %v", e.TaskID, e.Error)
+		kind = chat.KindError
+	case "review.started":
+		content = fmt.Sprintf("Review started for task `%s`", e.TaskID)
+	case "review.pass":
+		content = fmt.Sprintf("Review passed for task `%s`: %s", e.TaskID, e.Message)
+	case "review.reject":
+		content = fmt.Sprintf("Review rejected task `%s`: %s", e.TaskID, e.Message)
+	case "review.request_changes":
+		content = fmt.Sprintf("Review requested changes for task `%s`: %s", e.TaskID, e.Message)
+	case "review.failed", "review.parse_failed":
+		content = fmt.Sprintf("Review failed for task `%s`: %v", e.TaskID, e.Error)
+		kind = chat.KindError
+	case "integration.completed":
+		content = fmt.Sprintf("Task `%s` integrated: %s", e.TaskID, e.Message)
+	case "integration.failed":
+		content = fmt.Sprintf("Integration failed for task `%s`: %s", e.TaskID, e.Message)
+		kind = chat.KindError
+	case "mission.completed":
+		content = fmt.Sprintf("Mission `%s` completed! %s", e.MissionID, e.Message)
+		m.stopOrchestrator()
+	default:
+		return m // ignore unknown events
+	}
+
+	m.messages = append(m.messages, &chat.Message{Kind: kind, Content: content})
+	m.scroll = 0
+	return m
 }
 
 // gitBranch returns the current git branch or empty string.

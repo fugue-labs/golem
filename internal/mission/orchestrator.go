@@ -216,6 +216,9 @@ func (o *Orchestrator) tick() {
 	// Check mission is still running.
 	m, err := o.store.GetMission(ctx, o.cfg.MissionID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return // shutting down
+		}
 		o.logger.Error("orchestrator: get mission", "error", err)
 		return
 	}
