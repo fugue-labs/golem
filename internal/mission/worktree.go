@@ -52,9 +52,11 @@ func (wm *WorktreeManager) Create(ctx context.Context, taskID, baseBranch string
 		return "", fmt.Errorf("create worktree base dir: %w", err)
 	}
 
-	// git worktree add -b <branch> <path> <base>
+	// git worktree add -B <branch> <path> <base>
+	// -B (not -b) allows re-creating the branch on task retry after
+	// review rejection — the branch may already exist from a prior attempt.
 	cmd := exec.CommandContext(ctx, "git", "worktree", "add",
-		"-b", branchName,
+		"-B", branchName,
 		worktreePath,
 		baseBranch,
 	)
