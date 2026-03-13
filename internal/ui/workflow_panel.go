@@ -60,6 +60,10 @@ func (m *Model) cleanupSession() {
 		m.missionCtrl.Close()
 		m.missionCtrl = nil
 	}
+	if m.fileWatcher != nil {
+		m.fileWatcher.Close()
+		m.fileWatcher = nil
+	}
 }
 
 func (m *Model) pendingCount() int {

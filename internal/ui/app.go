@@ -26,6 +26,7 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/plan"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
+	"github.com/fugue-labs/golem/internal/ui/watcher"
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
 	"github.com/fugue-labs/gollem/ext/deep"
@@ -146,6 +147,9 @@ type (
 		response  chan<- []codetool.AskUserAnswer
 	}
 	askUserShutdownMsg struct{}
+	fileChangeMsg      struct {
+		events []watcher.Event
+	}
 )
 
 // Model is the main BubbleTea model.
@@ -235,9 +239,13 @@ type Model struct {
 	approvalRespCh chan<- bool
 	approvalAlways map[string]bool // tools the user has permanently allowed this session
 
+
 	// Mission orchestration state.
 	missionCtrl      *mission.Controller
 	activeMissionID  string
+
+	// File watcher for detecting external file changes.
+	fileWatcher *watcher.Watcher
 }
 
 // New creates the initial app model.
@@ -274,6 +282,26 @@ func New(cfg *config.Config) *Model {
 func (m *Model) SetProgram(p *tea.Program) {
 	m.prog = p
 	m.subscribeTeamEvents()
+	m.startFileWatcher()
+}
+
+// startFileWatcher begins monitoring the working directory for external
+// file changes. Events are forwarded to the BubbleTea event loop.
+func (m *Model) startFileWatcher() {
+	if m.cfg == nil || m.cfg.WorkingDir == "" || m.prog == nil {
+		return
+	}
+	fw, err := watcher.New(m.cfg.WorkingDir)
+	if err != nil {
+		return // non-fatal — watcher is best-effort
+	}
+	m.fileWatcher = fw
+	p := m.prog
+	go func() {
+		for events := range fw.Events() {
+			p.Send(fileChangeMsg{events: events})
+		}
+	}()
 }
 
 // SetInitialPrompt sets a prompt to be sent automatically on first render.
@@ -424,6 +452,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scroll = 0
 		return m, nil
 
+	case fileChangeMsg:
+		return m.handleFileChange(msg)
+
 	case contextCompactedMsg:
 		label := "Auto-compact"
 		if msg.strategy == core.CompactionStrategyEmergencyTruncation {
@@ -498,6 +529,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// model to explicitly call "verification stale".
 		if msg.errText == "" && isMutatingToolName(msg.name) && m.verificationState.HasEntries() {
 			m.verificationState.MarkAllStale(msg.name)
+		}
+		// Mark agent-modified files so the file watcher suppresses them.
+		if msg.errText == "" && isMutatingToolName(msg.name) && m.fileWatcher != nil {
+			m.markAgentFiles(msg.callID, msg.name)
 		}
 		m.scroll = 0
 		return m, nil
@@ -1834,5 +1869,80 @@ func isMutatingToolName(name string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// handleFileChange processes batched external file change events from the watcher.
+func (m *Model) handleFileChange(msg fileChangeMsg) (tea.Model, tea.Cmd) {
+	if len(msg.events) == 0 {
+		return m, nil
+	}
+
+	// Mark verification entries stale due to external changes.
+	if m.verificationState.HasEntries() {
+		m.verificationState.MarkAllStale("external file change")
+	}
+
+	// Build a summary of changed files.
+	paths := make([]string, 0, len(msg.events))
+	for _, ev := range msg.events {
+		paths = append(paths, ev.Path)
+	}
+	var summary string
+	if len(paths) == 1 {
+		summary = fmt.Sprintf("External change detected: %s", paths[0])
+	} else if len(paths) <= 5 {
+		summary = fmt.Sprintf("External changes detected: %s", strings.Join(paths, ", "))
+	} else {
+		summary = fmt.Sprintf("External changes detected: %s and %d more",
+			strings.Join(paths[:3], ", "), len(paths)-3)
+	}
+
+	m.messages = append(m.messages, &chat.Message{
+		Kind:    chat.KindSystem,
+		Content: summary,
+	})
+	m.scroll = 0
+
+	// If the agent is busy, queue a steering message so it knows about the
+	// external modifications and can avoid overwriting them.
+	if m.busy {
+		notice := fmt.Sprintf("[SYSTEM: External file changes detected — files modified outside the agent: %s. Re-read these files before editing to avoid overwriting user changes.]",
+			strings.Join(paths, ", "))
+		m.pendingMu.Lock()
+		m.pendingMsgs = append(m.pendingMsgs, notice)
+		m.pendingMu.Unlock()
+	}
+
+	return m, nil
+}
+
+// markAgentFiles tells the file watcher which files the agent just modified,
+// so it can suppress the resulting fsnotify events.
+func (m *Model) markAgentFiles(callID, toolName string) {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		msg := m.messages[i]
+		if msg.Kind != chat.KindToolCall {
+			continue
+		}
+		if (callID != "" && msg.CallID == callID) || (callID == "" && msg.ToolName == toolName) {
+			switch toolName {
+			case "edit", "write":
+				if p := extractJSONField(msg.RawArgs, "file_path"); p != "" {
+					if !filepath.IsAbs(p) && m.cfg != nil {
+						p = filepath.Join(m.cfg.WorkingDir, p)
+					}
+					m.fileWatcher.MarkAgentFile(p)
+				}
+			case "multi_edit":
+				if p := extractJSONField(msg.RawArgs, "file_path"); p != "" {
+					if !filepath.IsAbs(p) && m.cfg != nil {
+						p = filepath.Join(m.cfg.WorkingDir, p)
+					}
+					m.fileWatcher.MarkAgentFile(p)
+				}
+			}
+			return
+		}
 	}
 }

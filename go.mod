@@ -10,6 +10,7 @@ require (
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/exp/charmtone v0.0.0-20260109001716-2fbdffcb221f
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/fugue-labs/gollem v0.0.0
 	github.com/fugue-labs/monty-go v0.0.0-20260221005309-f9f147b4245f
 )
