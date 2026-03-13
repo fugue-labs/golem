@@ -261,6 +261,12 @@ type Model struct {
 	replayTrace *agent.ReplayTrace // trace being replayed
 	replayIdx   int                // current event index during replay
 	replayStart time.Time          // when replay started
+
+	// Pace control state.
+	pace                  paceState
+	paceCheckpointActive  bool             // currently paused at a checkpoint
+	paceCheckpointResp    chan<- struct{}   // channel to resume after checkpoint
+	paceCheckpointCount   int              // tool count shown in checkpoint UI
 }
 
 // New creates the initial app model.
@@ -275,6 +281,15 @@ func New(cfg *config.Config) *Model {
 	sp.Spinner = spinner.Dot
 
 	allSkills, _ := skills.LoadAll(skills.DefaultDir())
+
+	ps := defaultPaceState()
+	if mode, ok := parsePaceMode(cfg.PaceMode); ok {
+		ps.mode = mode
+	}
+	if cfg.CheckpointInterval > 0 {
+		ps.checkpointInterval = cfg.CheckpointInterval
+	}
+	ps.clarifyFirst = cfg.PaceClarifyFirst
 
 	return &Model{
 		cfg:            cfg,
@@ -291,6 +306,7 @@ func New(cfg *config.Config) *Model {
 		checkpoints:    checkpoint.NewStore(cfg.WorkingDir),
 		historyIdx:     -1,
 		allSkills:      allSkills,
+		pace:           ps,
 	}
 }
 
@@ -445,6 +461,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolApprovalShutdownMsg:
 		return m, nil
+
+	case paceCheckpointRequest:
+		if msg.runID != m.runID {
+			// Stale checkpoint — resume immediately.
+			if msg.response != nil {
+				select {
+				case msg.response <- struct{}{}:
+				default:
+				}
+			}
+			return m, nil
+		}
+		m.paceCheckpointActive = true
+		m.paceCheckpointResp = msg.response
+		m.paceCheckpointCount = msg.count
+		m.input.Reset()
+		m.input.SetHeight(1)
+		m.input.Placeholder = "Type feedback or press Enter to continue"
+		return m, m.input.Focus()
 
 	case compactDoneMsg:
 		if msg.err != nil {

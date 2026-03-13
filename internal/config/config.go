@@ -67,6 +67,11 @@ type Config struct {
 	BudgetWarnPct float64 // fraction at which to warn (default 0.8)
 	FallbackModel string  // explicit model to downgrade to (empty = auto-select)
 
+	// Pace control — configures collaboration pacing between human and agent.
+	PaceMode           string // "off", "checkpoint", "pingpong", "review"
+	CheckpointInterval int    // tool calls between checkpoints (for checkpoint mode)
+	PaceClarifyFirst   bool   // ask clarifying questions before executing
+
 	// ChatGPT subscription auth (populated from ~/.golem/auth.json).
 	ChatGPTCreds *openaiauth.Credentials // nil when not using ChatGPT auth
 
@@ -245,6 +250,12 @@ func Load() (*Config, error) {
 		cfg.FallbackModel = v
 	}
 
+	cfg.PaceMode = paceModeEnvOr("GOLEM_PACE_MODE", "off")
+	cfg.CheckpointInterval, err = intEnvOr("GOLEM_CHECKPOINT_INTERVAL", 5)
+	if err != nil {
+		return nil, err
+	}
+	cfg.PaceClarifyFirst = isTruthyEnv("GOLEM_PACE_CLARIFY")
 	return cfg, nil
 }
 
@@ -529,5 +540,15 @@ func isTruthyEnv(key string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func paceModeEnvOr(key, fallback string) string {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch v {
+	case "off", "checkpoint", "pingpong", "review":
+		return v
+	default:
+		return fallback
 	}
 }
