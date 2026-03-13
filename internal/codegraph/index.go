@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 )
 
 // Indexer builds a knowledge graph from Go source files.
@@ -471,12 +470,4 @@ func truncateDoc(cg *ast.CommentGroup) string {
 		text = text[:120] + "..."
 	}
 	return text
-}
-
-// isExported checks if a name is exported (starts with uppercase).
-func isExported(name string) bool {
-	if name == "" {
-		return false
-	}
-	return unicode.IsUpper(rune(name[0]))
 }

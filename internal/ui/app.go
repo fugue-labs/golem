@@ -1268,27 +1268,6 @@ func (m *Model) checkBudgetAndDowngrade() []*chat.Message {
 	return msgs
 }
 
-// projectedCostRate returns the estimated cost per hour based on session usage so far.
-func (m *Model) projectedCostRate() float64 {
-	cost := m.costTracker.TotalCost()
-	if cost <= 0 || m.sessionUsage.Requests == 0 {
-		return 0
-	}
-	elapsed := time.Since(m.startTime)
-	if m.sessionUsage.Requests > 1 {
-		// Use the total session duration rather than just the latest run.
-		elapsed = time.Since(m.startTime) // approximation; we only have latest run start
-	}
-	if elapsed <= 0 {
-		return 0
-	}
-	hours := elapsed.Hours()
-	if hours < 0.001 { // less than ~4 seconds
-		return 0
-	}
-	return cost / hours
-}
-
 func (m *Model) prepareRun(prompt string) tea.Cmd {
 	runID := m.runID
 	ctx := m.runCtx

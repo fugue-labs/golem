@@ -1,3 +1,5 @@
+// Package search provides BM25-based full-text search indexing for session
+// messages and conversation history.
 package search
 
 import (

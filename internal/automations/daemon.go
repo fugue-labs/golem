@@ -1,3 +1,5 @@
+// Package automations provides cron scheduling, webhook handling, and event-driven
+// automation for golem sessions.
 package automations
 
 import (

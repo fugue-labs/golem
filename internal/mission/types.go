@@ -1,3 +1,5 @@
+// Package mission provides goal planning and validation for multi-step agent
+// workflows, with persistent storage of mission state.
 package mission
 
 import (

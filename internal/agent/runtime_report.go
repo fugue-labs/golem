@@ -233,7 +233,7 @@ func runtimeProfileLines(report RuntimeReport) []string {
 		lines = append(lines, fmt.Sprintf("Memory: `%s`", report.MemoryStatus))
 	}
 	if report.ModelRouting == "on" {
-		lines = append(lines, fmt.Sprintf("Model routing: `on`"))
+		lines = append(lines, "Model routing: `on`")
 		if report.RoutedModel != "" {
 			lines = append(lines, fmt.Sprintf("Routed model: `%s`", report.RoutedModel))
 		}
