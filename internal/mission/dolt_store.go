@@ -756,14 +756,18 @@ func (s *DoltStore) GetMissionSummary(ctx context.Context, missionID string) (*M
 	}
 
 	var activeRuns int
-	s.db.QueryRowContext(ctx,
+	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM runs WHERE mission_id = ? AND status IN ('queued', 'running')`,
-		missionID).Scan(&activeRuns)
+		missionID).Scan(&activeRuns); err != nil {
+		return nil, fmt.Errorf("count active runs: %w", err)
+	}
 
 	var pendingApprovals int
-	s.db.QueryRowContext(ctx,
+	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM approvals WHERE mission_id = ? AND status = 'pending'`,
-		missionID).Scan(&pendingApprovals)
+		missionID).Scan(&pendingApprovals); err != nil {
+		return nil, fmt.Errorf("count pending approvals: %w", err)
+	}
 
 	return &MissionSummary{
 		Mission:          m,
