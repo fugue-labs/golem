@@ -296,6 +296,22 @@ func (o *Orchestrator) spawnWorker(ctx context.Context, spec *WorkerSpec) {
 func (o *Orchestrator) runWorker(ctx context.Context, cancel context.CancelFunc, spec *WorkerSpec, handle AgentHandle) {
 	defer cancel()
 	defer o.removeActive(spec.Run.ID)
+	defer func() {
+		if r := recover(); r != nil {
+			o.logger.Error("runWorker panic recovered",
+				"run", spec.Run.ID,
+				"task", spec.Task.ID,
+				"panic", r,
+			)
+			o.workers.FailWorker(o.ctx, spec, fmt.Sprintf("panic: %v", r), o.cfg.MaxAttempts) //nolint:errcheck
+			o.emit(OrchestratorEvent{
+				Type:   "worker.panic",
+				TaskID: spec.Task.ID,
+				RunID:  spec.Run.ID,
+				Error:  fmt.Errorf("panic: %v", r),
+			})
+		}
+	}()
 
 	// Start heartbeat goroutine.
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
@@ -420,6 +436,22 @@ func (o *Orchestrator) spawnReviewer(ctx context.Context, spec *ReviewSpec) {
 func (o *Orchestrator) runReviewer(ctx context.Context, cancel context.CancelFunc, spec *ReviewSpec, handle AgentHandle) {
 	defer cancel()
 	defer o.removeActive(spec.Run.ID)
+	defer func() {
+		if r := recover(); r != nil {
+			o.logger.Error("runReviewer panic recovered",
+				"run", spec.Run.ID,
+				"task", spec.Task.ID,
+				"panic", r,
+			)
+			o.reviews.FailReview(o.ctx, spec, fmt.Sprintf("panic: %v", r)) //nolint:errcheck
+			o.emit(OrchestratorEvent{
+				Type:   "review.panic",
+				TaskID: spec.Task.ID,
+				RunID:  spec.Run.ID,
+				Error:  fmt.Errorf("panic: %v", r),
+			})
+		}
+	}()
 
 	summary, err := handle.Wait()
 	if err != nil && ctx.Err() != nil {

@@ -3,6 +3,7 @@ package mission
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -402,7 +403,12 @@ func (si *storeIntegrator) resolveReady(ctx context.Context, missionID string) {
 
 func newTestOrchestratorWithDispatcher(store Store, spawner *mockSpawner, events chan OrchestratorEvent) (*Orchestrator, *storeWorkerDispatcher) {
 	wd := &storeWorkerDispatcher{store: store}
-	orch := &Orchestrator{
+	orch := newTestOrchestratorFull(store, spawner, wd, events)
+	return orch, wd
+}
+
+func newTestOrchestratorFull(store Store, spawner AgentSpawner, workers workerDispatcher, events chan OrchestratorEvent) *Orchestrator {
+	return &Orchestrator{
 		cfg: OrchestratorConfig{
 			MissionID:         "m1",
 			RepoRoot:          "/test/repo",
@@ -412,7 +418,7 @@ func newTestOrchestratorWithDispatcher(store Store, spawner *mockSpawner, events
 		},
 		store:   store,
 		spawner: spawner,
-		workers: wd,
+		workers: workers,
 		reviews: &storeReviewDispatcher{store: store},
 		integr:  &storeIntegrator{store: store},
 		onEvent: func(e OrchestratorEvent) {
@@ -421,10 +427,10 @@ func newTestOrchestratorWithDispatcher(store Store, spawner *mockSpawner, events
 			default:
 			}
 		},
+		logger: slog.Default(),
 		active: make(map[string]*activeAgent),
 		done:   make(chan struct{}),
 	}
-	return orch, wd
 }
 
 func newTestOrchestrator(store Store, spawner *mockSpawner, events chan OrchestratorEvent) *Orchestrator {
@@ -1003,6 +1009,154 @@ func TestOrchestratorRequestChangesPreservesWorktree(t *testing.T) {
 		return spawner.workerCount() >= 2
 	})
 	t.Log("Worker retried after request_changes — worktree preserved")
+}
+
+// panicHandle is a mock AgentHandle whose Wait panics.
+type panicHandle struct {
+	ctx context.Context
+	msg string
+}
+
+func (h *panicHandle) Wait() (string, error) {
+	panic(h.msg)
+}
+
+// panicSpawner spawns handles that panic on Wait.
+type panicSpawner struct {
+	mu           sync.Mutex
+	workerCalls  []*WorkerSpec
+	reviewCalls  []*ReviewSpec
+	panicMsg     string
+	panicWorker  bool // if true, worker panics; otherwise reviewer panics
+}
+
+func (s *panicSpawner) SpawnWorker(ctx context.Context, spec *WorkerSpec) (AgentHandle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workerCalls = append(s.workerCalls, spec)
+	if s.panicWorker {
+		return &panicHandle{ctx: ctx, msg: s.panicMsg}, nil
+	}
+	return newMockHandle(ctx), nil
+}
+
+func (s *panicSpawner) SpawnReviewer(ctx context.Context, spec *ReviewSpec) (AgentHandle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reviewCalls = append(s.reviewCalls, spec)
+	if !s.panicWorker {
+		return &panicHandle{ctx: ctx, msg: s.panicMsg}, nil
+	}
+	return newMockHandle(ctx), nil
+}
+
+func TestOrchestratorWorkerPanicRecovery(t *testing.T) {
+	store := newMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	store.CreateMission(ctx, &Mission{
+		ID:        "m1",
+		Status:    MissionRunning,
+		Budget:    Budget{MaxConcurrentWorkers: 2},
+		CreatedAt: now,
+		UpdatedAt: now,
+		StartedAt: &now,
+	})
+	store.CreateTask(ctx, &Task{
+		ID:        "t1",
+		MissionID: "m1",
+		Title:     "Panicking task",
+		Kind:      TaskKindCode,
+		Objective: "Trigger a panic",
+		Status:    TaskReady,
+		Priority:  1,
+		RiskLevel: RiskLow,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+
+	spawner := &panicSpawner{panicMsg: "nil pointer dereference", panicWorker: true}
+	events := make(chan OrchestratorEvent, 100)
+	wd := &storeWorkerDispatcher{store: store}
+	orch := newTestOrchestratorFull(store, spawner, wd, events)
+
+	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	orch.Start(testCtx)
+	defer orch.Stop()
+
+	// Wait for the worker.panic event — proves the goroutine recovered.
+	e := waitForEvent(t, events, "worker.panic", 3*time.Second)
+	if e.Error == nil || e.Error.Error() != "panic: nil pointer dereference" {
+		t.Fatalf("expected panic error, got: %v", e.Error)
+	}
+
+	// Active agents should be drained (removeActive ran after recover).
+	waitFor(t, 2*time.Second, "active agents drained", func() bool {
+		return orch.ActiveRunCount() == 0
+	})
+}
+
+func TestOrchestratorReviewerPanicRecovery(t *testing.T) {
+	store := newMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	store.CreateMission(ctx, &Mission{
+		ID:        "m1",
+		Status:    MissionRunning,
+		Budget:    Budget{MaxConcurrentWorkers: 2},
+		CreatedAt: now,
+		UpdatedAt: now,
+		StartedAt: &now,
+	})
+	store.CreateTask(ctx, &Task{
+		ID:        "t1",
+		MissionID: "m1",
+		Title:     "Task with panicking reviewer",
+		Kind:      TaskKindCode,
+		Objective: "Trigger reviewer panic",
+		Status:    TaskReady,
+		Priority:  1,
+		RiskLevel: RiskLow,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+
+	normalSpawner := &mockSpawner{}
+	events := make(chan OrchestratorEvent, 100)
+	wd := &storeWorkerDispatcher{store: store}
+	orch := newTestOrchestratorFull(store, normalSpawner, wd, events)
+
+	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	orch.Start(testCtx)
+	defer orch.Stop()
+
+	// Worker completes normally.
+	waitFor(t, 2*time.Second, "worker spawn", func() bool {
+		return normalSpawner.workerCount() >= 1
+	})
+	normalSpawner.getWorkerHandle(0).complete("Done", nil)
+	waitForEvent(t, events, "worker.completed", 2*time.Second)
+
+	// Now swap spawner to one that panics on review.
+	panicSp := &panicSpawner{panicMsg: "index out of range", panicWorker: false}
+	orch.spawner = panicSp
+
+	// Wait for the review.panic event.
+	e := waitForEvent(t, events, "review.panic", 3*time.Second)
+	if e.Error == nil || e.Error.Error() != "panic: index out of range" {
+		t.Fatalf("expected panic error, got: %v", e.Error)
+	}
+
+	// Active agents should be drained.
+	waitFor(t, 2*time.Second, "active agents drained", func() bool {
+		return orch.ActiveRunCount() == 0
+	})
 }
 
 func TestOrchestratorRejectReleasesWorktree(t *testing.T) {
