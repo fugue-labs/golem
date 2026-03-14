@@ -1,6 +1,67 @@
 # TUI Comparison & Improvement Prompt
 
-Two prompts below. **Prompt 1** runs once to build a feature catalog from the reference TUI. **Prompt 2** runs per-feature to compare and fix golem.
+Use this document to turn reference-TUI observations into a concrete rubric for improving golem's own interface. Two prompts below. **Prompt 1** runs once to build a feature catalog from the reference TUI. **Prompt 2** runs per-feature to compare and fix golem.
+
+## Current golem baseline and improvement rubric
+
+### Current baseline from the code
+
+- **Shell layout** — the main TUI is a stable four-part shell: a two-line header, scrollable chat transcript, always-visible input area, and a bottom `GOLEM` status bar. On terminals `>=110` columns, a fixed-width workflow panel appears on the right.
+- **Chat rendering** — user messages render with the `❯` prompt mark, assistant messages render as markdown, tool calls render as compact rows with inline results, and the busy state appears directly above the input with spinner/tool/queue details.
+- **Workflow panel** — the right rail combines mission, spec, team, plan, invariants, and verification into a single dense panel. It is informative, but it currently optimizes for completeness over scanability.
+- **Dashboard** — `golem dashboard` opens a separate “Mission Control” view with task, worker, evidence, and event panes plus keyboard navigation (`tab`, `shift+tab`, `1-4`, `j/k`, `q`, `r`).
+- **Discoverability affordances** — the empty state rotates tips, the input placeholder says `Ask anything… /help for commands`, slash commands support tab completion, `/help` is the canonical command index, and the status bar always preserves a visible `GOLEM` anchor.
+
+### Visual target
+
+Treat the desired target as a **clearer, more opinionated shell** rather than a net-new layout:
+
+1. **Stable launch frame** — the app should still open quickly into a recognizably stable shell with visible prompt and `GOLEM` status bar.
+2. **At-a-glance hierarchy** — header = context, transcript = primary task, right rail/dashboard = workflow state, footer/status = controls and runtime state.
+3. **Role separation in the transcript** — user, assistant, tool activity, errors, and summaries should be visually distinct without becoming noisy.
+4. **Workflow readability over raw density** — the right rail and dashboard should emphasize the active section, next action, and blocked state before full detail.
+5. **Persistent discoverability** — help, slash commands, status hints, and launch-time orientation must remain obvious even after visual upgrades.
+
+### Improvement scoring rubric
+
+Score candidate UX improvements on these four dimensions before implementation:
+
+| Dimension | Question | Score 1 | Score 3 | Score 5 |
+|---|---|---:|---:|---:|
+| User impact | Does this improve first-run comprehension or frequent-task speed? | Niche polish | Noticeable | Core daily win |
+| Discoverability | Does it make commands, status, or next steps easier to find? | Hidden | Somewhat clearer | Immediately obvious |
+| Layout leverage | Does it improve the shared shell/chat/workflow structure already in code? | Local only | One region | Entire shell feels better |
+| Test compatibility | Can it preserve current e2e-observed behavior with low risk? | High risk | Manageable | Safe/default-preserving |
+
+Prioritize work scoring high in **user impact + discoverability + layout leverage**, while avoiding changes that lower **test compatibility**.
+
+### Highest-impact TUI improvements to pursue first
+
+1. **Strengthen the shell information architecture**
+   - **Current gap:** the header, transcript, workflow panel, and status bar all work, but they do not yet feel like a single opinionated composition.
+   - **Target:** tighten visual hierarchy with clearer region titles, spacing, and empty-state framing while keeping the launch behavior stable.
+2. **Improve chat role separation and streaming readability**
+   - **Current gap:** assistant markdown, tool activity, system summaries, and errors can blur together during long sessions.
+   - **Target:** make user/assistant/tool/system states more immediately scannable through spacing, labels, muted metadata, and clearer in-progress treatment.
+3. **Refocus the workflow panel on “what matters now”**
+   - **Current gap:** the workflow panel surfaces a lot of state, but active work, blocked work, and next action are not strongly prioritized.
+   - **Target:** bias the panel toward the current mission/spec/plan/verification bottleneck, with secondary sections visually de-emphasized or collapsed.
+4. **Upgrade dashboard scanability before adding new dashboard features**
+   - **Current gap:** Mission Control already has useful pane structure, but the task/worker/evidence/events composition is still cramped and operator-heavy.
+   - **Target:** improve pane headers, summary metrics, empty states, and focus visibility so the dashboard reads well before interaction begins.
+5. **Expand discoverability without weakening the existing command model**
+   - **Current gap:** `/help`, tab completion, and status hints work, but novice guidance is still concentrated in help output rather than distributed through the shell.
+   - **Target:** keep `/help` as source of truth while adding inline affordances such as stronger empty-state guidance, slash affordances, and more explicit status hints.
+
+### Non-negotiable constraints from e2e coverage
+
+These constraints must be preserved by any visual redesign or comparison task:
+
+- **Stable launch behavior:** the initial TUI must render reliably with a visible `GOLEM` status bar and visible input affordance (`❯` prompt or `Ask anything…`).
+- **Preserved help discoverability:** `/help` must continue surfacing key commands including `/help`, `/clear`, `/plan`, `/model`, `/cost`, `/replay`, `/search`, `/rewind`, `/mission`, `/quit`, `/spec`, and `/doctor`, plus keybindings including `Enter`, `Esc`, and `Tab`.
+- **Preserved search usage text:** `/search` with no argument must continue showing `/search <query>`, the phrase `search across all saved sessions`, and `Examples`.
+- **Preserved resilience affordances:** unknown slash commands must still produce an obvious error, `/model` and `/doctor` must remain easy to find and readable, `/clear` must still remove transcript content, and launch/cancel/scroll/history behaviors must stay stable.
+- **Dashboard stability:** `golem dashboard` must continue to launch into either a valid `Mission Control` view or a valid no-mission/error state without regressing keyboard navigation affordances.
 
 ---
 
