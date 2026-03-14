@@ -1,7 +1,6 @@
 package styles
 
 import (
-	"fmt"
 	"image/color"
 
 	"charm.land/glamour/v2/ansi"
@@ -29,20 +28,27 @@ const (
 
 // Styles contains all visual styles for the application.
 type Styles struct {
-	// Base text styles
-	Base      lipgloss.Style
-	Muted     lipgloss.Style
-	HalfMuted lipgloss.Style
-	Subtle    lipgloss.Style
-	Bold      lipgloss.Style
+	// Base text styles.
+	Base       lipgloss.Style
+	Muted      lipgloss.Style
+	HalfMuted  lipgloss.Style
+	Subtle     lipgloss.Style
+	Bold       lipgloss.Style
+	Emphasis   lipgloss.Style
+	Meta       lipgloss.Style
+	Border     lipgloss.Style
+	Surface    lipgloss.Style
+	SurfaceAlt lipgloss.Style
+	InlineCode lipgloss.Style
+	CodeBlock  lipgloss.Style
 
-	// Tags
+	// Tags.
 	TagError   lipgloss.Style
 	TagInfo    lipgloss.Style
 	TagWarning lipgloss.Style
 	TagSuccess lipgloss.Style
 
-	// Header
+	// Header.
 	Header struct {
 		Model      lipgloss.Style
 		Provider   lipgloss.Style
@@ -51,7 +57,7 @@ type Styles struct {
 		Keystroke  lipgloss.Style
 	}
 
-	// Status bar
+	// Status bar.
 	StatusBar struct {
 		Base     lipgloss.Style
 		Key      lipgloss.Style
@@ -61,7 +67,7 @@ type Styles struct {
 		Provider lipgloss.Style
 	}
 
-	// Chat messages
+	// Chat messages.
 	Chat struct {
 		UserBorder      lipgloss.Style
 		UserLabel       lipgloss.Style
@@ -74,7 +80,7 @@ type Styles struct {
 		ErrorDetails    lipgloss.Style
 	}
 
-	// Tool calls
+	// Tool calls.
 	Tool struct {
 		IconPending   lipgloss.Style
 		IconSuccess   lipgloss.Style
@@ -98,7 +104,7 @@ type Styles struct {
 		DiffHeader    lipgloss.Style
 	}
 
-	// Input
+	// Input.
 	Input struct {
 		Prompt  lipgloss.Style
 		Cursor  lipgloss.Style
@@ -106,7 +112,7 @@ type Styles struct {
 		Focused lipgloss.Style
 	}
 
-	// Right-hand panel
+	// Right-hand panel.
 	Panel struct {
 		Base           lipgloss.Style
 		Title          lipgloss.Style
@@ -120,13 +126,13 @@ type Styles struct {
 		IconBlocked    lipgloss.Style
 	}
 
-	// Spinner
+	// Spinner.
 	SpinnerStyle lipgloss.Style
 
-	// Markdown rendering
+	// Markdown rendering.
 	Markdown ansi.StyleConfig
 
-	// Semantic colors
+	// Semantic colors.
 	Primary   color.Color
 	Secondary color.Color
 	BgBase    color.Color
@@ -145,25 +151,22 @@ type Styles struct {
 
 // New creates a Styles instance using the CharmTone palette.
 func New(_ color.Color) *Styles {
-	// CharmTone palette — matches crush's dark theme.
 	var (
 		primary   = charmtone.Charple
 		secondary = charmtone.Dolly
-		// tertiary  = charmtone.Bok
 
 		bgBase   = charmtone.Pepper
 		bgSubtle = charmtone.Charcoal
-
-		fgBase    = charmtone.Ash
-		fgMuted   = charmtone.Squid
-		fgHalf    = charmtone.Smoke
-		fgSubtle  = charmtone.Oyster
-		border    = charmtone.Charcoal
-
+		fgBase   = charmtone.Ash
+		fgStrong = charmtone.Butter
+		fgMuted  = charmtone.Squid
+		fgHalf   = charmtone.Smoke
+		fgSubtle = charmtone.Oyster
+		border   = charmtone.Squid
+		surface  = charmtone.Charcoal
 		errColor = charmtone.Sriracha
 		warn     = charmtone.Mustard
 		info     = charmtone.Malibu
-
 		white    = charmtone.Butter
 		blue     = charmtone.Malibu
 		green    = charmtone.Julep
@@ -173,6 +176,12 @@ func New(_ color.Color) *Styles {
 	)
 
 	base := lipgloss.NewStyle().Foreground(fgBase)
+	meta := lipgloss.NewStyle().Foreground(fgMuted)
+	halfMuted := lipgloss.NewStyle().Foreground(fgHalf)
+	subtle := lipgloss.NewStyle().Foreground(fgSubtle)
+	borderStyle := lipgloss.NewStyle().Foreground(border)
+	strong := lipgloss.NewStyle().Foreground(fgStrong).Bold(true)
+
 	s := &Styles{}
 
 	// Semantic colors.
@@ -193,66 +202,77 @@ func New(_ color.Color) *Styles {
 
 	// Base text styles.
 	s.Base = base
-	s.Muted = lipgloss.NewStyle().Foreground(fgMuted)
-	s.HalfMuted = lipgloss.NewStyle().Foreground(fgHalf)
-	s.Subtle = lipgloss.NewStyle().Foreground(fgSubtle)
-	s.Bold = lipgloss.NewStyle().Foreground(fgBase).Bold(true)
+	s.Muted = meta
+	s.HalfMuted = halfMuted
+	s.Subtle = subtle
+	s.Bold = strong
+	s.Emphasis = lipgloss.NewStyle().Foreground(primary).Bold(true)
+	s.Meta = meta
+	s.Border = borderStyle
+	s.Surface = lipgloss.NewStyle().Background(surface).Foreground(fgBase)
+	s.SurfaceAlt = lipgloss.NewStyle().Background(bgBase).Foreground(fgBase)
+	s.InlineCode = lipgloss.NewStyle().Foreground(info).Background(surface).Padding(0, 1)
+	s.CodeBlock = lipgloss.NewStyle().Foreground(fgBase).Background(surface).Padding(0, 1)
 
 	// Tags.
-	s.TagError = lipgloss.NewStyle().Background(errColor).Foreground(white).Padding(0, 1).Bold(true)
-	s.TagInfo = lipgloss.NewStyle().Background(info).Foreground(white).Padding(0, 1)
-	s.TagWarning = lipgloss.NewStyle().Background(warn).Foreground(bgBase).Padding(0, 1)
-	s.TagSuccess = lipgloss.NewStyle().Background(greenDk).Foreground(bgBase).Padding(0, 1)
+	s.TagError = tagStyle(errColor, white)
+	s.TagInfo = tagStyle(info, white)
+	s.TagWarning = tagStyle(warn, bgBase)
+	s.TagSuccess = tagStyle(greenDk, bgBase)
 
 	// Header.
 	s.Header.Model = lipgloss.NewStyle().Foreground(primary).Bold(true)
-	s.Header.Provider = lipgloss.NewStyle().Foreground(fgMuted)
-	s.Header.WorkingDir = lipgloss.NewStyle().Foreground(fgMuted)
-	s.Header.Separator = lipgloss.NewStyle().Foreground(fgSubtle)
-	s.Header.Keystroke = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
+	s.Header.Provider = lipgloss.NewStyle().Foreground(secondary).Bold(true)
+	s.Header.WorkingDir = halfMuted
+	s.Header.Separator = subtle
+	s.Header.Keystroke = meta.Italic(true)
 
 	// Status bar.
 	s.StatusBar.Base = lipgloss.NewStyle().Background(bgSubtle).Foreground(fgBase)
-	s.StatusBar.Key = lipgloss.NewStyle().Foreground(fgMuted)
-	s.StatusBar.Value = lipgloss.NewStyle().Foreground(fgBase)
-	s.StatusBar.Accent = lipgloss.NewStyle().Background(primary).Foreground(white).Padding(0, 1).Bold(true)
-	s.StatusBar.Divider = lipgloss.NewStyle().Foreground(fgSubtle)
-	s.StatusBar.Provider = lipgloss.NewStyle().Foreground(secondary)
+	s.StatusBar.Key = halfMuted
+	s.StatusBar.Value = lipgloss.NewStyle().Foreground(fgStrong)
+	s.StatusBar.Accent = lipgloss.NewStyle().Background(primary).Foreground(bgBase).Padding(0, 1).Bold(true)
+	s.StatusBar.Divider = subtle
+	s.StatusBar.Provider = lipgloss.NewStyle().Foreground(secondary).Bold(true)
 
 	// Chat.
 	s.Chat.UserBorder = lipgloss.NewStyle().Foreground(blue)
 	s.Chat.UserLabel = lipgloss.NewStyle().Foreground(blue).Bold(true)
 	s.Chat.AssistantBorder = lipgloss.NewStyle().Foreground(primary)
 	s.Chat.AssistantLabel = lipgloss.NewStyle().Foreground(primary).Bold(true)
-	s.Chat.Thinking = lipgloss.NewStyle().Foreground(fgMuted).Italic(true).
+	s.Chat.Thinking = lipgloss.NewStyle().
+		Foreground(fgHalf).
+		Background(surface).
+		Italic(true).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(border).PaddingLeft(1)
-	s.Chat.ThinkingFooter = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
-	s.Chat.ErrorTag = lipgloss.NewStyle().Background(errColor).Foreground(white).Padding(0, 1).Bold(true)
-	s.Chat.ErrorTitle = lipgloss.NewStyle().Foreground(errColor).Bold(true)
-	s.Chat.ErrorDetails = lipgloss.NewStyle().Foreground(fgMuted)
+		BorderForeground(border).
+		PaddingLeft(1)
+	s.Chat.ThinkingFooter = meta.Italic(true)
+	s.Chat.ErrorTag = tagStyle(errColor, white)
+	s.Chat.ErrorTitle = lipgloss.NewStyle().Foreground(red).Bold(true)
+	s.Chat.ErrorDetails = meta
 
 	// Tool calls.
-	s.Tool.IconPending = lipgloss.NewStyle().Foreground(yellow)
-	s.Tool.IconSuccess = lipgloss.NewStyle().Foreground(green)
-	s.Tool.IconError = lipgloss.NewStyle().Foreground(red)
-	s.Tool.NameNormal = lipgloss.NewStyle().Foreground(fgBase).Bold(true)
-	s.Tool.ParamMain = lipgloss.NewStyle().Foreground(fgHalf)
-	s.Tool.ParamKey = lipgloss.NewStyle().Foreground(fgMuted)
+	s.Tool.IconPending = lipgloss.NewStyle().Foreground(yellow).Bold(true)
+	s.Tool.IconSuccess = lipgloss.NewStyle().Foreground(green).Bold(true)
+	s.Tool.IconError = lipgloss.NewStyle().Foreground(red).Bold(true)
+	s.Tool.NameNormal = lipgloss.NewStyle().Foreground(fgStrong).Bold(true)
+	s.Tool.ParamMain = halfMuted
+	s.Tool.ParamKey = meta
 	s.Tool.CommandPrompt = lipgloss.NewStyle().Foreground(greenDk).Bold(true)
-	s.Tool.CommandText = lipgloss.NewStyle().Foreground(white)
+	s.Tool.CommandText = lipgloss.NewStyle().Foreground(fgStrong)
 	s.Tool.Body = lipgloss.NewStyle().PaddingLeft(2)
-	s.Tool.ContentLine = lipgloss.NewStyle().Foreground(fgMuted)
-	s.Tool.ContentCode = lipgloss.NewStyle().Foreground(fgHalf)
-	s.Tool.OutputBorder = lipgloss.NewStyle().Foreground(border)
-	s.Tool.ResultPrefix = lipgloss.NewStyle().Foreground(fgMuted)
-	s.Tool.OutputMeta = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
-	s.Tool.Truncation = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
-	s.Tool.StateWaiting = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
+	s.Tool.ContentLine = halfMuted
+	s.Tool.ContentCode = lipgloss.NewStyle().Foreground(info)
+	s.Tool.OutputBorder = borderStyle
+	s.Tool.ResultPrefix = meta
+	s.Tool.OutputMeta = meta.Italic(true)
+	s.Tool.Truncation = subtle.Italic(true)
+	s.Tool.StateWaiting = meta.Italic(true)
 	s.Tool.DiffAdd = lipgloss.NewStyle().Foreground(green)
 	s.Tool.DiffDel = lipgloss.NewStyle().Foreground(red)
-	s.Tool.DiffContext = lipgloss.NewStyle().Foreground(fgMuted)
-	s.Tool.DiffHeader = lipgloss.NewStyle().Foreground(blue).Bold(true)
+	s.Tool.DiffContext = meta
+	s.Tool.DiffHeader = lipgloss.NewStyle().Foreground(secondary).Bold(true)
 
 	// Input.
 	s.Input.Prompt = lipgloss.NewStyle().Foreground(primary).Bold(true)
@@ -272,14 +292,14 @@ func New(_ color.Color) *Styles {
 		BorderForeground(border).
 		PaddingLeft(1)
 	s.Panel.Title = lipgloss.NewStyle().Foreground(primary).Bold(true)
-	s.Panel.Separator = lipgloss.NewStyle().Foreground(fgSubtle)
-	s.Panel.Progress = lipgloss.NewStyle().Foreground(fgMuted)
-	s.Panel.TaskText = lipgloss.NewStyle().Foreground(fgBase)
-	s.Panel.TaskDone = lipgloss.NewStyle().Foreground(fgMuted).Strikethrough(true)
-	s.Panel.IconPending = lipgloss.NewStyle().Foreground(fgMuted)
-	s.Panel.IconInProgress = lipgloss.NewStyle().Foreground(yellow)
-	s.Panel.IconCompleted = lipgloss.NewStyle().Foreground(green)
-	s.Panel.IconBlocked = lipgloss.NewStyle().Foreground(red)
+	s.Panel.Separator = subtle
+	s.Panel.Progress = halfMuted
+	s.Panel.TaskText = base
+	s.Panel.TaskDone = meta.Strikethrough(true)
+	s.Panel.IconPending = meta
+	s.Panel.IconInProgress = lipgloss.NewStyle().Foreground(yellow).Bold(true)
+	s.Panel.IconCompleted = lipgloss.NewStyle().Foreground(green).Bold(true)
+	s.Panel.IconBlocked = lipgloss.NewStyle().Foreground(red).Bold(true)
 
 	// Spinner.
 	s.SpinnerStyle = lipgloss.NewStyle().Foreground(primary)
@@ -290,15 +310,24 @@ func New(_ color.Color) *Styles {
 	return s
 }
 
+func tagStyle(bg, fg color.Color) lipgloss.Style {
+	return lipgloss.NewStyle().Background(bg).Foreground(fg).Padding(0, 1).Bold(true)
+}
+
 // markdownStyle creates a glamour-compatible style config.
 func markdownStyle() ansi.StyleConfig {
 	primary := charmtone.Charple.Hex()
-	bright := charmtone.Butter.Hex()
-	info := charmtone.Malibu.Hex()
-	muted := charmtone.Squid.Hex()
+	secondary := charmtone.Dolly.Hex()
+	accent := charmtone.Malibu.Hex()
+	success := charmtone.Julep.Hex()
+	warning := charmtone.Mustard.Hex()
+	errorColor := charmtone.Coral.Hex()
+	strong := charmtone.Butter.Hex()
 	fgBase := charmtone.Ash.Hex()
-	bg := charmtone.Charcoal.Hex()
-	hrColor := charmtone.Smoke.Hex()
+	fgMuted := charmtone.Squid.Hex()
+	fgSoft := charmtone.Smoke.Hex()
+	bgSurface := charmtone.Charcoal.Hex()
+	border := charmtone.Oyster.Hex()
 
 	return ansi.StyleConfig{
 		Document: ansi.StyleBlock{
@@ -311,29 +340,56 @@ func markdownStyle() ansi.StyleConfig {
 		Heading: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
 				Bold:        boolPtr(true),
-				Color:       &primary,
+				Color:       &strong,
 				BlockSuffix: "\n",
 			},
 		},
 		H1: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
-				Bold:   boolPtr(true),
-				Color:  &primary,
-				Prefix: "# ",
+				Bold:        boolPtr(true),
+				Color:       &primary,
+				Prefix:      "# ",
+				BlockSuffix: "\n",
 			},
 		},
 		H2: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
-				Bold:   boolPtr(true),
-				Color:  &primary,
-				Prefix: "## ",
+				Bold:        boolPtr(true),
+				Color:       &strong,
+				Prefix:      "## ",
+				BlockSuffix: "\n",
 			},
 		},
 		H3: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
-				Bold:   boolPtr(true),
-				Color:  &primary,
-				Prefix: "### ",
+				Bold:        boolPtr(true),
+				Color:       &secondary,
+				Prefix:      "### ",
+				BlockSuffix: "\n",
+			},
+		},
+		H4: ansi.StyleBlock{
+			StylePrimitive: ansi.StylePrimitive{
+				Bold:        boolPtr(true),
+				Color:       &accent,
+				Prefix:      "#### ",
+				BlockSuffix: "\n",
+			},
+		},
+		H5: ansi.StyleBlock{
+			StylePrimitive: ansi.StylePrimitive{
+				Bold:        boolPtr(true),
+				Color:       &fgBase,
+				Prefix:      "##### ",
+				BlockSuffix: "\n",
+			},
+		},
+		H6: ansi.StyleBlock{
+			StylePrimitive: ansi.StylePrimitive{
+				Bold:        boolPtr(true),
+				Color:       &fgSoft,
+				Prefix:      "###### ",
+				BlockSuffix: "\n",
 			},
 		},
 		Text: ansi.StylePrimitive{
@@ -341,37 +397,81 @@ func markdownStyle() ansi.StyleConfig {
 		},
 		Code: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
-				Color:           &info,
-				BackgroundColor: &bg,
+				Color:           &accent,
+				BackgroundColor: &bgSurface,
 				Prefix:          " ",
 				Suffix:          " ",
 			},
 		},
 		CodeBlock: ansi.StyleCodeBlock{
 			StyleBlock: ansi.StyleBlock{
+				StylePrimitive: ansi.StylePrimitive{
+					BlockSuffix: "\n",
+				},
 				Margin: uintPtr(1),
 			},
-			Theme:  "dracula",
-			Chroma: &ansi.Chroma{},
+			Chroma: &ansi.Chroma{
+				Background: ansi.StylePrimitive{BackgroundColor: &bgSurface},
+				Text:       ansi.StylePrimitive{Color: &fgBase},
+				Comment: ansi.StylePrimitive{
+					Color:  &fgMuted,
+					Italic: boolPtr(true),
+				},
+				CommentPreproc:      ansi.StylePrimitive{Color: &secondary},
+				Keyword:             ansi.StylePrimitive{Color: &primary, Bold: boolPtr(true)},
+				KeywordReserved:     ansi.StylePrimitive{Color: &primary, Bold: boolPtr(true)},
+				KeywordNamespace:    ansi.StylePrimitive{Color: &secondary},
+				KeywordType:         ansi.StylePrimitive{Color: &secondary, Bold: boolPtr(true)},
+				Operator:            ansi.StylePrimitive{Color: &fgSoft},
+				Punctuation:         ansi.StylePrimitive{Color: &fgMuted},
+				Name:                ansi.StylePrimitive{Color: &fgBase},
+				NameBuiltin:         ansi.StylePrimitive{Color: &accent},
+				NameTag:             ansi.StylePrimitive{Color: &primary, Bold: boolPtr(true)},
+				NameAttribute:       ansi.StylePrimitive{Color: &secondary},
+				NameClass:           ansi.StylePrimitive{Color: &accent, Bold: boolPtr(true)},
+				NameConstant:        ansi.StylePrimitive{Color: &warning},
+				NameDecorator:       ansi.StylePrimitive{Color: &primary},
+				NameException:       ansi.StylePrimitive{Color: &errorColor},
+				NameFunction:        ansi.StylePrimitive{Color: &accent, Bold: boolPtr(true)},
+				NameOther:           ansi.StylePrimitive{Color: &fgBase},
+				Literal:             ansi.StylePrimitive{Color: &success},
+				LiteralNumber:       ansi.StylePrimitive{Color: &warning},
+				LiteralDate:         ansi.StylePrimitive{Color: &secondary},
+				LiteralString:       ansi.StylePrimitive{Color: &success},
+				LiteralStringEscape: ansi.StylePrimitive{Color: &warning},
+				GenericDeleted:      ansi.StylePrimitive{Color: &errorColor},
+				GenericEmph:         ansi.StylePrimitive{Italic: boolPtr(true)},
+				GenericInserted:     ansi.StylePrimitive{Color: &success},
+				GenericStrong:       ansi.StylePrimitive{Bold: boolPtr(true)},
+				GenericSubheading:   ansi.StylePrimitive{Color: &primary, Bold: boolPtr(true)},
+			},
 		},
 		Link: ansi.StylePrimitive{
-			Color:     &info,
+			Color:     &accent,
 			Underline: boolPtr(true),
 		},
 		LinkText: ansi.StylePrimitive{
-			Color: &info,
+			Color: &accent,
+			Bold:  boolPtr(true),
+		},
+		Image: ansi.StylePrimitive{
+			Color: &secondary,
+		},
+		ImageText: ansi.StylePrimitive{
+			Color: &accent,
 			Bold:  boolPtr(true),
 		},
 		Emph: ansi.StylePrimitive{
+			Color:  &secondary,
 			Italic: boolPtr(true),
 		},
 		Strong: ansi.StylePrimitive{
 			Bold:  boolPtr(true),
-			Color: &bright,
+			Color: &strong,
 		},
 		HorizontalRule: ansi.StylePrimitive{
-			Color:  &hrColor,
-			Format: "\n--------\n",
+			Color:  &border,
+			Format: "\n────────\n",
 		},
 		List: ansi.StyleList{
 			StyleBlock:  ansi.StyleBlock{},
@@ -384,27 +484,52 @@ func markdownStyle() ansi.StyleConfig {
 			BlockPrefix: ". ",
 		},
 		Task: ansi.StyleTask{
-			Ticked:   "[✓] ",
-			Unticked: "[ ] ",
+			StylePrimitive: ansi.StylePrimitive{Color: &fgBase},
+			Ticked:         "[✓] ",
+			Unticked:       "[ ] ",
 		},
 		Paragraph: ansi.StyleBlock{
-			StylePrimitive: ansi.StylePrimitive{},
+			StylePrimitive: ansi.StylePrimitive{Color: &fgBase},
 		},
 		Strikethrough: ansi.StylePrimitive{
 			CrossedOut: boolPtr(true),
+			Faint:      boolPtr(true),
 		},
 		BlockQuote: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
-				Color:  &muted,
+				Color:  &fgSoft,
 				Italic: boolPtr(true),
 			},
 			Indent:      uintPtr(1),
 			IndentToken: stringPtr("│ "),
 		},
 		Table: ansi.StyleTable{
+			StyleBlock: ansi.StyleBlock{
+				StylePrimitive: ansi.StylePrimitive{
+					Color:       &fgBase,
+					BlockSuffix: "\n",
+				},
+			},
 			CenterSeparator: stringPtr("┼"),
 			ColumnSeparator: stringPtr("│"),
 			RowSeparator:    stringPtr("─"),
+		},
+		DefinitionList: ansi.StyleBlock{
+			StylePrimitive: ansi.StylePrimitive{BlockSuffix: "\n"},
+		},
+		DefinitionTerm: ansi.StylePrimitive{
+			Color: &secondary,
+			Bold:  boolPtr(true),
+		},
+		DefinitionDescription: ansi.StylePrimitive{
+			Color:       &fgSoft,
+			BlockPrefix: "  ",
+		},
+		HTMLBlock: ansi.StyleBlock{
+			StylePrimitive: ansi.StylePrimitive{Color: &fgSoft},
+		},
+		HTMLSpan: ansi.StyleBlock{
+			StylePrimitive: ansi.StylePrimitive{Color: &fgSoft},
 		},
 	}
 }
@@ -412,6 +537,3 @@ func markdownStyle() ansi.StyleConfig {
 func stringPtr(s string) *string { return &s }
 func uintPtr(u uint) *uint       { return &u }
 func boolPtr(b bool) *bool       { return &b }
-
-// Suppress unused import warning for fmt.
-var _ = fmt.Sprint
