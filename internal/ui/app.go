@@ -1756,7 +1756,7 @@ func (m *Model) renderStatusBar() string {
 
 	// Team status in status bar.
 	if session := m.runtime.Session; session != nil && session.Team != nil {
-		members := session.Team.Members()
+		members := activeTeamMembers(session.Team.Members())
 		running, idle := 0, 0
 		for _, mi := range members {
 			switch mi.State.String() {

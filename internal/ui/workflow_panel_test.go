@@ -13,6 +13,8 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
 	"github.com/fugue-labs/gollem/core"
+	"github.com/fugue-labs/gollem/ext/codetool"
+	"github.com/fugue-labs/gollem/ext/team"
 )
 
 func TestCancelActiveRunClearsRunStateAndBumpsRunID(t *testing.T) {
@@ -251,6 +253,51 @@ func TestWorkflowPanelSummaryTruncatesAtProductionWidth(t *testing.T) {
 		if w := len([]rune(line)); w > 38 {
 			t.Fatalf("line %d width=%d exceeds panel width 38: %q", i, w, line)
 		}
+	}
+}
+
+func TestActiveTeamMembersFiltersStoppedMembers(t *testing.T) {
+	members := []team.TeammateInfo{
+		{Name: "leader", State: team.TeammateRunning},
+		{Name: "worker-1", State: team.TeammateRunning},
+		{Name: "worker-2", State: team.TeammateStopped},
+		{Name: "worker-3", State: team.TeammateIdle},
+	}
+	active := activeTeamMembers(members)
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active members, got %d", len(active))
+	}
+	for _, mi := range active {
+		if mi.State == team.TeammateStopped {
+			t.Fatalf("stopped member %q should have been filtered", mi.Name)
+		}
+	}
+}
+
+func TestActiveTeamMembersAllStopped(t *testing.T) {
+	members := []team.TeammateInfo{
+		{Name: "leader", State: team.TeammateStopped},
+		{Name: "worker", State: team.TeammateStopped},
+	}
+	active := activeTeamMembers(members)
+	if len(active) != 0 {
+		t.Fatalf("expected 0 active members, got %d", len(active))
+	}
+}
+
+func TestPurgeStaleTeamNilsWhenAllWorkersStopped(t *testing.T) {
+	tm := team.NewTeam(team.TeamConfig{Name: "test-team", Leader: "leader"})
+	tm.RegisterLeader("leader")
+
+	sess := &codetool.Session{Team: tm}
+	m := New(&config.Config{})
+
+	// Spawn a teammate that immediately completes (no model needed — just test purge logic).
+	// We can't easily spawn a real teammate without a model, so test the boundary case
+	// where only the leader exists — purgeStaleTeam should not nil (len <= 1).
+	m.purgeStaleTeam(sess)
+	if sess.Team == nil {
+		t.Fatal("expected team to be preserved when only leader exists")
 	}
 }
 

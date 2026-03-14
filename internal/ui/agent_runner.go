@@ -148,6 +148,13 @@ func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cm
 		}
 	}
 
+	// Purge stale team: if all non-leader teammates are stopped, nil the
+	// team so a fresh one is created for this run. This prevents stopped
+	// members from accumulating across runs and blocking name reuse.
+	if sess := m.runtime.Session; sess != nil && sess.Team != nil {
+		m.purgeStaleTeam(sess)
+	}
+
 	msg.runtime.Session = m.runtime.Session
 	msg.runtime.EventBus = m.teamEventBus
 	if msg.runtime.EffectiveTeamMode {

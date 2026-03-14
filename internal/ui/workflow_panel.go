@@ -8,6 +8,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/fugue-labs/golem/internal/ui/chat"
 	"github.com/fugue-labs/golem/internal/ui/styles"
+	"github.com/fugue-labs/gollem/ext/codetool"
+	"github.com/fugue-labs/gollem/ext/team"
 )
 
 func (m *Model) cancelActiveRun(asyncCleanup bool) {
@@ -85,9 +87,42 @@ func (m *Model) hasWorkflowPanel() bool {
 
 func (m *Model) hasTeamMembers() bool {
 	if session := m.runtime.Session; session != nil && session.Team != nil {
-		return len(session.Team.Members()) > 1 // >1 because leader is always a member
+		return len(activeTeamMembers(session.Team.Members())) > 1 // >1 because leader is always a member
 	}
 	return false
+}
+
+// activeTeamMembers filters out stopped teammates so that stale entries
+// from previous runs don't clutter the display.
+func activeTeamMembers(members []team.TeammateInfo) []team.TeammateInfo {
+	result := make([]team.TeammateInfo, 0, len(members))
+	for _, mi := range members {
+		if mi.State != team.TeammateStopped {
+			result = append(result, mi)
+		}
+	}
+	return result
+}
+
+// purgeStaleTeam nils the team on the session when all non-leader
+// teammates have stopped. This allows a fresh team to be created on
+// the next run, preventing stopped members from blocking name reuse
+// and accumulating across mission restarts or re-plans.
+func (m *Model) purgeStaleTeam(sess *codetool.Session) {
+	members := sess.Team.Members()
+	if len(members) <= 1 {
+		return // only leader or empty — nothing to purge
+	}
+	for _, mi := range members {
+		if mi.Name == "leader" {
+			continue
+		}
+		if mi.State != team.TeammateStopped {
+			return // at least one non-leader still active — keep team
+		}
+	}
+	// All non-leader members are stopped — reset for fresh start.
+	sess.Team = nil
 }
 
 func (m *Model) renderWorkflowPanel(height, width int) string {
@@ -243,7 +278,7 @@ func workflowPanelSummary(m *Model) string {
 		parts = append(parts, fmt.Sprintf("spec %s · %s", m.specState.PhaseLabel(), m.specState.GateSummary()))
 	}
 	if m.hasTeamMembers() {
-		members := m.runtime.Session.Team.Members()
+		members := activeTeamMembers(m.runtime.Session.Team.Members())
 		running := 0
 		for _, mi := range members {
 			if mi.State.String() == "running" {
@@ -268,19 +303,17 @@ func (m *Model) renderTeamPanelLines(limit, width int) []string {
 	if limit <= 0 || !m.hasTeamMembers() {
 		return nil
 	}
-	members := m.runtime.Session.Team.Members()
-	running, idle, stopped := 0, 0, 0
+	members := activeTeamMembers(m.runtime.Session.Team.Members())
+	running, idle := 0, 0
 	for _, mi := range members {
 		switch mi.State.String() {
 		case "running":
 			running++
 		case "idle":
 			idle++
-		case "stopped":
-			stopped++
 		}
 	}
-	header := fmt.Sprintf("Team %d↑ %d○ %d×", running, idle, stopped)
+	header := fmt.Sprintf("Team %d↑ %d○", running, idle)
 	lines := []string{m.sty.Panel.Progress.Render(header)}
 	if limit == 1 {
 		return lines
