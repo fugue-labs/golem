@@ -102,8 +102,20 @@ func (wl *WorkerLauncher) provisionWorker(ctx context.Context, mission *Mission,
 		}
 	}
 
-	// Create run record.
+	// Transition task to running BEFORE creating the run. This ensures the
+	// attempt is counted even if CreateRun fails, preventing silent retries
+	// that exceed max attempts. The task status and attempt count are the
+	// source of truth for retry decisions.
 	now := time.Now().UTC()
+	task.Status = TaskRunning
+	task.AttemptCount++
+	task.UpdatedAt = now
+	if err := wl.store.UpdateTask(ctx, task); err != nil {
+		wl.worktrees.Release(ctx, task.ID) //nolint:errcheck
+		return nil, fmt.Errorf("update task %s to running: %w", task.ID, err)
+	}
+
+	// Create run record.
 	leaseExpiry := now.Add(30 * time.Minute)
 	run := &Run{
 		ID:           generateID("r"),
@@ -119,24 +131,13 @@ func (wl *WorkerLauncher) provisionWorker(ctx context.Context, mission *Mission,
 	}
 
 	if err := wl.store.CreateRun(ctx, run); err != nil {
-		// Clean up worktree on failure.
+		// Revert task to ready so recovery can pick it up, but keep the
+		// incremented AttemptCount so retries are tracked accurately.
+		task.Status = TaskReady
+		task.UpdatedAt = time.Now().UTC()
+		wl.store.UpdateTask(ctx, task) //nolint:errcheck
 		wl.worktrees.Release(ctx, task.ID) //nolint:errcheck
 		return nil, fmt.Errorf("create run for %s: %w", task.ID, err)
-	}
-
-	// Transition task to running.
-	task.Status = TaskRunning
-	task.AttemptCount++
-	task.UpdatedAt = now
-	if err := wl.store.UpdateTask(ctx, task); err != nil {
-		// Run record exists but task update failed — mark run as failed.
-		run.Status = RunFailed
-		run.ErrorText = "failed to update task status"
-		endedAt := time.Now().UTC()
-		run.EndedAt = &endedAt
-		wl.store.UpdateRun(ctx, run)       //nolint:errcheck
-		wl.worktrees.Release(ctx, task.ID) //nolint:errcheck
-		return nil, fmt.Errorf("update task %s to running: %w", task.ID, err)
 	}
 
 	// Log dispatch event.

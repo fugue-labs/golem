@@ -2,6 +2,7 @@ package mission
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,10 +11,11 @@ import (
 // workerMockStore extends mockStore with the methods WorkerLauncher needs.
 type workerMockStore struct {
 	mockStore
-	tasks    map[string]*Task
-	runs     map[string]*Run
-	events   []*Event
-	runsList []*Run // separate from runs map for ListRuns ordering
+	tasks        map[string]*Task
+	runs         map[string]*Run
+	events       []*Event
+	runsList     []*Run // separate from runs map for ListRuns ordering
+	createRunErr error  // if set, CreateRun returns this error
 }
 
 func newWorkerMockStore() *workerMockStore {
@@ -27,6 +29,9 @@ func newWorkerMockStore() *workerMockStore {
 }
 
 func (s *workerMockStore) CreateRun(_ context.Context, r *Run) error {
+	if s.createRunErr != nil {
+		return s.createRunErr
+	}
 	s.runs[r.ID] = r
 	s.runsList = append(s.runsList, r)
 	return nil
@@ -476,6 +481,94 @@ func TestProvisionWorkerReusesExistingWorktree(t *testing.T) {
 	}
 	if path != "/existing/worktree/worker-t1" {
 		t.Fatalf("worktree path changed unexpectedly to %s", path)
+	}
+}
+
+func TestProvisionWorker_CreateRunFails_AttemptCounted(t *testing.T) {
+	store := newWorkerMockStore()
+	store.missions["m1"] = &Mission{
+		ID:         "m1",
+		Status:     MissionRunning,
+		BaseBranch: "main",
+		Budget:     Budget{MaxConcurrentWorkers: 3},
+	}
+	task := &Task{
+		ID:           "t1",
+		MissionID:    "m1",
+		Title:        "Failing task",
+		Kind:         TaskKindCode,
+		Objective:    "Will fail on CreateRun",
+		Status:       TaskReady,
+		AttemptCount: 0,
+	}
+	store.ready = []*Task{task}
+	store.tasks["t1"] = task
+
+	// Inject CreateRun failure.
+	store.createRunErr = fmt.Errorf("injected CreateRun failure")
+
+	wm := NewWorktreeManager("/tmp/test-repo")
+	wm.active["t1"] = "/existing/worktree/worker-t1" // pre-provision worktree
+
+	sched := NewScheduler(store)
+	launcher := NewWorkerLauncher(sched, wm, store)
+
+	specs, err := launcher.DispatchReadyTasks(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Task should have failed provisioning — no specs returned.
+	if len(specs) != 0 {
+		t.Fatalf("expected 0 specs, got %d", len(specs))
+	}
+
+	// AttemptCount must be incremented even though CreateRun failed.
+	if task.AttemptCount != 1 {
+		t.Errorf("expected AttemptCount=1 after failed CreateRun, got %d", task.AttemptCount)
+	}
+	// Task should be reverted to TaskReady for retry.
+	if task.Status != TaskReady {
+		t.Errorf("expected task status ready after failed CreateRun, got %s", task.Status)
+	}
+}
+
+func TestProvisionWorker_CreateRunFails_MaxAttemptsExceeded(t *testing.T) {
+	store := newWorkerMockStore()
+	store.missions["m1"] = &Mission{
+		ID:         "m1",
+		Status:     MissionRunning,
+		BaseBranch: "main",
+		Budget:     Budget{MaxConcurrentWorkers: 3},
+	}
+	task := &Task{
+		ID:           "t1",
+		MissionID:    "m1",
+		Title:        "Repeatedly failing task",
+		Kind:         TaskKindCode,
+		Objective:    "Will fail on CreateRun",
+		Status:       TaskReady,
+		AttemptCount: 2, // Already 2 attempts
+	}
+	store.ready = []*Task{task}
+	store.tasks["t1"] = task
+
+	// Inject CreateRun failure.
+	store.createRunErr = fmt.Errorf("injected CreateRun failure")
+
+	wm := NewWorktreeManager("/tmp/test-repo")
+	wm.active["t1"] = "/existing/worktree/worker-t1"
+
+	sched := NewScheduler(store)
+	launcher := NewWorkerLauncher(sched, wm, store)
+
+	specs, _ := launcher.DispatchReadyTasks(context.Background(), "m1")
+	if len(specs) != 0 {
+		t.Fatalf("expected 0 specs, got %d", len(specs))
+	}
+
+	// AttemptCount should be 3 now — visible for max-attempt checks.
+	if task.AttemptCount != 3 {
+		t.Errorf("expected AttemptCount=3, got %d", task.AttemptCount)
 	}
 }
 
