@@ -3,6 +3,7 @@ package mission
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -17,8 +18,8 @@ type scanner interface {
 
 func scanMission(row scanner) (*Mission, error) {
 	var m Mission
-	var policyStr, budgetStr, criteriaStr, planStateStr, metadataStr string
-	var createdStr, updatedStr string
+	var policyStr, budgetStr, criteriaStr, planStateStr, metadataStr sql.NullString
+	var createdStr, updatedStr sql.NullString
 	var startedStr, endedStr, replanStr sql.NullString
 
 	err := row.Scan(&m.ID, &m.Title, &m.Goal, &m.RepoRoot, &m.BaseCommit, &m.BaseBranch,
@@ -29,16 +30,44 @@ func scanMission(row scanner) (*Mission, error) {
 		return nil, err
 	}
 
-	m.Policy = cloneRawMessage(json.RawMessage(policyStr))
-	unmarshalJSONInto(budgetStr, &m.Budget)
-	unmarshalJSONInto(criteriaStr, &m.SuccessCriteria)
-	m.PlanStateJSON = cloneRawMessage(json.RawMessage(planStateStr))
-	m.MetadataJSON = cloneRawMessage(json.RawMessage(metadataStr))
-	m.CreatedAt = parseTime(createdStr)
-	m.UpdatedAt = parseTime(updatedStr)
-	m.StartedAt = parseOptionalTime(startedStr)
-	m.EndedAt = parseOptionalTime(endedStr)
-	m.LastReplanAt = parseOptionalTime(replanStr)
+	m.Policy, err = parseRawJSON("missions.policy_json", policyStr)
+	if err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSONInto("missions.budget_json", nullStringValue(budgetStr), &m.Budget); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSONInto("missions.success_criteria_json", nullStringValue(criteriaStr), &m.SuccessCriteria); err != nil {
+		return nil, err
+	}
+	m.PlanStateJSON, err = parseRawJSON("missions.plan_state_json", planStateStr)
+	if err != nil {
+		return nil, err
+	}
+	m.MetadataJSON, err = parseRawJSON("missions.metadata_json", metadataStr)
+	if err != nil {
+		return nil, err
+	}
+	m.CreatedAt, err = parseTime("missions.created_at", createdStr)
+	if err != nil {
+		return nil, err
+	}
+	m.UpdatedAt, err = parseTime("missions.updated_at", updatedStr)
+	if err != nil {
+		return nil, err
+	}
+	m.StartedAt, err = parseOptionalTime("missions.started_at", startedStr)
+	if err != nil {
+		return nil, err
+	}
+	m.EndedAt, err = parseOptionalTime("missions.ended_at", endedStr)
+	if err != nil {
+		return nil, err
+	}
+	m.LastReplanAt, err = parseOptionalTime("missions.last_replan_at", replanStr)
+	if err != nil {
+		return nil, err
+	}
 	return &m, nil
 }
 
@@ -48,8 +77,8 @@ func scanMissionRows(rows *sql.Rows) (*Mission, error) {
 
 func scanTask(row scanner) (*Task, error) {
 	var t Task
-	var scopeStr, criteriaStr, reviewStr, outcomeStr, metadataStr string
-	var createdStr, updatedStr string
+	var scopeStr, criteriaStr, reviewStr, outcomeStr, metadataStr sql.NullString
+	var createdStr, updatedStr sql.NullString
 
 	err := row.Scan(&t.ID, &t.MissionID, &t.Title, &t.Kind, &t.Objective,
 		&t.Status, &t.Priority, &scopeStr, &criteriaStr, &reviewStr,
@@ -60,13 +89,31 @@ func scanTask(row scanner) (*Task, error) {
 		return nil, err
 	}
 
-	unmarshalJSONInto(scopeStr, &t.Scope)
-	unmarshalJSONInto(criteriaStr, &t.AcceptanceCriteria)
-	t.ReviewRequirements = cloneRawMessage(json.RawMessage(reviewStr))
-	unmarshalJSONInto(outcomeStr, &t.Outcome)
-	t.MetadataJSON = cloneRawMessage(json.RawMessage(metadataStr))
-	t.CreatedAt = parseTime(createdStr)
-	t.UpdatedAt = parseTime(updatedStr)
+	if err := unmarshalJSONInto("tasks.scope_json", nullStringValue(scopeStr), &t.Scope); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSONInto("tasks.acceptance_criteria_json", nullStringValue(criteriaStr), &t.AcceptanceCriteria); err != nil {
+		return nil, err
+	}
+	t.ReviewRequirements, err = parseRawJSON("tasks.review_requirements_json", reviewStr)
+	if err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSONInto("tasks.outcome_json", nullStringValue(outcomeStr), &t.Outcome); err != nil {
+		return nil, err
+	}
+	t.MetadataJSON, err = parseRawJSON("tasks.metadata_json", metadataStr)
+	if err != nil {
+		return nil, err
+	}
+	t.CreatedAt, err = parseTime("tasks.created_at", createdStr)
+	if err != nil {
+		return nil, err
+	}
+	t.UpdatedAt, err = parseTime("tasks.updated_at", updatedStr)
+	if err != nil {
+		return nil, err
+	}
 	return &t, nil
 }
 
@@ -76,7 +123,7 @@ func scanTaskRows(rows *sql.Rows) (*Task, error) {
 
 func scanRun(row scanner) (*Run, error) {
 	var r Run
-	var outcomeStr, leaseJSONStr, commandJSONStr, controlJSONStr, verificationJSONStr, metadataStr string
+	var outcomeStr, leaseJSONStr, commandJSONStr, controlJSONStr, verificationJSONStr, metadataStr sql.NullString
 	var leaseStr, heartbeatStr, startedStr, endedStr sql.NullString
 
 	err := row.Scan(&r.ID, &r.MissionID, &r.TaskID, &r.ParentRunID, &r.Mode, &r.Status, &r.LeaseOwner,
@@ -87,16 +134,45 @@ func scanRun(row scanner) (*Run, error) {
 		return nil, err
 	}
 
-	r.LeaseExpires = parseOptionalTime(leaseStr)
-	r.HeartbeatAt = parseOptionalTime(heartbeatStr)
-	r.StartedAt = parseOptionalTime(startedStr)
-	r.EndedAt = parseOptionalTime(endedStr)
-	unmarshalJSONInto(outcomeStr, &r.Outcome)
-	r.LeaseJSON = cloneRawMessage(json.RawMessage(leaseJSONStr))
-	r.CommandJSON = cloneRawMessage(json.RawMessage(commandJSONStr))
-	r.ControlJSON = cloneRawMessage(json.RawMessage(controlJSONStr))
-	r.VerificationJSON = cloneRawMessage(json.RawMessage(verificationJSONStr))
-	r.MetadataJSON = cloneRawMessage(json.RawMessage(metadataStr))
+	r.LeaseExpires, err = parseOptionalTime("runs.lease_expires_at", leaseStr)
+	if err != nil {
+		return nil, err
+	}
+	r.HeartbeatAt, err = parseOptionalTime("runs.heartbeat_at", heartbeatStr)
+	if err != nil {
+		return nil, err
+	}
+	r.StartedAt, err = parseOptionalTime("runs.started_at", startedStr)
+	if err != nil {
+		return nil, err
+	}
+	r.EndedAt, err = parseOptionalTime("runs.ended_at", endedStr)
+	if err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSONInto("runs.outcome_json", nullStringValue(outcomeStr), &r.Outcome); err != nil {
+		return nil, err
+	}
+	r.LeaseJSON, err = parseRawJSON("runs.lease_json", leaseJSONStr)
+	if err != nil {
+		return nil, err
+	}
+	r.CommandJSON, err = parseRawJSON("runs.command_json", commandJSONStr)
+	if err != nil {
+		return nil, err
+	}
+	r.ControlJSON, err = parseRawJSON("runs.control_json", controlJSONStr)
+	if err != nil {
+		return nil, err
+	}
+	r.VerificationJSON, err = parseRawJSON("runs.verification_json", verificationJSONStr)
+	if err != nil {
+		return nil, err
+	}
+	r.MetadataJSON, err = parseRawJSON("runs.metadata_json", metadataStr)
+	if err != nil {
+		return nil, err
+	}
 	return &r, nil
 }
 
@@ -106,14 +182,24 @@ func scanRunRows(rows *sql.Rows) (*Run, error) {
 
 func scanArtifact(row scanner) (*Artifact, error) {
 	var a Artifact
-	var contentStr, metadataStr, createdStr string
+	var contentStr, metadataStr, createdStr sql.NullString
 	if err := row.Scan(&a.ID, &a.MissionID, &a.TaskID, &a.RunID, &a.Type, &a.Role,
 		&a.RelativePath, &a.SHA256, &a.MediaType, &a.SizeBytes, &contentStr, &metadataStr, &createdStr); err != nil {
 		return nil, err
 	}
-	a.ContentJSON = cloneRawMessage(json.RawMessage(contentStr))
-	a.MetadataJSON = cloneRawMessage(json.RawMessage(metadataStr))
-	a.CreatedAt = parseTime(createdStr)
+	var err error
+	a.ContentJSON, err = parseRawJSON("artifacts.content_json", contentStr)
+	if err != nil {
+		return nil, err
+	}
+	a.MetadataJSON, err = parseRawJSON("artifacts.metadata_json", metadataStr)
+	if err != nil {
+		return nil, err
+	}
+	a.CreatedAt, err = parseTime("artifacts.created_at", createdStr)
+	if err != nil {
+		return nil, err
+	}
 	return &a, nil
 }
 
@@ -123,17 +209,33 @@ func scanArtifactRows(rows *sql.Rows) (*Artifact, error) {
 
 func scanApproval(row scanner) (*Approval, error) {
 	var a Approval
-	var reqStr, respStr, metadataStr, createdStr string
+	var reqStr, respStr, metadataStr, createdStr sql.NullString
 	var resolvedStr sql.NullString
 	if err := row.Scan(&a.ID, &a.MissionID, &a.TaskID, &a.RunID, &a.Kind, &a.Status,
 		&a.Approver, &a.Reason, &reqStr, &respStr, &metadataStr, &createdStr, &resolvedStr); err != nil {
 		return nil, err
 	}
-	a.RequestJSON = cloneRawMessage(json.RawMessage(reqStr))
-	a.ResponseJSON = cloneRawMessage(json.RawMessage(respStr))
-	a.MetadataJSON = cloneRawMessage(json.RawMessage(metadataStr))
-	a.CreatedAt = parseTime(createdStr)
-	a.ResolvedAt = parseOptionalTime(resolvedStr)
+	var err error
+	a.RequestJSON, err = parseRawJSON("approvals.request_json", reqStr)
+	if err != nil {
+		return nil, err
+	}
+	a.ResponseJSON, err = parseRawJSON("approvals.response_json", respStr)
+	if err != nil {
+		return nil, err
+	}
+	a.MetadataJSON, err = parseRawJSON("approvals.metadata_json", metadataStr)
+	if err != nil {
+		return nil, err
+	}
+	a.CreatedAt, err = parseTime("approvals.created_at", createdStr)
+	if err != nil {
+		return nil, err
+	}
+	a.ResolvedAt, err = parseOptionalTime("approvals.resolved_at", resolvedStr)
+	if err != nil {
+		return nil, err
+	}
 	return &a, nil
 }
 
@@ -143,7 +245,7 @@ func scanApprovalRows(rows *sql.Rows) (*Approval, error) {
 
 func scanEvent(row scanner) (*Event, error) {
 	var e Event
-	var payloadStr, metadataStr, createdStr string
+	var payloadStr, metadataStr, createdStr sql.NullString
 	if err := row.Scan(&e.ID, &e.MissionID, &e.TaskID, &e.RunID, &e.Type, &e.SchemaVersion,
 		&e.CorrelationID, &e.CausationID, &payloadStr, &metadataStr, &createdStr); err != nil {
 		return nil, err
@@ -151,9 +253,19 @@ func scanEvent(row scanner) (*Event, error) {
 	if e.SchemaVersion == 0 {
 		e.SchemaVersion = defaultEventSchemaVersion
 	}
-	e.PayloadJSON = cloneRawMessage(json.RawMessage(payloadStr))
-	e.MetadataJSON = cloneRawMessage(json.RawMessage(metadataStr))
-	e.CreatedAt = parseTime(createdStr)
+	var err error
+	e.PayloadJSON, err = parseRawJSON("events.payload_json", payloadStr)
+	if err != nil {
+		return nil, err
+	}
+	e.MetadataJSON, err = parseRawJSON("events.metadata_json", metadataStr)
+	if err != nil {
+		return nil, err
+	}
+	e.CreatedAt, err = parseTime("events.created_at", createdStr)
+	if err != nil {
+		return nil, err
+	}
 	return &e, nil
 }
 
@@ -295,40 +407,73 @@ func formatTime(t time.Time) string {
 	return t.Format(timeFmt)
 }
 
-func parseTime(s string) time.Time {
-	if s == "" {
-		return time.Time{}
+func parseTime(field string, s sql.NullString) (time.Time, error) {
+	if !s.Valid || strings.TrimSpace(s.String) == "" {
+		return time.Time{}, fmt.Errorf("missing %s", field)
 	}
-	t, _ := time.Parse(timeFmt, s)
-	return t
+	t, err := time.Parse(timeFmt, s.String)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse %s: %w", field, err)
+	}
+	return t, nil
 }
 
-func parseOptionalTime(s sql.NullString) *time.Time {
+func parseOptionalTime(field string, s sql.NullString) (*time.Time, error) {
 	if !s.Valid || strings.TrimSpace(s.String) == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(timeFmt, s.String)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", field, err)
+	}
+	return &t, nil
+}
+
+func nullStringValue(s sql.NullString) string {
+	if !s.Valid {
+		return ""
+	}
+	return s.String
+}
+
+func parseRawJSON(field string, data sql.NullString) (json.RawMessage, error) {
+	trimmed := strings.TrimSpace(nullStringValue(data))
+	if trimmed == "" {
+		return nil, nil
+	}
+	if !json.Valid([]byte(trimmed)) {
+		return nil, fmt.Errorf("decode %s: invalid JSON", field)
+	}
+	return cloneRawMessage(json.RawMessage(trimmed)), nil
+}
+
+func marshalOrDefault(raw json.RawMessage, def string) (string, error) {
+	if len(raw) == 0 {
+		return def, nil
+	}
+	if !json.Valid(raw) {
+		return "", fmt.Errorf("encode raw JSON: invalid JSON")
+	}
+	return string(raw), nil
+}
+
+func marshalJSONOrDefault(v any, def string) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 || string(data) == "null" {
+		return def, nil
+	}
+	return string(data), nil
+}
+
+func unmarshalJSONInto(field, data string, dst any) error {
+	if strings.TrimSpace(data) == "" {
 		return nil
 	}
-	t := parseTime(s.String)
-	return &t
-}
-
-func marshalOrDefault(raw json.RawMessage, def string) string {
-	if len(raw) == 0 {
-		return def
+	if err := json.Unmarshal([]byte(data), dst); err != nil {
+		return fmt.Errorf("decode %s: %w", field, err)
 	}
-	return string(raw)
-}
-
-func marshalJSONOrDefault(v any, def string) string {
-	data, err := json.Marshal(v)
-	if err != nil || len(data) == 0 || string(data) == "null" {
-		return def
-	}
-	return string(data)
-}
-
-func unmarshalJSONInto(data string, dst any) {
-	if strings.TrimSpace(data) == "" {
-		return
-	}
-	_ = json.Unmarshal([]byte(data), dst)
+	return nil
 }

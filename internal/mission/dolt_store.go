@@ -147,7 +147,76 @@ func (s *DoltStore) migrate() error {
 			return fmt.Errorf("exec migration statement: %w\nSQL: %s", err, stmt)
 		}
 	}
+	if err := s.migrateApprovals(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *DoltStore) migrateApprovals() error {
+	if err := s.ensureColumn("approvals", "approver", `ALTER TABLE approvals ADD COLUMN approver VARCHAR(255) NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE approvals SET approver = '' WHERE approver IS NULL`); err != nil {
+		return fmt.Errorf("backfill approvals.approver: %w", err)
+	}
+
+	hasReason, err := s.columnExists("approvals", "reason")
+	if err != nil {
+		return err
+	}
+	if !hasReason {
+		if _, err := s.db.Exec(`ALTER TABLE approvals ADD COLUMN reason TEXT`); err != nil {
+			return fmt.Errorf("add approvals.reason: %w", err)
+		}
+	}
+	if _, err := s.db.Exec(`UPDATE approvals SET reason = '' WHERE reason IS NULL`); err != nil {
+		return fmt.Errorf("backfill approvals.reason: %w", err)
+	}
+	if !hasReason {
+		if _, err := s.db.Exec(`ALTER TABLE approvals MODIFY COLUMN reason TEXT NOT NULL`); err != nil {
+			return fmt.Errorf("enforce approvals.reason not null: %w", err)
+		}
+	}
+
+	if err := s.ensureColumn("approvals", "metadata_json", `ALTER TABLE approvals ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE approvals SET metadata_json = '{}' WHERE metadata_json IS NULL OR TRIM(metadata_json) = ''`); err != nil {
+		return fmt.Errorf("backfill approvals.metadata_json: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE approvals SET status = 'pending' WHERE status IS NULL OR TRIM(status) = ''`); err != nil {
+		return fmt.Errorf("backfill approvals.status: %w", err)
+	}
+	return nil
+}
+
+func (s *DoltStore) ensureColumn(table, column, stmt string) error {
+	exists, err := s.columnExists(table, column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := s.db.Exec(stmt); err != nil {
+		return fmt.Errorf("ensure %s.%s: %w", table, column, err)
+	}
+	return nil
+}
+
+func (s *DoltStore) columnExists(table, column string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*)
+		FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+		table, column,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("lookup column %s.%s: %w", table, column, err)
+	}
+	return count > 0, nil
 }
 
 var doltSchemaStatements = []string{
@@ -295,9 +364,6 @@ var doltMigrationStatements = []string{
 	`ALTER TABLE artifacts ADD COLUMN size_bytes BIGINT NOT NULL DEFAULT 0`,
 	`ALTER TABLE artifacts ADD COLUMN content_json TEXT NOT NULL DEFAULT '{}'`,
 	`ALTER TABLE artifacts ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`,
-	`ALTER TABLE approvals ADD COLUMN approver VARCHAR(255) NOT NULL DEFAULT ''`,
-	`ALTER TABLE approvals ADD COLUMN reason TEXT NOT NULL`,
-	`ALTER TABLE approvals ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`,
 	`ALTER TABLE events ADD COLUMN schema_version INT NOT NULL DEFAULT 1`,
 	`ALTER TABLE events ADD COLUMN correlation_id VARCHAR(255) NOT NULL DEFAULT ''`,
 	`ALTER TABLE events ADD COLUMN causation_id VARCHAR(255) NOT NULL DEFAULT ''`,
@@ -315,13 +381,28 @@ func (s *DoltStore) CreateMission(ctx context.Context, m *Mission) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	policyJSON := marshalOrDefault(m.Policy, "{}")
-	budgetJSON := marshalJSONOrDefault(m.Budget, "{}")
-	criteriaJSON := marshalJSONOrDefault(m.SuccessCriteria, "[]")
-	planStateJSON := marshalOrDefault(m.PlanStateJSON, "{}")
-	metadataJSON := marshalOrDefault(m.MetadataJSON, "{}")
+	policyJSON, err := marshalOrDefault(m.Policy, "{}")
+	if err != nil {
+		return err
+	}
+	budgetJSON, err := marshalJSONOrDefault(m.Budget, "{}")
+	if err != nil {
+		return err
+	}
+	criteriaJSON, err := marshalJSONOrDefault(m.SuccessCriteria, "[]")
+	if err != nil {
+		return err
+	}
+	planStateJSON, err := marshalOrDefault(m.PlanStateJSON, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(m.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO missions (id, title, goal, repo_root, base_commit, base_branch, status,
 			policy_json, budget_json, success_criteria_json, integration_ref, plan_state_json, metadata_json,
 			created_at, updated_at, started_at, ended_at, last_replan_at)
@@ -351,13 +432,28 @@ func (s *DoltStore) UpdateMission(ctx context.Context, m *Mission) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	policyJSON := marshalOrDefault(m.Policy, "{}")
-	budgetJSON := marshalJSONOrDefault(m.Budget, "{}")
-	criteriaJSON := marshalJSONOrDefault(m.SuccessCriteria, "[]")
-	planStateJSON := marshalOrDefault(m.PlanStateJSON, "{}")
-	metadataJSON := marshalOrDefault(m.MetadataJSON, "{}")
+	policyJSON, err := marshalOrDefault(m.Policy, "{}")
+	if err != nil {
+		return err
+	}
+	budgetJSON, err := marshalJSONOrDefault(m.Budget, "{}")
+	if err != nil {
+		return err
+	}
+	criteriaJSON, err := marshalJSONOrDefault(m.SuccessCriteria, "[]")
+	if err != nil {
+		return err
+	}
+	planStateJSON, err := marshalOrDefault(m.PlanStateJSON, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(m.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`UPDATE missions SET title=?, goal=?, repo_root=?, base_commit=?, base_branch=?, status=?,
 			policy_json=?, budget_json=?, success_criteria_json=?, integration_ref=?, plan_state_json=?, metadata_json=?,
 			updated_at=?, started_at=?, ended_at=?, last_replan_at=?
@@ -402,13 +498,28 @@ func (s *DoltStore) CreateTask(ctx context.Context, t *Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	scopeJSON := marshalJSONOrDefault(t.Scope, "{}")
-	criteriaJSON := marshalJSONOrDefault(t.AcceptanceCriteria, "[]")
-	reviewJSON := marshalOrDefault(t.ReviewRequirements, "{}")
-	outcomeJSON := marshalJSONOrDefault(t.Outcome, "{}")
-	metadataJSON := marshalOrDefault(t.MetadataJSON, "{}")
+	scopeJSON, err := marshalJSONOrDefault(t.Scope, "{}")
+	if err != nil {
+		return err
+	}
+	criteriaJSON, err := marshalJSONOrDefault(t.AcceptanceCriteria, "[]")
+	if err != nil {
+		return err
+	}
+	reviewJSON, err := marshalOrDefault(t.ReviewRequirements, "{}")
+	if err != nil {
+		return err
+	}
+	outcomeJSON, err := marshalJSONOrDefault(t.Outcome, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(t.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO tasks (id, mission_id, title, kind, objective, status, priority,
 			scope_json, acceptance_criteria_json, review_requirements_json,
 			estimated_effort, risk_level, attempt_count, blocking_reason, outcome_json, metadata_json,
@@ -440,13 +551,28 @@ func (s *DoltStore) UpdateTask(ctx context.Context, t *Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	scopeJSON := marshalJSONOrDefault(t.Scope, "{}")
-	criteriaJSON := marshalJSONOrDefault(t.AcceptanceCriteria, "[]")
-	reviewJSON := marshalOrDefault(t.ReviewRequirements, "{}")
-	outcomeJSON := marshalJSONOrDefault(t.Outcome, "{}")
-	metadataJSON := marshalOrDefault(t.MetadataJSON, "{}")
+	scopeJSON, err := marshalJSONOrDefault(t.Scope, "{}")
+	if err != nil {
+		return err
+	}
+	criteriaJSON, err := marshalJSONOrDefault(t.AcceptanceCriteria, "[]")
+	if err != nil {
+		return err
+	}
+	reviewJSON, err := marshalOrDefault(t.ReviewRequirements, "{}")
+	if err != nil {
+		return err
+	}
+	outcomeJSON, err := marshalJSONOrDefault(t.Outcome, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(t.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`UPDATE tasks SET title=?, kind=?, objective=?, status=?, priority=?,
 			scope_json=?, acceptance_criteria_json=?, review_requirements_json=?,
 			estimated_effort=?, risk_level=?, attempt_count=?, blocking_reason=?, outcome_json=?, metadata_json=?,
@@ -530,14 +656,32 @@ func (s *DoltStore) CreateRun(ctx context.Context, r *Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	outcomeJSON := marshalJSONOrDefault(r.Outcome, "{}")
-	leaseJSON := marshalOrDefault(r.LeaseJSON, "{}")
-	commandJSON := marshalOrDefault(r.CommandJSON, "{}")
-	controlJSON := marshalOrDefault(r.ControlJSON, "{}")
-	verificationJSON := marshalOrDefault(r.VerificationJSON, "{}")
-	metadataJSON := marshalOrDefault(r.MetadataJSON, "{}")
+	outcomeJSON, err := marshalJSONOrDefault(r.Outcome, "{}")
+	if err != nil {
+		return err
+	}
+	leaseJSON, err := marshalOrDefault(r.LeaseJSON, "{}")
+	if err != nil {
+		return err
+	}
+	commandJSON, err := marshalOrDefault(r.CommandJSON, "{}")
+	if err != nil {
+		return err
+	}
+	controlJSON, err := marshalOrDefault(r.ControlJSON, "{}")
+	if err != nil {
+		return err
+	}
+	verificationJSON, err := marshalOrDefault(r.VerificationJSON, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(r.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO runs (id, mission_id, task_id, parent_run_id, mode, status, lease_owner,
 			lease_expires_at, heartbeat_at, worktree_path, base_ref, started_at, ended_at,
 			summary, error_text, outcome_json, lease_json, command_json, control_json, verification_json, metadata_json)
@@ -567,14 +711,32 @@ func (s *DoltStore) UpdateRun(ctx context.Context, r *Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	outcomeJSON := marshalJSONOrDefault(r.Outcome, "{}")
-	leaseJSON := marshalOrDefault(r.LeaseJSON, "{}")
-	commandJSON := marshalOrDefault(r.CommandJSON, "{}")
-	controlJSON := marshalOrDefault(r.ControlJSON, "{}")
-	verificationJSON := marshalOrDefault(r.VerificationJSON, "{}")
-	metadataJSON := marshalOrDefault(r.MetadataJSON, "{}")
+	outcomeJSON, err := marshalJSONOrDefault(r.Outcome, "{}")
+	if err != nil {
+		return err
+	}
+	leaseJSON, err := marshalOrDefault(r.LeaseJSON, "{}")
+	if err != nil {
+		return err
+	}
+	commandJSON, err := marshalOrDefault(r.CommandJSON, "{}")
+	if err != nil {
+		return err
+	}
+	controlJSON, err := marshalOrDefault(r.ControlJSON, "{}")
+	if err != nil {
+		return err
+	}
+	verificationJSON, err := marshalOrDefault(r.VerificationJSON, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(r.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`UPDATE runs SET task_id=?, parent_run_id=?, mode=?, status=?, lease_owner=?,
 			lease_expires_at=?, heartbeat_at=?, worktree_path=?, base_ref=?,
 			started_at=?, ended_at=?, summary=?, error_text=?, outcome_json=?, lease_json=?,
@@ -620,18 +782,31 @@ func (s *DoltStore) AppendEvent(ctx context.Context, e *Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	payloadJSON := marshalOrDefault(e.PayloadJSON, "{}")
-	metadataJSON := marshalOrDefault(e.MetadataJSON, "{}")
+	payloadJSON, err := marshalOrDefault(e.PayloadJSON, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(e.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
 	schemaVersion := e.SchemaVersion
 	if schemaVersion == 0 {
 		schemaVersion = defaultEventSchemaVersion
 	}
-	_, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO events (mission_id, task_id, run_id, type, schema_version, correlation_id, causation_id, payload_json, metadata_json, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.MissionID, e.TaskID, e.RunID, e.Type, schemaVersion, e.CorrelationID, e.CausationID, payloadJSON, metadataJSON, formatTime(e.CreatedAt),
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if id, err := res.LastInsertId(); err == nil {
+		e.ID = id
+	}
+	e.SchemaVersion = schemaVersion
+	return nil
 }
 
 func (s *DoltStore) ListEvents(ctx context.Context, missionID string, limit int) ([]*Event, error) {
@@ -658,7 +833,13 @@ func (s *DoltStore) ListEvents(ctx context.Context, missionID string, limit int)
 		}
 		events = append(events, e)
 	}
-	return events, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+	return events, nil
 }
 
 // --- Artifact operations ---
@@ -667,9 +848,15 @@ func (s *DoltStore) CreateArtifact(ctx context.Context, a *Artifact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	contentJSON := marshalOrDefault(a.ContentJSON, "{}")
-	metadataJSON := marshalOrDefault(a.MetadataJSON, "{}")
-	_, err := s.db.ExecContext(ctx,
+	contentJSON, err := marshalOrDefault(a.ContentJSON, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(a.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO artifacts (id, mission_id, task_id, run_id, type, role, relative_path, sha256, media_type, size_bytes, content_json, metadata_json, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.MissionID, a.TaskID, a.RunID, a.Type, a.Role, a.RelativePath, a.SHA256, a.MediaType, a.SizeBytes, contentJSON, metadataJSON, formatTime(a.CreatedAt),
@@ -706,11 +893,20 @@ func (s *DoltStore) CreateApproval(ctx context.Context, a *Approval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	reqJSON := marshalOrDefault(a.RequestJSON, "{}")
-	respJSON := marshalOrDefault(a.ResponseJSON, "{}")
-	metadataJSON := marshalOrDefault(a.MetadataJSON, "{}")
+	reqJSON, err := marshalOrDefault(a.RequestJSON, "{}")
+	if err != nil {
+		return err
+	}
+	respJSON, err := marshalOrDefault(a.ResponseJSON, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(a.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO approvals (id, mission_id, task_id, run_id, kind, status, approver, reason,
 			request_json, response_json, metadata_json, created_at, resolved_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -734,11 +930,20 @@ func (s *DoltStore) UpdateApproval(ctx context.Context, a *Approval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	reqJSON := marshalOrDefault(a.RequestJSON, "{}")
-	respJSON := marshalOrDefault(a.ResponseJSON, "{}")
-	metadataJSON := marshalOrDefault(a.MetadataJSON, "{}")
+	reqJSON, err := marshalOrDefault(a.RequestJSON, "{}")
+	if err != nil {
+		return err
+	}
+	respJSON, err := marshalOrDefault(a.ResponseJSON, "{}")
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := marshalOrDefault(a.MetadataJSON, "{}")
+	if err != nil {
+		return err
+	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`UPDATE approvals SET status=?, approver=?, reason=?, request_json=?, response_json=?, metadata_json=?, resolved_at=? WHERE id=?`,
 		string(a.Status), a.Approver, a.Reason, reqJSON, respJSON, metadataJSON, formatNullTime(a.ResolvedAt), a.ID)
 	return err
