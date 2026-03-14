@@ -227,6 +227,7 @@ type Model struct {
 // New creates the initial app model.
 func New(cfg *config.Config) *Model {
 	ti := textarea.New()
+	ti.Prompt = ""
 	ti.Placeholder = "Ask anything… /help for commands"
 	ti.ShowLineNumbers = false
 	ti.SetHeight(1)
@@ -354,7 +355,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.SetWidth(max(1, msg.Width-4))
 
 		// Fallback: initialize styles if BackgroundColorMsg never arrived
 		// (e.g., in PTY environments that don't support OSC 11 queries).
@@ -1254,14 +1254,77 @@ func (m *Model) View() tea.View {
 	return v
 }
 
+func (m *Model) shellWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return 72
+}
+
+func (m *Model) renderHeaderStateBadge() string {
+	switch {
+	case m.approvalMode:
+		return m.sty.TagWarning.Render(" Approval ")
+	case m.askMode:
+		return m.sty.TagInfo.Render(" Need input ")
+	case m.busy:
+		return m.sty.TagInfo.Render(" Working ")
+	default:
+		return m.sty.TagSuccess.Render(" Ready ")
+	}
+}
+
+func (m *Model) syncInputWidth(totalWidth int, prompt string, boxed bool) int {
+	availableWidth := max(1, totalWidth)
+	if boxed && m.sty != nil {
+		availableWidth = max(1, availableWidth-m.sty.Input.Focused.GetHorizontalFrameSize())
+	}
+	textWidth := max(1, availableWidth-lipgloss.Width(prompt))
+	m.input.SetWidth(textWidth)
+	return availableWidth
+}
+
+func (m *Model) wrapShellLine(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(text)
+}
+
+func fitShellLines(lines []string, height, topPad int) string {
+	if height <= 0 {
+		return ""
+	}
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	if topPad < 0 {
+		topPad = 0
+	}
+	if len(lines)+topPad > height {
+		topPad = max(0, height-len(lines))
+	}
+	fitted := make([]string, 0, height)
+	for range topPad {
+		fitted = append(fitted, "")
+	}
+	fitted = append(fitted, lines...)
+	for len(fitted) < height {
+		fitted = append(fitted, "")
+	}
+	return strings.Join(fitted, "\n")
+}
+
 func (m *Model) renderHeader() string {
+	shellWidth := m.shellWidth()
 	title := m.sty.StatusBar.Accent.Render(" GOLEM ")
+	mode := m.renderHeaderStateBadge()
 	model := m.sty.Header.Model.Render(styles.ModelIcon + " " + m.cfg.Model)
 	provider := ""
 	if m.cfg.Provider != "" {
 		provider = m.sty.Header.Separator.Render(" · ") + m.sty.Header.Provider.Render(string(m.cfg.Provider))
 	}
-	leftTop := title + " " + model + provider
+	leftTop := title + " " + mode + " " + model + provider
 
 	var locationParts []string
 	if dir := m.cfg.ShortDir(); dir != "" {
@@ -1274,13 +1337,13 @@ func (m *Model) renderHeader() string {
 	}
 	rightTop := ""
 	if len(locationParts) > 0 {
-		rightTop = m.sty.Header.WorkingDir.Render(truncateText(strings.Join(locationParts, " · "), max(18, m.width/3)))
+		rightTop = m.sty.Header.WorkingDir.Render(truncateText(strings.Join(locationParts, " · "), max(18, shellWidth/3)))
 	}
 
-	lowerLeft := m.sty.Muted.Render(" " + truncateText(m.renderContextSummary(), max(26, m.width/2)))
-	lowerRight := m.sty.HalfMuted.Render(truncateText(m.currentActivitySummary(), max(26, m.width/2)))
+	lowerLeft := m.sty.Muted.Render(truncateText("Context · "+m.renderContextSummary(), max(28, shellWidth/2)))
+	lowerRight := m.sty.HalfMuted.Render(truncateText("Activity · "+m.currentActivitySummary(), max(28, shellWidth/2)))
 
-	return joinShellLine(leftTop, rightTop, m.width) + "\n" + joinShellLine(lowerLeft, lowerRight, m.width)
+	return joinShellLine(leftTop, rightTop, shellWidth) + "\n" + joinShellLine(lowerLeft, lowerRight, shellWidth)
 }
 
 func joinShellLine(left, right string, width int) string {
@@ -1471,31 +1534,31 @@ func (m *Model) renderChat(height, width int) string {
 }
 
 func (m *Model) renderWelcome(height, width int) string {
-	bodyWidth := max(18, width-4)
-	var lines []string
-	lines = append(lines, "")
-	lines = append(lines, m.sty.StatusBar.Accent.Render(" GOLEM ")+" "+m.sty.Bold.Render("Ship changes with more confidence"))
-	lines = append(lines, m.sty.Muted.Render("  "+truncateText(m.renderContextSummary(), bodyWidth)))
-	lines = append(lines, "")
-	lines = append(lines, m.sty.Bold.Render("  Start here"))
-	starterRows := []string{
-		"/help — browse commands and keybindings",
-		"/search <query> — search across all saved sessions",
-		"/doctor — inspect local setup before a long run",
-		"Describe the change you want and press Enter to start",
+	bodyWidth := max(20, width-4)
+	lines := []string{
+		"",
+		m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.Bold.Render("Purpose-built for steady repo work"),
+		m.sty.Muted.Render("  " + truncateText("Model "+m.cfg.Model+" · "+m.currentActivitySummary(), bodyWidth)),
+		"",
+		m.sty.Bold.Render("  Start here"),
+		m.sty.Muted.Render("  " + truncateText("/help — browse commands and keybindings", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("/search <query> — search across all saved sessions", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("/doctor — inspect local setup before a long run", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("Describe the change you want and press Enter to start", bodyWidth)),
+		"",
+		m.sty.Bold.Render("  What this shell keeps in view"),
+		m.sty.Muted.Render("  " + truncateText("Header: model, repo context, and current activity", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("Input: multiline drafting, command completion, and steering while busy", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("Status: usage, workflow state, paging, and key hints", bodyWidth)),
+		"",
+		m.sty.Bold.Render("  Keys"),
+		m.sty.Muted.Render("  " + truncateText("Enter send · Shift+Enter newline · Tab complete · Esc cancel · Ctrl+L clear", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("PgUp/PgDn scroll · ↑/↓ recall input history", bodyWidth)),
 	}
-	for _, row := range starterRows {
-		lines = append(lines, m.sty.Muted.Render("  "+truncateText(row, bodyWidth)))
-	}
-	lines = append(lines, "")
-	lines = append(lines, m.sty.Bold.Render("  Keys"))
-	lines = append(lines, m.sty.Muted.Render("  "+truncateText("Enter send · Shift+Enter newline · Tab complete · Esc cancel · Ctrl+L clear", bodyWidth)))
-	lines = append(lines, m.sty.Muted.Render("  "+truncateText("PgUp/PgDn scroll · ↑/↓ recall input history", bodyWidth)))
 
-	content := strings.Join(lines, "\n")
-	contentLines := strings.Count(content, "\n") + 1
-	padding := strings.Repeat("\n", max(0, height-contentLines-1))
-	return padding + content
+	contentHeight := len(lines)
+	topPad := max(0, height-contentHeight-1)
+	return fitShellLines(lines, height, topPad)
 }
 
 func (m *Model) renderInput() string {
@@ -1509,13 +1572,11 @@ func (m *Model) renderInput() string {
 }
 
 func (m *Model) renderInputBusyOrIdle() string {
-	bodyWidth := m.width
+	boxWidth := m.shellWidth()
 	prompt := m.sty.Input.Prompt.Render(" " + styles.PromptIcon + " ")
+	innerWidth := m.syncInputWidth(boxWidth, prompt, true)
 	body := prompt + m.input.View()
-	box := m.sty.Input.Focused.Render(body)
-	if bodyWidth > 0 {
-		box = m.sty.Input.Focused.Width(bodyWidth).Render(body)
-	}
+	box := m.sty.Input.Focused.Width(boxWidth).Render(body)
 	if !m.busy {
 		return box
 	}
@@ -1526,18 +1587,16 @@ func (m *Model) renderInputBusyOrIdle() string {
 	if m.activeToolName != "" {
 		activity = "Running " + m.activeToolName
 		if m.activeToolArgs != "" {
-			activity += " " + truncateText(m.activeToolArgs, max(8, bodyWidth-24))
+			activity += " " + truncateText(m.activeToolArgs, max(8, innerWidth-22))
 		}
 	}
 	meta := []string{activity, elapsed.String()}
 	if queued := m.pendingCount(); queued > 0 {
 		meta = append(meta, strconv.Itoa(queued)+" queued")
 	}
-	meta = append(meta, "type and press Enter to steer", "Esc cancels")
-	status := m.sty.Muted.Render("  " + sp + " " + strings.Join(meta, " · "))
-	if bodyWidth > 0 {
-		status = m.sty.Muted.Width(bodyWidth).Render("  " + sp + " " + strings.Join(meta, " · "))
-	}
+	meta = append(meta, "Enter steers", "Esc cancels")
+	statusText := "  " + sp + " " + strings.Join(meta, " · ")
+	status := m.wrapShellLine(m.sty.Muted.Render(statusText), boxWidth)
 	return status + "\n" + box
 }
 
@@ -1743,11 +1802,13 @@ func compactMessages(ctx context.Context, messages []core.ModelMessage, model co
 }
 
 func (m *Model) renderStatusBar() string {
+	shellWidth := m.shellWidth()
 	accent := m.sty.StatusBar.Accent.Render(" GOLEM ")
 	divider := m.sty.StatusBar.Divider.Render(" │ ")
 
 	var leftParts []string
 	leftParts = append(leftParts, accent)
+	leftParts = append(leftParts, divider, m.sty.StatusBar.Key.Render("model ")+m.sty.StatusBar.Value.Render(m.cfg.Model))
 
 	if m.usage.Requests > 0 {
 		tokens := m.sty.StatusBar.Key.Render("tokens ") +
@@ -1801,7 +1862,6 @@ func (m *Model) renderStatusBar() string {
 		leftParts = append(leftParts, divider, scrolled)
 	}
 
-	// Context window usage — use real provider token count when available.
 	if ctxWindow := modelContextWindow(m.cfg.Model); ctxWindow > 0 {
 		tokenCount := m.estimatedTokens
 		if tokenCount > 0 {
@@ -1814,7 +1874,6 @@ func (m *Model) renderStatusBar() string {
 		}
 	}
 
-	// Team status in status bar.
 	if session := m.runtime.Session; session != nil && session.Team != nil {
 		members := activeTeamMembers(session.Team.Members())
 		running, idle := 0, 0
@@ -1826,7 +1885,7 @@ func (m *Model) renderStatusBar() string {
 				idle++
 			}
 		}
-		if len(members) > 1 { // >1 because leader is always a member
+		if len(members) > 1 {
 			teamLabel := fmt.Sprintf("%d↑ %d○", running, idle)
 			teamPart := m.sty.StatusBar.Key.Render("team ") +
 				m.sty.StatusBar.Value.Render(teamLabel)
@@ -1839,22 +1898,12 @@ func (m *Model) renderStatusBar() string {
 		if cost < 0.01 {
 			costStr = fmt.Sprintf("$%.4f", cost)
 		}
-		// Show budget remaining if configured.
 		if budget := m.cfg.EffectiveBudget(); budget > 0 {
-			remaining := budget - cost
-			if remaining < 0 {
-				remaining = 0
-			}
 			costStr += fmt.Sprintf("/$%.2f", budget)
-			costPart := m.sty.StatusBar.Value.Render(costStr)
-			leftParts = append(leftParts, divider, costPart)
-		} else {
-			costPart := m.sty.StatusBar.Value.Render(costStr)
-			leftParts = append(leftParts, divider, costPart)
 		}
+		leftParts = append(leftParts, divider, m.sty.StatusBar.Value.Render(costStr))
 	}
 
-	// Show downgrade indicator when model was auto-downgraded.
 	if m.downgraded && m.originalModel != "" {
 		downgrade := m.sty.StatusBar.Key.Render("downgraded ") +
 			m.sty.StatusBar.Value.Render(m.originalModel+" → "+m.cfg.Model)
@@ -1863,35 +1912,36 @@ func (m *Model) renderStatusBar() string {
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top, leftParts...)
 
-	// Help hints on the right.
 	var hints string
-	if m.askMode {
+	switch {
+	case m.askMode:
 		hints = m.sty.StatusBar.Key.Render("enter ") + m.sty.StatusBar.Value.Render("answer") +
 			m.sty.StatusBar.Divider.Render(" │ ") +
 			m.sty.StatusBar.Key.Render("esc ") + m.sty.StatusBar.Value.Render("cancel")
-	} else if m.busy {
+	case m.busy:
 		hints = m.sty.StatusBar.Key.Render("enter ") + m.sty.StatusBar.Value.Render("steer") +
 			m.sty.StatusBar.Divider.Render(" │ ") +
 			m.sty.StatusBar.Key.Render("esc ") + m.sty.StatusBar.Value.Render("cancel")
-	} else {
+	default:
 		hints = m.sty.StatusBar.Key.Render("enter ") + m.sty.StatusBar.Value.Render("send") +
 			m.sty.StatusBar.Divider.Render(" │ ") +
-			m.sty.StatusBar.Key.Render("shift+enter ") + m.sty.StatusBar.Value.Render("newline") +
+			m.sty.StatusBar.Key.Render("tab ") + m.sty.StatusBar.Value.Render("complete") +
 			m.sty.StatusBar.Divider.Render(" │ ") +
-			m.sty.StatusBar.Key.Render("ctrl+c ") + m.sty.StatusBar.Value.Render("quit")
+			m.sty.StatusBar.Key.Render("pgup/pgdn ") + m.sty.StatusBar.Value.Render("scroll") +
+			m.sty.StatusBar.Divider.Render(" │ ") +
+			m.sty.StatusBar.Key.Render("ctrl+l ") + m.sty.StatusBar.Value.Render("clear")
 	}
 	hints += " "
 
-	// Calculate gap between left and right.
 	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(hints)
-	gap := m.width - leftW - rightW
+	gap := shellWidth - leftW - rightW
 	if gap < 0 {
 		gap = 0
 	}
 
 	content := left + strings.Repeat(" ", gap) + hints
-	return m.sty.StatusBar.Base.Width(m.width).Render(content)
+	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
 
 func (m *Model) renderSkillsList() []*chat.Message {
