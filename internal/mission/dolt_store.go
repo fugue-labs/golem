@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -13,11 +15,19 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
+func init() {
+	// Redirect the MySQL driver's internal logger to discard so raw
+	// driver errors (e.g. "packets.go:58 read tcp ... i/o timeout")
+	// don't corrupt the TUI by writing to stderr.
+	_ = mysql.SetLogger(log.New(io.Discard, "", 0))
+}
+
 const (
 	// DefaultDoltHost is the default Dolt SQL server address.
 	DefaultDoltHost = "127.0.0.1:3307"
 	// DefaultDoltDB is the default database name for mission state.
-	DefaultDoltDB = "golem_missions"
+	// Must match the rig database name in Dolt (see gt dolt status).
+	DefaultDoltDB = "golem"
 )
 
 // DefaultDSN returns the default MySQL DSN for the mission Dolt store.
@@ -104,6 +114,11 @@ func OpenDoltStore(dsn string) (*DoltStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open dolt: %w", err)
 	}
+
+	// Limit connection pool to prevent exhausting Dolt under load.
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(5 * time.Minute)
 
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
@@ -887,11 +902,16 @@ func (s *DoltStore) GetRunsForTask(ctx context.Context, taskID string) ([]*Run, 
 // --- Dolt-specific operations ---
 
 // DoltCommit creates a Dolt commit on the current branch with the given message.
+// "nothing to commit" is silently ignored — callers don't need to pre-check
+// for pending changes.
 func (s *DoltStore) DoltCommit(ctx context.Context, message string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	_, err := s.db.ExecContext(ctx, `CALL DOLT_COMMIT('-Am', ?)`, message)
+	if err != nil && strings.Contains(err.Error(), "nothing to commit") {
+		return nil
+	}
 	return err
 }
 
