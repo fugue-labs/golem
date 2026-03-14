@@ -57,18 +57,18 @@ func modelPricing() map[string]core.ModelPricing {
 		"claude-haiku-4-5":         {InputTokenCost: 0.0000008, OutputTokenCost: 0.000004, CachedInputCost: 0.00000008, CacheWriteCost: 0.000001},
 		"claude-haiku-3.5":         {InputTokenCost: 0.0000008, OutputTokenCost: 0.000004, CachedInputCost: 0.00000008, CacheWriteCost: 0.000001},
 		// OpenAI
-		"gpt-5.4":               {InputTokenCost: 0.000002, OutputTokenCost: 0.000008},
-		"gpt-4o":                {InputTokenCost: 0.0000025, OutputTokenCost: 0.00001},
-		"gpt-4o-mini":           {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
-		"o3":                    {InputTokenCost: 0.00001, OutputTokenCost: 0.00004},
-		"o4-mini":               {InputTokenCost: 0.0000011, OutputTokenCost: 0.0000044},
+		"gpt-5.4":     {InputTokenCost: 0.000002, OutputTokenCost: 0.000008},
+		"gpt-4o":      {InputTokenCost: 0.0000025, OutputTokenCost: 0.00001},
+		"gpt-4o-mini": {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
+		"o3":          {InputTokenCost: 0.00001, OutputTokenCost: 0.00004},
+		"o4-mini":     {InputTokenCost: 0.0000011, OutputTokenCost: 0.0000044},
 		// xAI
-		"grok-3":                {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
-		"grok-4-0709":           {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
-		"grok-code-fast-1":      {InputTokenCost: 0.000001, OutputTokenCost: 0.000005},
+		"grok-3":           {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
+		"grok-4-0709":      {InputTokenCost: 0.000003, OutputTokenCost: 0.000015},
+		"grok-code-fast-1": {InputTokenCost: 0.000001, OutputTokenCost: 0.000005},
 		// Google
-		"gemini-2.5-pro":        {InputTokenCost: 0.00000125, OutputTokenCost: 0.00001},
-		"gemini-2.5-flash":      {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
+		"gemini-2.5-pro":   {InputTokenCost: 0.00000125, OutputTokenCost: 0.00001},
+		"gemini-2.5-flash": {InputTokenCost: 0.00000015, OutputTokenCost: 0.0000006},
 	}
 }
 
@@ -198,15 +198,14 @@ type Model struct {
 	approvalRespCh chan<- bool
 	approvalAlways map[string]bool // tools the user has permanently allowed this session
 
-
 	// Application-scoped context (cancelled on quit).
 	appCtx    context.Context
 	appCancel context.CancelFunc
 
 	// Mission orchestration state.
-	missionCtrl      *mission.Controller
-	activeMissionID  string
-	orchestrator     *mission.Orchestrator
+	missionCtrl     *mission.Controller
+	activeMissionID string
+	orchestrator    *mission.Orchestrator
 
 	// File watcher for detecting external file changes.
 	fileWatcher *watcher.Watcher
@@ -219,10 +218,10 @@ type Model struct {
 	replayStart time.Time          // when replay started
 
 	// Pace control state.
-	pace                  paceState
-	paceCheckpointActive  bool             // currently paused at a checkpoint
-	paceCheckpointResp    chan<- struct{}   // channel to resume after checkpoint
-	paceCheckpointCount   int              // tool count shown in checkpoint UI
+	pace                 paceState
+	paceCheckpointActive bool            // currently paused at a checkpoint
+	paceCheckpointResp   chan<- struct{} // channel to resume after checkpoint
+	paceCheckpointCount  int             // tool count shown in checkpoint UI
 }
 
 // New creates the initial app model.
@@ -1262,95 +1261,137 @@ func (m *Model) View() tea.View {
 }
 
 func (m *Model) renderHeader() string {
-	model := m.sty.Header.Model.Render(m.cfg.Model)
-	sep := m.sty.Header.Separator.Render(" · ")
-	dir := m.sty.Header.WorkingDir.Render(m.cfg.ShortDir())
+	title := m.sty.StatusBar.Accent.Render(" GOLEM ")
+	model := m.sty.Header.Model.Render(styles.ModelIcon + " " + m.cfg.Model)
+	provider := ""
+	if m.cfg.Provider != "" {
+		provider = m.sty.Header.Separator.Render(" · ") + m.sty.Header.Provider.Render(string(m.cfg.Provider))
+	}
+	leftTop := title + " " + model + provider
 
-	header := " " + model + sep + dir
-
-	// Show git branch in header if available.
+	var locationParts []string
+	if dir := m.cfg.ShortDir(); dir != "" {
+		locationParts = append(locationParts, dir)
+	}
 	if m.runtime.Git != nil {
 		if branch := m.runtime.Git.BranchDisplay(); branch != "" {
-			gitLabel := m.sty.Header.WorkingDir.Render(branch)
-			header += sep + gitLabel
+			locationParts = append(locationParts, branch)
 		}
 	}
-
-	// Show cost on the right side of the header if we have usage.
-	rightParts := ""
-	if cost := m.costTracker.TotalCost(); cost > 0 {
-		costStr := fmt.Sprintf("$%.2f", cost)
-		if cost < 0.01 {
-			costStr = fmt.Sprintf("$%.4f", cost)
-		}
-		rightParts = m.sty.Muted.Render(costStr+" ")
+	rightTop := ""
+	if len(locationParts) > 0 {
+		rightTop = m.sty.Header.WorkingDir.Render(truncateText(strings.Join(locationParts, " · "), max(18, m.width/3)))
 	}
 
-	headerW := lipgloss.Width(header)
-	rightW := lipgloss.Width(rightParts)
-	gap := m.width - headerW - rightW
+	lowerLeft := m.sty.Muted.Render(" " + truncateText(m.renderContextSummary(), max(26, m.width/2)))
+	lowerRight := m.sty.HalfMuted.Render(truncateText(m.currentActivitySummary(), max(26, m.width/2)))
+
+	return joinShellLine(leftTop, rightTop, m.width) + "\n" + joinShellLine(lowerLeft, lowerRight, m.width)
+}
+
+func joinShellLine(left, right string, width int) string {
+	if right == "" {
+		return left
+	}
+	if width <= 0 {
+		return left + " " + right
+	}
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+	gap := width - leftW - rightW
 	if gap < 1 {
-		gap = 1
+		return left
 	}
-	fullHeader := header + strings.Repeat(" ", gap) + rightParts
+	return left + strings.Repeat(" ", gap) + right
+}
 
-	line := m.sty.Subtle.Render(strings.Repeat(styles.Separator, m.width))
-	return fullHeader + "\n" + line
+func truncateText(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes == 1 {
+		return string(runes[:1])
+	}
+	return string(runes[:maxRunes-1]) + "…"
+}
+
+func (m *Model) renderContextSummary() string {
+	var parts []string
+	if m.runtime.Git != nil && m.runtime.Git.IsRepo {
+		if m.runtime.Git.IsDirty {
+			parts = append(parts, "uncommitted changes")
+		} else {
+			parts = append(parts, "repo connected")
+		}
+	}
+	if len(m.runtime.Instructions) > 0 {
+		parts = append(parts, fmt.Sprintf("%d instructions", len(m.runtime.Instructions)))
+	}
+	if len(m.runtime.MCPServers) > 0 {
+		parts = append(parts, fmt.Sprintf("%d MCP", len(m.runtime.MCPServers)))
+	}
+	if m.runtime.MemoryStore != nil {
+		parts = append(parts, "memory")
+	}
+	if len(m.activeSkills) > 0 {
+		parts = append(parts, fmt.Sprintf("%d skills", len(m.activeSkills)))
+	}
+	if m.cfg.PermissionMode != "" && m.cfg.PermissionMode != "auto" {
+		parts = append(parts, "approvals "+m.cfg.PermissionMode)
+	}
+	if len(parts) == 0 {
+		return "Ready for prompts and slash commands"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (m *Model) currentActivitySummary() string {
+	switch {
+	case m.approvalMode:
+		tool := m.approvalTool
+		if tool == "" {
+			tool = "tool"
+		}
+		return "Approval required · " + tool + " · y allow · n deny · a always"
+	case m.askMode:
+		total := len(m.askQuestions)
+		if total == 0 {
+			return "Waiting for your answer · Enter answer · Esc cancel"
+		}
+		current := m.askCurrent + 1
+		if current > total {
+			current = total
+		}
+		return fmt.Sprintf("Question %d/%d · Enter answer · Esc cancel", current, total)
+	case m.busy:
+		parts := []string{"Working"}
+		if m.activeToolName != "" {
+			toolLabel := m.activeToolName
+			if m.activeToolArgs != "" {
+				toolLabel += " " + truncateText(m.activeToolArgs, 24)
+			}
+			parts = append(parts, toolLabel)
+		}
+		if !m.startTime.IsZero() {
+			parts = append(parts, time.Since(m.startTime).Truncate(time.Second).String())
+		}
+		if queued := m.pendingCount(); queued > 0 {
+			parts = append(parts, fmt.Sprintf("%d queued", queued))
+		}
+		parts = append(parts, "Esc cancels")
+		return strings.Join(parts, " · ")
+	default:
+		return "Ready · /help for commands · /search <query>"
+	}
 }
 
 func (m *Model) renderChat(height, width int) string {
 	if len(m.messages) == 0 {
-		var lines []string
-
-		// Context summary — compact key/value pairs.
-		var contextParts []string
-		if m.runtime.Git != nil && m.runtime.Git.IsRepo {
-			gitInfo := m.runtime.Git.BranchDisplay()
-			if m.runtime.Git.IsDirty {
-				gitInfo += "*"
-			}
-			contextParts = append(contextParts, gitInfo)
-		}
-		if len(m.runtime.Instructions) > 0 {
-			names := make([]string, len(m.runtime.Instructions))
-			for i, f := range m.runtime.Instructions {
-				names[i] = filepath.Base(f.Path)
-			}
-			contextParts = append(contextParts, strings.Join(names, ", "))
-		}
-		if len(m.runtime.MCPServers) > 0 {
-			contextParts = append(contextParts, fmt.Sprintf("%d MCP servers", len(m.runtime.MCPServers)))
-		}
-		if m.runtime.MemoryStore != nil {
-			contextParts = append(contextParts, "memory")
-		}
-		if len(m.activeSkills) > 0 {
-			contextParts = append(contextParts, fmt.Sprintf("%d skills", len(m.activeSkills)))
-		}
-		if m.cfg.PermissionMode != "" && m.cfg.PermissionMode != "auto" {
-			contextParts = append(contextParts, "approve: "+m.cfg.PermissionMode)
-		}
-
-		if len(contextParts) > 0 {
-			lines = append(lines, m.sty.Muted.Render("  "+strings.Join(contextParts, " · ")))
-		}
-		lines = append(lines, "")
-
-		// Tips — show one or two helpful hints on the welcome screen.
-		tips := []string{
-			"Use /help for available commands",
-			"Press Esc to cancel a running agent",
-			"Use /compact to compress context when conversations get long",
-			"Use /diff to see what changes were made",
-			"Use /undo to revert changes if something goes wrong",
-		}
-		// Pick a stable tip based on terminal width (changes per session).
-		tipIdx := m.width % len(tips)
-		lines = append(lines, m.sty.Muted.Render("  "+tips[tipIdx]))
-		content := strings.Join(lines, "\n")
-		contentLines := strings.Count(content, "\n") + 1
-		padding := strings.Repeat("\n", max(0, height-contentLines-1))
-		return padding + content
+		return m.renderWelcome(height, width)
 	}
 
 	// Phase 1: Compute line counts per message using cached renders.
@@ -1435,6 +1476,34 @@ func (m *Model) renderChat(height, width int) string {
 	return strings.Join(visible, "\n")
 }
 
+func (m *Model) renderWelcome(height, width int) string {
+	bodyWidth := max(28, width-4)
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, m.sty.StatusBar.Accent.Render(" GOLEM ")+" "+m.sty.Bold.Render("Ship changes with more confidence"))
+	lines = append(lines, m.sty.Muted.Render("  "+truncateText(m.renderContextSummary(), bodyWidth)))
+	lines = append(lines, "")
+	lines = append(lines, m.sty.Bold.Render("  Start here"))
+	starterRows := []string{
+		"/help — browse commands and keybindings",
+		"/search <query> — search across all saved sessions",
+		"/doctor — inspect local setup before a long run",
+		"Describe the change you want and press Enter to start",
+	}
+	for _, row := range starterRows {
+		lines = append(lines, m.sty.Muted.Render("  "+truncateText(row, bodyWidth)))
+	}
+	lines = append(lines, "")
+	lines = append(lines, m.sty.Bold.Render("  Keys"))
+	lines = append(lines, m.sty.Muted.Render("  "+truncateText("Enter send · Shift+Enter newline · Tab complete · Esc cancel · Ctrl+L clear", bodyWidth)))
+	lines = append(lines, m.sty.Muted.Render("  "+truncateText("PgUp/PgDn scroll · ↑/↓ recall input history", bodyWidth)))
+
+	content := strings.Join(lines, "\n")
+	contentLines := strings.Count(content, "\n") + 1
+	padding := strings.Repeat("\n", max(0, height-contentLines-1))
+	return padding + content
+}
+
 func (m *Model) renderInput() string {
 	if m.approvalMode {
 		return m.renderApproval()
@@ -1446,31 +1515,29 @@ func (m *Model) renderInput() string {
 }
 
 func (m *Model) renderInputBusyOrIdle() string {
-	if m.busy {
-		elapsed := time.Since(m.startTime).Truncate(time.Second)
-		sp := m.spinner.View()
-		var parts []string
-		if m.activeToolName != "" {
-			toolLabel := m.activeToolName
-			if m.activeToolArgs != "" {
-				arg := m.activeToolArgs
-				if len(arg) > 40 {
-					arg = arg[:37] + "..."
-				}
-				toolLabel += " " + arg
-			}
-			parts = append(parts, toolLabel)
-		}
-		parts = append(parts, elapsed.String())
-		if queued := m.pendingCount(); queued > 0 {
-			parts = append(parts, strconv.Itoa(queued)+" queued")
-		}
-		status := m.sty.Muted.Render(fmt.Sprintf("  %s %s", sp, strings.Join(parts, " · ")))
-		prompt := m.sty.Input.Prompt.Render(" " + styles.PromptIcon + " ")
-		return status + "\n" + prompt + m.input.View()
-	}
 	prompt := m.sty.Input.Prompt.Render(" " + styles.PromptIcon + " ")
-	return prompt + m.input.View()
+	body := prompt + m.input.View()
+	box := m.sty.Input.Focused.Width(max(24, m.width)).Render(body)
+	if !m.busy {
+		return box
+	}
+
+	elapsed := time.Since(m.startTime).Truncate(time.Second)
+	sp := m.spinner.View()
+	activity := "Preparing response"
+	if m.activeToolName != "" {
+		activity = "Running " + m.activeToolName
+		if m.activeToolArgs != "" {
+			activity += " " + truncateText(m.activeToolArgs, 40)
+		}
+	}
+	meta := []string{activity, elapsed.String()}
+	if queued := m.pendingCount(); queued > 0 {
+		meta = append(meta, strconv.Itoa(queued)+" queued")
+	}
+	meta = append(meta, "type and press Enter to steer", "Esc cancels")
+	status := m.sty.Muted.Render("  " + sp + " " + strings.Join(meta, " · "))
+	return status + "\n" + box
 }
 
 func (m *Model) applyWorkflowToolState(toolState map[string]any) {
@@ -1673,7 +1740,6 @@ func compactMessages(ctx context.Context, messages []core.ModelMessage, model co
 	result = append(result, recentMessages...)
 	return result, nil
 }
-
 
 func (m *Model) renderStatusBar() string {
 	accent := m.sty.StatusBar.Accent.Render(" GOLEM ")
