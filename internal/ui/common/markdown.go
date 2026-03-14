@@ -9,9 +9,15 @@ import (
 
 // RenderMarkdown renders markdown text using glamour with the app's theme.
 func RenderMarkdown(sty *styles.Styles, content string, width int) string {
+	if width <= 0 {
+		width = 80
+	}
+
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStyles(sty.Markdown),
 		glamour.WithWordWrap(width),
+		glamour.WithTableWrap(true),
+		glamour.WithEmoji(),
 	)
 	if err != nil {
 		return content
