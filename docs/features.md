@@ -2,6 +2,43 @@
 
 Golem is a terminal-based coding agent with deep project awareness and a rich interactive experience. This document covers all user-facing features.
 
+## Current TUI experience
+
+The current interface is organized around five user-visible regions that any future polish should respect:
+
+- **Shell layout** — a two-line header, central transcript, always-visible input, and persistent `GOLEM` status bar.
+- **Chat rendering** — prompt-led user messages, markdown assistant responses, inline tool activity, and lightweight system summaries.
+- **Workflow panel** — a conditional right rail that appears on wider terminals to show mission, spec, team, plan, invariants, and verification state.
+- **Dashboard** — a separate `golem dashboard` Mission Control surface for tasks, workers, evidence, and events.
+- **Discoverability affordances** — `/help`, slash-command tab completion, launch-time tips, placeholder guidance, and status-bar key hints.
+
+## Highest-impact TUI improvements to pursue first
+
+1. **Clarify shell hierarchy first**
+   - Make the header, transcript, workflow panel, and status bar read as one cohesive layout.
+   - Favor spacing, labels, and section emphasis over major structural churn.
+2. **Make chat states easier to scan**
+   - Increase separation between user turns, assistant output, tool activity, errors, and summaries.
+   - Preserve markdown quality while making long-running sessions easier to parse quickly.
+3. **Refocus the workflow panel on active work**
+   - Surface the current bottleneck, blocked state, next action, and in-progress work before secondary detail.
+   - Keep dense supporting state available without letting it dominate the rail.
+4. **Improve dashboard readability before extending scope**
+   - Strengthen Mission Control pane headers, summary metrics, focus indicators, and empty states.
+   - Prioritize first-glance comprehension over adding more dashboard controls.
+5. **Distribute discoverability across the shell**
+   - Keep `/help` as the canonical command index, but reinforce it with stronger empty-state cues, slash affordances, and status hints.
+
+## TUI design constraints from e2e coverage
+
+These constraints are currently verified by end-to-end tests and should be treated as non-negotiable when improving the interface:
+
+- **Stable launch behavior** — the app must render reliably with a visible `GOLEM` status bar and visible prompt/input affordance.
+- **Help and status discoverability must remain intact** — `/help` must continue exposing key commands and keybindings, and the shell must continue making controls easy to find.
+- **Search usage copy must remain stable** — `/search` without arguments must continue showing `/search <query>` and clear examples for searching saved sessions.
+- **Command resilience must remain obvious** — `/model`, `/doctor`, `/clear`, unknown slash commands, cancellation, scrolling, tab completion, and input history must remain visually understandable and responsive.
+- **Dashboard launch must remain stable** — `golem dashboard` must continue to open into either Mission Control or a valid empty/error state without losing navigation affordances.
+
 ## Commands
 
 | Command | Description |
