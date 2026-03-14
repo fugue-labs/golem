@@ -15,6 +15,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"runtime"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -108,7 +110,18 @@ func (m *Model) beginRun(prompt string, initialMsgs []*chat.Message) tea.Cmd {
 	m.currentRunMessages = initialMsgs
 	m.runID++
 	m.hookRID.Store(int64(m.runID))
-	m.runCtx, m.cancel = context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	m.runCtx = ctx
+	runID := m.runID
+	m.cancel = func() {
+		// Diagnostic: log the call site when the run context is canceled.
+		// This helps identify unexpected cancellation during long runs
+		// (see tui-mn1: planner context canceled unexpectedly).
+		var buf [4096]byte
+		n := runtime.Stack(buf[:], false)
+		fmt.Fprintf(os.Stderr, "[golem] run %d context canceled from:\n%s\n", runID, buf[:n])
+		cancel()
+	}
 	m.startRecording()
 	m.recordEvent(agent.EventUserInput, agent.UserInputData{Text: prompt})
 	return m.prepareRun(prompt)
