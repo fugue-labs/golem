@@ -304,6 +304,9 @@ func (o *Orchestrator) runWorker(ctx context.Context, cancel context.CancelFunc,
 
 	// Wait for agent completion.
 	summary, err := handle.Wait()
+	if err != nil && ctx.Err() != nil {
+		return // worker context cancelled (timeout or independent cancellation)
+	}
 	if o.ctx.Err() != nil {
 		return // orchestrator shutting down
 	}
@@ -407,6 +410,9 @@ func (o *Orchestrator) runReviewer(ctx context.Context, cancel context.CancelFun
 	defer o.removeActive(spec.Run.ID)
 
 	summary, err := handle.Wait()
+	if err != nil && ctx.Err() != nil {
+		return // reviewer context cancelled (timeout or independent cancellation)
+	}
 	if o.ctx.Err() != nil {
 		return
 	}
