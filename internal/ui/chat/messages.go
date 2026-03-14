@@ -121,9 +121,9 @@ func renderUserMessage(msg *Message, sty *styles.Styles, width int) string {
 		return ""
 	}
 
-	header := "  " + sty.Chat.UserLabel.Render("You") + " " + sty.Chat.UserBorder.Render(styles.PromptIcon)
-	body := sty.Base.Width(max(16, width-6)).Render(content)
-	return header + "\n" + renderIndentedLines(body, "    ", "    ")
+	header := "  " + sty.Chat.UserBorder.Render(styles.PromptIcon) + " " + sty.Chat.UserLabel.Render("You")
+	body := lipgloss.NewStyle().Width(max(16, width-8)).Render(content)
+	return header + "\n" + renderGuidedBlock(body, "    ", sty.Chat.UserBorder.Render("│"))
 }
 
 func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string {
@@ -131,9 +131,9 @@ func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string 
 		return ""
 	}
 
-	header := "  " + sty.Chat.AssistantLabel.Render("Assistant")
-	body := common.RenderMarkdown(sty, msg.Content, width-6)
-	return header + "\n" + renderIndentedLines(body, "    ", "    ")
+	header := "  " + sty.Chat.AssistantBorder.Render(styles.ModelIcon) + " " + sty.Chat.AssistantLabel.Render("Assistant")
+	body := common.RenderMarkdown(sty, msg.Content, width-8)
+	return header + "\n" + renderGuidedBlock(body, "    ", sty.Chat.AssistantBorder.Render("│"))
 }
 
 func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
@@ -149,23 +149,23 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 
 	header := fmt.Sprintf("  %s %s", icon, sty.Tool.NameNormal.Render(msg.ToolName))
 	if meta := joinNonEmpty(toolStatusLabel(msg.Status), formatToolDuration(msg.Duration)); meta != "" {
-		header += " " + sty.Tool.OutputMeta.Render("["+meta+"]")
+		header += " " + renderMetaBadge(sty, meta)
 	}
 
 	var sections []string
-	sections = append(sections, header)
 	if detail := renderToolInvocation(msg, sty, width); detail != "" {
-		sections = append(sections, "    "+detail)
+		sections = append(sections, detail)
 	}
-
 	if msg.Content != "" {
 		body := renderToolCallResult(msg, sty, width)
 		if body != "" {
 			sections = append(sections, body)
 		}
 	}
-
-	return strings.Join(sections, "\n")
+	if len(sections) == 0 {
+		return header
+	}
+	return header + "\n" + renderGuidedBlock(strings.Join(sections, "\n"), "    ", sty.Tool.OutputBorder.Render("│"))
 }
 
 func renderToolInvocation(msg *Message, sty *styles.Styles, width int) string {
@@ -249,10 +249,25 @@ func renderIndentedLines(content, firstPrefix, nextPrefix string) string {
 	return strings.Join(lines, "\n")
 }
 
+func renderGuidedBlock(content, firstIndent, guide string) string {
+	if content == "" {
+		return ""
+	}
+	return renderIndentedLines(content, firstIndent+guide+" ", firstIndent+guide+" ")
+}
+
+func renderMetaBadge(sty *styles.Styles, label string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return ""
+	}
+	return sty.Tool.OutputMeta.Render("[" + label + "]")
+}
+
 func renderResultHeader(sty *styles.Styles, label, meta string) string {
 	line := sty.Tool.ResultPrefix.Render(styles.ResultPrefix) + " " + sty.Tool.NameNormal.Render(label)
 	if meta != "" {
-		line += " " + sty.Tool.OutputMeta.Render(meta)
+		line += " " + renderMetaBadge(sty, meta)
 	}
 	return "  " + line
 }
@@ -379,7 +394,7 @@ func renderViewResult(content string, toolCall *Message, sty *styles.Styles, wid
 
 	content = strings.TrimRight(content, "\n")
 	if content == "" {
-		return renderResultHeader(sty, "file", fileName) + "\n    " + sty.Tool.Truncation.Render("(empty file)")
+		return renderResultHeader(sty, "file", fileName) + "\n" + sty.Tool.Truncation.Render("(empty file)")
 	}
 
 	rawLines := strings.Split(content, "\n")
@@ -423,11 +438,11 @@ func renderViewResult(content string, toolCall *Message, sty *styles.Styles, wid
 		if i < len(lineNums) && lineNums[i] != "" {
 			num = sty.Tool.DiffContext.Render(fmt.Sprintf("%4s│ ", lineNums[i]))
 		}
-		hline = ansi.Truncate(hline, max(0, width-14), "")
-		rendered = append(rendered, "    "+num+hline)
+		hline = ansi.Truncate(hline, max(0, width-18), "")
+		rendered = append(rendered, num+hline)
 	}
 	if truncated {
-		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more lines)", totalLines-maxLines)))
+		rendered = append(rendered, sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more lines)", totalLines-maxLines)))
 	}
 	return strings.Join(rendered, "\n")
 }
@@ -452,7 +467,17 @@ func renderBashResult(content string, sty *styles.Styles, width int) string {
 	}
 	rendered := []string{renderResultHeader(sty, "shell output", meta)}
 	for _, line := range lines {
-		rendered = append(rendered, "    "+sty.Tool.ContentCode.Render(ansi.Truncate(line, max(0, width-8), "...")))
+		glyph := sty.Tool.ContentLine.Render("│ ")
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "$") || strings.HasPrefix(trimmed, ">"):
+			glyph = sty.Tool.CommandPrompt.Render("$ ")
+		case strings.HasPrefix(strings.ToLower(trimmed), "error"), strings.HasPrefix(strings.ToLower(trimmed), "failed"):
+			glyph = sty.Tool.IconError.Render("! ")
+		case strings.HasPrefix(strings.ToLower(trimmed), "warning"):
+			glyph = sty.Tool.IconPending.Render("! ")
+		}
+		rendered = append(rendered, glyph+ansi.Truncate(line, max(0, width-14), "..."))
 	}
 	return strings.Join(rendered, "\n")
 }
@@ -523,7 +548,7 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 			continue
 		}
 		if gl.filePath == "" {
-			rendered = append(rendered, "    "+sty.Tool.OutputMeta.Render(ansi.Truncate(gl.code, max(0, width-8), "...")))
+			rendered = append(rendered, sty.Tool.OutputMeta.Render(ansi.Truncate(gl.code, max(0, width-12), "...")))
 			continue
 		}
 		if shownMatches >= maxMatches {
@@ -536,26 +561,26 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 		}
 		if relPath != currentFile {
 			currentFile = relPath
-			rendered = append(rendered, "    "+sty.Tool.ParamKey.Render(relPath))
+			rendered = append(rendered, sty.Tool.NameNormal.Render(relPath))
 		}
 
-		marker := "  "
+		marker := sty.Tool.ContentLine.Render("  ")
 		if gl.prefix == ">" {
 			marker = sty.Tool.IconSuccess.Render("→ ")
 		}
 		loc := sty.Tool.DiffContext.Render("L" + gl.lineNum)
 		code := strings.TrimRight(common.SyntaxHighlight(gl.code, gl.filePath), "\n")
-		available := max(0, width-lipgloss.Width(marker)-lipgloss.Width(loc)-12)
+		available := max(0, width-lipgloss.Width(marker)-lipgloss.Width(loc)-14)
 		code = ansi.Truncate(code, available, "...")
-		rendered = append(rendered, "      "+marker+loc+" "+code)
+		rendered = append(rendered, marker+loc+"  "+code)
 		shownMatches++
 	}
 
 	if totalMatches > shownMatches {
-		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more hits)", totalMatches-shownMatches)))
+		rendered = append(rendered, sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more hits)", totalMatches-shownMatches)))
 	}
 	if totalMatches == 0 && footer == "" {
-		rendered = append(rendered, "    "+sty.Tool.Truncation.Render("(no matches)"))
+		rendered = append(rendered, sty.Tool.Truncation.Render("(no matches)"))
 	}
 	return strings.Join(rendered, "\n")
 }
@@ -652,17 +677,17 @@ func renderEditResult(content string, toolCall *Message, sty *styles.Styles, wid
 	maxDiffLines := 4
 	for i, line := range oldLines {
 		if i >= maxDiffLines {
-			rendered = append(rendered, "    "+sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more removed)", len(oldLines)-maxDiffLines)))
+			rendered = append(rendered, sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more removed)", len(oldLines)-maxDiffLines)))
 			break
 		}
-		rendered = append(rendered, "    "+sty.Tool.DiffDel.Render("- "+ansi.Truncate(line, max(0, width-8), "...")))
+		rendered = append(rendered, sty.Tool.DiffDel.Render("- ")+ansi.Truncate(strings.ReplaceAll(line, "\t", "    "), max(0, width-14), "..."))
 	}
 	for i, line := range newLines {
 		if i >= maxDiffLines {
-			rendered = append(rendered, "    "+sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more added)", len(newLines)-maxDiffLines)))
+			rendered = append(rendered, sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more added)", len(newLines)-maxDiffLines)))
 			break
 		}
-		rendered = append(rendered, "    "+sty.Tool.DiffAdd.Render("+ "+ansi.Truncate(line, max(0, width-8), "...")))
+		rendered = append(rendered, sty.Tool.DiffAdd.Render("+ ")+ansi.Truncate(strings.ReplaceAll(line, "\t", "    "), max(0, width-14), "..."))
 	}
 	return strings.Join(rendered, "\n")
 }
@@ -688,26 +713,26 @@ func renderMultiEditResult(content string, toolCall *Message, sty *styles.Styles
 	maxEdits := min(3, len(args.Edits))
 	for i := range maxEdits {
 		e := args.Edits[i]
-		rendered = append(rendered, "    "+sty.Tool.ParamKey.Render(formatDisplayPath(e.Path)))
+		rendered = append(rendered, sty.Tool.NameNormal.Render(formatDisplayPath(e.Path)))
 		oldLines := strings.Split(e.OldString, "\n")
 		for j, line := range oldLines {
 			if j >= 2 {
-				rendered = append(rendered, "    "+sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more removed)", len(oldLines)-2)))
+				rendered = append(rendered, sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more removed)", len(oldLines)-2)))
 				break
 			}
-			rendered = append(rendered, "    "+sty.Tool.DiffDel.Render("- "+ansi.Truncate(line, max(0, width-8), "...")))
+			rendered = append(rendered, sty.Tool.DiffDel.Render("- ")+ansi.Truncate(strings.ReplaceAll(line, "\t", "    "), max(0, width-14), "..."))
 		}
 		newLines := strings.Split(e.NewString, "\n")
 		for j, line := range newLines {
 			if j >= 2 {
-				rendered = append(rendered, "    "+sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more added)", len(newLines)-2)))
+				rendered = append(rendered, sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more added)", len(newLines)-2)))
 				break
 			}
-			rendered = append(rendered, "    "+sty.Tool.DiffAdd.Render("+ "+ansi.Truncate(line, max(0, width-8), "...")))
+			rendered = append(rendered, sty.Tool.DiffAdd.Render("+ ")+ansi.Truncate(strings.ReplaceAll(line, "\t", "    "), max(0, width-14), "..."))
 		}
 	}
 	if len(args.Edits) > maxEdits {
-		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(fmt.Sprintf("... +%d more edits", len(args.Edits)-maxEdits)))
+		rendered = append(rendered, sty.Tool.Truncation.Render(fmt.Sprintf("... +%d more edits", len(args.Edits)-maxEdits)))
 	}
 	return strings.Join(rendered, "\n")
 }
@@ -825,15 +850,15 @@ func renderSystem(msg *Message, sty *styles.Styles, width int) string {
 	if content == "" {
 		return ""
 	}
-	line := sty.Subtle.Render("─") + " " + sty.Muted.Render(ansi.Truncate(content, max(0, width-6), "..."))
-	return "  " + line
+	line := sty.Subtle.Render(styles.Separator) + " " + sty.Muted.Render(ansi.Truncate(content, max(0, width-8), "..."))
+	return "  " + sty.Subtle.Render("system") + " " + line
 }
 
 func renderError(msg *Message, sty *styles.Styles, width int) string {
 	tag := sty.Chat.ErrorTag.Render("ERROR")
 	content := strings.TrimSpace(msg.Content)
 	lines := strings.Split(content, "\n")
-	available := max(0, width-12)
+	available := max(0, width-14)
 	if len(lines) == 0 || content == "" {
 		return "  " + tag
 	}
@@ -841,7 +866,7 @@ func renderError(msg *Message, sty *styles.Styles, width int) string {
 	rendered := []string{fmt.Sprintf("  %s %s", tag, sty.Chat.ErrorTitle.Render(ansi.Truncate(lines[0], available, "...")))}
 	maxDetail := 6
 	for i := 1; i < len(lines) && i <= maxDetail; i++ {
-		rendered = append(rendered, "    "+sty.Chat.ErrorDetails.Render(ansi.Truncate(lines[i], available, "...")))
+		rendered = append(rendered, "    "+sty.Chat.ErrorDetails.Render(styles.BorderThin+" "+ansi.Truncate(lines[i], available, "...")))
 	}
 	if len(lines) > maxDetail+1 {
 		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more lines)", len(lines)-maxDetail-1)))

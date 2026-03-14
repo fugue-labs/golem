@@ -7,6 +7,8 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
 
+const markdownCodeFence = "```"
+
 // RenderMarkdown renders markdown text using glamour with the app's theme.
 func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
@@ -18,10 +20,15 @@ func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 		width = 20
 	}
 
+	rendererWidth := width
+	if strings.Contains(content, markdownCodeFence) {
+		rendererWidth = max(width+2, width)
+	}
+
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStyles(sty.Markdown),
-		glamour.WithWordWrap(width),
-		glamour.WithTableWrap(true),
+		glamour.WithWordWrap(rendererWidth),
+		glamour.WithTableWrap(false),
 		glamour.WithEmoji(),
 		glamour.WithPreservedNewLines(),
 	)
@@ -32,5 +39,5 @@ func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 	if err != nil {
 		return content
 	}
-	return strings.TrimSuffix(result, "\n")
+	return strings.TrimSuffix(strings.TrimRight(result, "\n"), "\n")
 }

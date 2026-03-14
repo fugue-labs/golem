@@ -2,6 +2,7 @@ package common
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -14,12 +15,17 @@ import (
 // fileName is used to detect the language; falls back to content analysis.
 func SyntaxHighlight(source, fileName string) string {
 	source = strings.ReplaceAll(source, "\r\n", "\n")
+	source = strings.ReplaceAll(source, "\t", "    ")
 	source = strings.TrimRight(source, "\n")
 	if strings.TrimSpace(source) == "" {
 		return source
 	}
 
+	fileName = strings.TrimSpace(fileName)
 	l := lexers.Match(fileName)
+	if l == nil && fileName != "" {
+		l = lexers.Match(filepath.Base(fileName))
+	}
 	if l == nil {
 		l = lexers.Analyse(source)
 	}
