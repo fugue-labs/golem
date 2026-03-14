@@ -164,7 +164,7 @@ func TestSteeringMiddlewareInjectsQueuedMessagesInOrder(t *testing.T) {
 	}
 
 	mw := m.steeringMiddleware()
-	_, err := mw.Request(context.Background(), nil, nil, nil, next)
+	_, err := mw(context.Background(), nil, nil, nil, next)
 	if err != nil {
 		t.Fatalf("middleware error: %v", err)
 	}
