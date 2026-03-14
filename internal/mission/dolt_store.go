@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -12,6 +14,13 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 )
+
+func init() {
+	// Silence the mysql driver's internal logger to prevent raw error text
+	// (e.g., packet read timeouts) from writing to stderr and corrupting
+	// the TUI. Query-level errors are still returned via error values.
+	_ = mysql.SetLogger(log.New(io.Discard, "", 0))
+}
 
 const (
 	// DefaultDoltHost is the default Dolt SQL server address.
