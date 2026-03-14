@@ -3,6 +3,7 @@ package mission
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -343,5 +344,49 @@ func TestBuildReviewPrompt_NoWorkerSummary(t *testing.T) {
 
 	if strings.Contains(prompt, "Worker Summary") {
 		t.Error("should not have Worker Summary section when no worker run")
+	}
+}
+
+// TestDispatchPendingReviews_ConcurrentSafe verifies that concurrent calls to
+// DispatchPendingReviews are serialized by the mutex, preventing data races.
+// Run with -race to verify: go test -race -run TestDispatchPendingReviews_ConcurrentSafe
+func TestDispatchPendingReviews_ConcurrentSafe(t *testing.T) {
+	store := newReviewMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning, BaseBranch: "main"}
+
+	task := &Task{ID: "t1", MissionID: "m1", Status: TaskAwaitingReview}
+	store.tasks["t1"] = task
+	store.tasksByStatus[TaskAwaitingReview] = []*Task{task}
+
+	// Provide a succeeded worker run so provisionReview reaches GetWorkerDiff.
+	now := time.Now().UTC()
+	workerRun := &Run{ID: "r_w1", MissionID: "m1", TaskID: "t1", Mode: RunModeWorker, Status: RunSucceeded, StartedAt: &now}
+	store.runs["r_w1"] = workerRun
+	store.runsByTask["t1"] = []*Run{workerRun}
+
+	launcher := NewReviewLauncher(store)
+
+	// Launch concurrent calls. provisionReview will fail at GetWorkerDiff
+	// (no real repo), but the error path writes to store.events via logEvent.
+	// Without the mutex this would data-race on the events slice.
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			launcher.DispatchPendingReviews(context.Background(), "m1", "/nonexistent")
+		}()
+	}
+	wg.Wait()
+
+	// All calls should have encountered the provision error and logged events.
+	// The key assertion is no data race (verified by -race flag).
+	if len(store.events) != 10 {
+		t.Errorf("expected 10 provision_failed events (one per call), got %d", len(store.events))
+	}
+	for _, e := range store.events {
+		if e.Type != "review.provision_failed" {
+			t.Errorf("unexpected event type: %s", e.Type)
+		}
 	}
 }

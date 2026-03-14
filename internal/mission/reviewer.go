@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,6 +15,7 @@ import (
 // tasks. It is the Phase C counterpart to WorkerLauncher.
 type ReviewLauncher struct {
 	store Store
+	mu    sync.Mutex // serializes DispatchPendingReviews to prevent duplicate reviews
 }
 
 // NewReviewLauncher creates a review launcher.
@@ -33,7 +35,14 @@ type ReviewSpec struct {
 
 // DispatchPendingReviews creates review runs for tasks in TaskAwaitingReview.
 // The TUI spawns a reviewer agent for each returned ReviewSpec.
+//
+// The method is serialized with a mutex to prevent a TOCTOU race where
+// concurrent calls both pass hasActiveReview() and create duplicate review
+// runs for the same task.
 func (rl *ReviewLauncher) DispatchPendingReviews(ctx context.Context, missionID, repoRoot string) ([]*ReviewSpec, error) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
 	mission, err := rl.store.GetMission(ctx, missionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: get mission: %w", err)
