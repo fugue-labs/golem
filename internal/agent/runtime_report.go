@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	repoToolSurface = []string{"bash", "bash_status", "bash_kill", "view", "edit", "write", "multi_edit", "glob", "grep", "ls", "lsp"}
-	workflowTools   = []string{"planning", "invariants", "verification"}
+	allRepoTools  = []string{"bash", "bash_status", "bash_kill", "view", "edit", "write", "multi_edit", "glob", "grep", "ls", "lsp"}
+	allWorkflowTools = []string{"planning", "invariants", "verification"}
 )
 
 type ToolSurfaceReport struct {
@@ -65,8 +65,8 @@ func BuildRuntimeReport(cfg *config.Config, runtime RuntimeState, validation con
 	report := RuntimeReport{
 		Validation: validation,
 		ToolSurfaces: ToolSurfaceReport{
-			RepoTools:        append([]string(nil), repoToolSurface...),
-			WorkflowTools:    append([]string(nil), workflowTools...),
+			RepoTools:        filterToolNames(allRepoTools, cfg),
+			WorkflowTools:    filterToolNames(allWorkflowTools, cfg),
 			ExecuteCode:      fallbackStatus(runtime.CodeModeStatus),
 			ExecuteCodeNote:  strings.TrimSpace(runtime.CodeModeError),
 			OpenImage:        fallbackStatus(runtime.OpenImageStatus),
@@ -117,7 +117,7 @@ func BuildRuntimeReport(cfg *config.Config, runtime RuntimeState, validation con
 	} else {
 		report.MemoryStatus = "off"
 	}
-	report.ToolSurfaces.Delegate = onOff(!cfg.DisableDelegate && runtime.EffectiveTeamMode)
+	report.ToolSurfaces.Delegate = onOff(!cfg.DisableDelegate && !cfg.IsToolDisabled("delegate") && runtime.EffectiveTeamMode)
 	if IsRoutingEnabled(cfg, runtime.RoutingConfig) {
 		report.ModelRouting = "on"
 		report.RoutedModel = runtime.RoutedModel
@@ -300,6 +300,19 @@ func writeValidationSummary(b *strings.Builder, validation config.ValidationResu
 			fmt.Fprintf(b, "\n  - %s", item)
 		}
 	}
+}
+
+func filterToolNames(names []string, cfg *config.Config) []string {
+	if cfg == nil || len(cfg.DisabledTools) == 0 {
+		return append([]string(nil), names...)
+	}
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if !cfg.IsToolDisabled(name) {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered
 }
 
 func fallbackStatus(value string) string {

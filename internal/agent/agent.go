@@ -97,8 +97,10 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 	if cfg.DisableGreedyThinkingPressure {
 		toolOpts = append(toolOpts, codetool.WithDisableGreedyThinkingPressure())
 	}
-	// FetchURL is always enabled for web content retrieval.
-	toolOpts = append(toolOpts, codetool.WithFetchURL(defaultFetchURL()))
+	// FetchURL is opt-in via GOLEM_ENABLE_FETCH_URL.
+	if cfg.EnableFetchURL {
+		toolOpts = append(toolOpts, codetool.WithFetchURL(defaultFetchURL()))
+	}
 	if runtime.EffectiveTeamMode && runtime.AskUserFunc != nil {
 		toolOpts = append(toolOpts, codetool.WithAskUser(runtime.AskUserFunc))
 	}
@@ -185,8 +187,43 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 		}
 	}
 
+	// Filter disabled tools from the agent's tool surface.
+	if disabled := buildDisabledToolSet(cfg); len(disabled) > 0 {
+		opts = append(opts, core.WithToolsPrepare[string](
+			func(_ context.Context, _ *core.RunContext, tools []core.ToolDefinition) []core.ToolDefinition {
+				filtered := make([]core.ToolDefinition, 0, len(tools))
+				for _, t := range tools {
+					if !disabled[t.Name] {
+						filtered = append(filtered, t)
+					}
+				}
+				return filtered
+			},
+		))
+	}
+
 	opts = append(opts, extra...)
 	return core.NewAgent[string](model, opts...), nil
+}
+
+// buildDisabledToolSet combines config.DisabledTools with individual disable
+// flags into a single set of tool names to exclude.
+func buildDisabledToolSet(cfg *config.Config) map[string]bool {
+	disabled := make(map[string]bool)
+	for name := range cfg.DisabledTools {
+		disabled[name] = true
+	}
+	// Individual flags override the disabled set.
+	if cfg.DisableDelegate {
+		disabled["delegate"] = true
+	}
+	if cfg.DisableCodeMode {
+		disabled["execute_code"] = true
+	}
+	if !cfg.EnableFetchURL {
+		disabled["fetch_url"] = true
+	}
+	return disabled
 }
 
 func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills []skills.Skill) string {

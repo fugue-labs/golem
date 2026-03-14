@@ -67,6 +67,11 @@ type Config struct {
 	BudgetWarnPct float64 // fraction at which to warn (default 0.8)
 	FallbackModel string  // explicit model to downgrade to (empty = auto-select)
 
+	// DisabledTools is the set of tool names excluded from the agent's tool
+	// surface. Populated from GOLEM_DISABLED_TOOLS (comma-separated) with a
+	// sensible default that keeps the tool count ≤10 for focused coding.
+	DisabledTools map[string]bool
+
 	// Pace control — configures collaboration pacing between human and agent.
 	PaceMode           string // "off", "checkpoint", "pingpong", "review"
 	CheckpointInterval int    // tool calls between checkpoints (for checkpoint mode)
@@ -256,6 +261,16 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.PaceClarifyFirst = isTruthyEnv("GOLEM_PACE_CLARIFY")
+
+	// Tool surface control: default to a lean ≤10-tool set for focused coding.
+	cfg.DisabledTools = DefaultDisabledTools()
+	if v := strings.TrimSpace(os.Getenv("GOLEM_DISABLED_TOOLS")); v != "" {
+		if v == "none" {
+			cfg.DisabledTools = nil
+		} else {
+			cfg.DisabledTools = ParseDisabledTools(v)
+		}
+	}
 	return cfg, nil
 }
 
@@ -551,4 +566,42 @@ func paceModeEnvOr(key, fallback string) string {
 	default:
 		return fallback
 	}
+}
+
+// DefaultDisabledTools returns the default set of tools disabled for focused
+// coding. This keeps the active tool surface at ≤10 tools (bash, bash_status,
+// bash_kill, view, edit, write, glob, grep, ls, planning).
+//
+// Override with GOLEM_DISABLED_TOOLS=none to enable all tools, or provide a
+// custom comma-separated list.
+func DefaultDisabledTools() map[string]bool {
+	return map[string]bool{
+		"lsp":          true,
+		"multi_edit":   true,
+		"verification": true,
+		"invariants":   true,
+		"open_image":   true,
+		"delegate":     true,
+		"execute_code": true,
+	}
+}
+
+// ParseDisabledTools parses a comma-separated list of tool names into a set.
+func ParseDisabledTools(s string) map[string]bool {
+	result := make(map[string]bool)
+	for _, name := range strings.Split(s, ",") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			result[name] = true
+		}
+	}
+	return result
+}
+
+// IsToolDisabled reports whether a tool is in the disabled set.
+func (c *Config) IsToolDisabled(name string) bool {
+	if c == nil || c.DisabledTools == nil {
+		return false
+	}
+	return c.DisabledTools[name]
 }
