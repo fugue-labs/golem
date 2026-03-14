@@ -101,7 +101,9 @@ func (s *mockSpawner) getReviewHandle(i int) *mockHandle {
 // ---------------------------------------------------------------------------
 
 type storeWorkerDispatcher struct {
-	store Store
+	store            Store
+	mu               sync.Mutex
+	releasedWorktrees []string // taskIDs whose worktrees were released
 }
 
 func (d *storeWorkerDispatcher) DispatchReadyTasks(ctx context.Context, missionID string) ([]*WorkerSpec, error) {
@@ -205,8 +207,21 @@ func (d *storeWorkerDispatcher) HeartbeatWorker(ctx context.Context, spec *Worke
 	return d.store.UpdateRun(ctx, spec.Run)
 }
 
-func (d *storeWorkerDispatcher) ReleaseWorkerWorktree(_ context.Context, _, _ string) {
-	// No-op — no real worktrees in tests.
+func (d *storeWorkerDispatcher) ReleaseWorkerWorktree(_ context.Context, _, taskID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.releasedWorktrees = append(d.releasedWorktrees, taskID)
+}
+
+func (d *storeWorkerDispatcher) worktreeReleasedFor(taskID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, id := range d.releasedWorktrees {
+		if id == taskID {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +291,7 @@ func (d *storeReviewDispatcher) CompleteReview(ctx context.Context, spec *Review
 	case ReviewReject:
 		spec.Task.Status = TaskReady
 	case ReviewRequestChanges:
-		spec.Task.Status = TaskRejected
+		spec.Task.Status = TaskReady
 		spec.Task.BlockingReason = result.Suggestion
 	}
 	spec.Task.UpdatedAt = now
@@ -385,8 +400,9 @@ func (si *storeIntegrator) resolveReady(ctx context.Context, missionID string) {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-func newTestOrchestrator(store Store, spawner *mockSpawner, events chan OrchestratorEvent) *Orchestrator {
-	return &Orchestrator{
+func newTestOrchestratorWithDispatcher(store Store, spawner *mockSpawner, events chan OrchestratorEvent) (*Orchestrator, *storeWorkerDispatcher) {
+	wd := &storeWorkerDispatcher{store: store}
+	orch := &Orchestrator{
 		cfg: OrchestratorConfig{
 			MissionID:         "m1",
 			RepoRoot:          "/test/repo",
@@ -396,7 +412,7 @@ func newTestOrchestrator(store Store, spawner *mockSpawner, events chan Orchestr
 		},
 		store:   store,
 		spawner: spawner,
-		workers: &storeWorkerDispatcher{store: store},
+		workers: wd,
 		reviews: &storeReviewDispatcher{store: store},
 		integr:  &storeIntegrator{store: store},
 		onEvent: func(e OrchestratorEvent) {
@@ -408,7 +424,14 @@ func newTestOrchestrator(store Store, spawner *mockSpawner, events chan Orchestr
 		active: make(map[string]*activeAgent),
 		done:   make(chan struct{}),
 	}
+	return orch, wd
 }
+
+func newTestOrchestrator(store Store, spawner *mockSpawner, events chan OrchestratorEvent) *Orchestrator {
+	orch, _ := newTestOrchestratorWithDispatcher(store, spawner, events)
+	return orch
+}
+
 
 func waitFor(t *testing.T, timeout time.Duration, desc string, fn func() bool) {
 	t.Helper()
@@ -905,4 +928,138 @@ func TestOrchestratorReviewRejectCausesRetry(t *testing.T) {
 		return spawner.workerCount() >= 2
 	})
 	t.Log("Worker retried after review rejection")
+}
+
+func TestOrchestratorRequestChangesPreservesWorktree(t *testing.T) {
+	store := newMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	store.CreateMission(ctx, &Mission{
+		ID:        "m1",
+		Status:    MissionRunning,
+		Budget:    Budget{MaxConcurrentWorkers: 2},
+		CreatedAt: now,
+		UpdatedAt: now,
+		StartedAt: &now,
+	})
+	store.CreateTask(ctx, &Task{
+		ID:        "t1",
+		MissionID: "m1",
+		Title:     "Task needing iteration",
+		Kind:      TaskKindCode,
+		Objective: "Implement with feedback",
+		Status:    TaskReady,
+		Priority:  1,
+		RiskLevel: RiskLow,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+
+	spawner := &mockSpawner{}
+	events := make(chan OrchestratorEvent, 100)
+	orch, wd := newTestOrchestratorWithDispatcher(store, spawner, events)
+
+	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	orch.Start(testCtx)
+	defer orch.Stop()
+
+	// Worker 1 spawned and completes.
+	waitFor(t, 2*time.Second, "worker spawn 1", func() bool {
+		return spawner.workerCount() >= 1
+	})
+	spawner.getWorkerHandle(0).complete("First attempt done", nil)
+	waitForEvent(t, events, "worker.completed", 2*time.Second)
+
+	// Review spawned.
+	waitFor(t, 2*time.Second, "review spawn 1", func() bool {
+		return spawner.reviewCount() >= 1
+	})
+
+	// Review returns request_changes (NOT reject).
+	requestChangesJSON := "```json\n" +
+		`{"verdict":"request_changes","summary":"Needs improvements","suggestion":"Add error handling for edge cases"}` +
+		"\n```"
+	spawner.getReviewHandle(0).complete(requestChangesJSON, nil)
+	waitForEvent(t, events, "review.request_changes", 2*time.Second)
+
+	// Worktree should NOT have been released.
+	if wd.worktreeReleasedFor("t1") {
+		t.Fatal("worktree was released on request_changes — should be preserved for worker retry")
+	}
+
+	// Task should be back to ready with feedback in BlockingReason.
+	task, _ := store.GetTask(ctx, "t1")
+	if task.Status != TaskReady {
+		t.Fatalf("task status after request_changes = %s, want ready", task.Status)
+	}
+	if task.BlockingReason != "Add error handling for edge cases" {
+		t.Fatalf("blocking reason = %q, want feedback suggestion", task.BlockingReason)
+	}
+
+	// Worker should be re-spawned to iterate on feedback.
+	waitFor(t, 2*time.Second, "worker spawn 2 (retry after request_changes)", func() bool {
+		return spawner.workerCount() >= 2
+	})
+	t.Log("Worker retried after request_changes — worktree preserved")
+}
+
+func TestOrchestratorRejectReleasesWorktree(t *testing.T) {
+	store := newMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	store.CreateMission(ctx, &Mission{
+		ID:        "m1",
+		Status:    MissionRunning,
+		Budget:    Budget{MaxConcurrentWorkers: 2},
+		CreatedAt: now,
+		UpdatedAt: now,
+		StartedAt: &now,
+	})
+	store.CreateTask(ctx, &Task{
+		ID:        "t1",
+		MissionID: "m1",
+		Title:     "Task to reject",
+		Kind:      TaskKindCode,
+		Objective: "Try something",
+		Status:    TaskReady,
+		Priority:  1,
+		RiskLevel: RiskLow,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+
+	spawner := &mockSpawner{}
+	events := make(chan OrchestratorEvent, 100)
+	orch, wd := newTestOrchestratorWithDispatcher(store, spawner, events)
+
+	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	orch.Start(testCtx)
+	defer orch.Stop()
+
+	// Worker completes.
+	waitFor(t, 2*time.Second, "worker spawn", func() bool {
+		return spawner.workerCount() >= 1
+	})
+	spawner.getWorkerHandle(0).complete("Done", nil)
+	waitForEvent(t, events, "worker.completed", 2*time.Second)
+
+	// Review rejects.
+	waitFor(t, 2*time.Second, "review spawn", func() bool {
+		return spawner.reviewCount() >= 1
+	})
+	rejectJSON := "```json\n" +
+		`{"verdict":"reject","summary":"Fundamentally wrong approach"}` +
+		"\n```"
+	spawner.getReviewHandle(0).complete(rejectJSON, nil)
+	waitForEvent(t, events, "review.reject", 2*time.Second)
+
+	// Worktree SHOULD be released on reject.
+	waitFor(t, 2*time.Second, "worktree released", func() bool {
+		return wd.worktreeReleasedFor("t1")
+	})
+	t.Log("Worktree correctly released on reject")
 }

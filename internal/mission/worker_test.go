@@ -428,6 +428,56 @@ func TestBuildWorkerPrompt(t *testing.T) {
 	}
 }
 
+func TestProvisionWorkerReusesExistingWorktree(t *testing.T) {
+	store := newWorkerMockStore()
+	store.missions["m1"] = &Mission{
+		ID:         "m1",
+		Status:     MissionRunning,
+		BaseBranch: "main",
+		Budget:     Budget{MaxConcurrentWorkers: 3},
+	}
+	task := &Task{
+		ID:        "t1",
+		MissionID: "m1",
+		Title:     "Task with existing worktree",
+		Kind:      TaskKindCode,
+		Objective: "Iterate on review feedback",
+		Status:    TaskReady,
+	}
+	store.ready = []*Task{task}
+	store.tasks["t1"] = task
+
+	// Create a WorktreeManager with a pre-existing worktree for t1.
+	// This simulates the request_changes case where the worktree is preserved.
+	wm := NewWorktreeManager("/tmp/test-repo")
+	wm.active["t1"] = "/existing/worktree/worker-t1"
+
+	sched := NewScheduler(store)
+	launcher := NewWorkerLauncher(sched, wm, store)
+
+	specs, err := launcher.DispatchReadyTasks(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+
+	// The worktree path should be the existing one, not a newly created one.
+	if specs[0].WorktreePath != "/existing/worktree/worker-t1" {
+		t.Fatalf("expected existing worktree path, got %s", specs[0].WorktreePath)
+	}
+
+	// The active map should still have the original entry (not replaced).
+	path, ok := wm.Get("t1")
+	if !ok {
+		t.Fatal("worktree should still be tracked")
+	}
+	if path != "/existing/worktree/worker-t1" {
+		t.Fatalf("worktree path changed unexpectedly to %s", path)
+	}
+}
+
 func TestBuildWorkerPrompt_MinimalTask(t *testing.T) {
 	task := &Task{
 		ID:        "t2",

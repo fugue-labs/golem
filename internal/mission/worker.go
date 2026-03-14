@@ -85,10 +85,15 @@ func (wl *WorkerLauncher) provisionWorker(ctx context.Context, mission *Mission,
 		baseBranch = "main"
 	}
 
-	// Create isolated worktree.
-	wtPath, err := wl.worktrees.Create(ctx, task.ID, baseBranch)
-	if err != nil {
-		return nil, fmt.Errorf("create worktree for %s: %w", task.ID, err)
+	// Reuse existing worktree if one exists (e.g., request_changes retry
+	// where the reviewer asked for changes but we keep the worker's code).
+	wtPath, exists := wl.worktrees.Get(task.ID)
+	if !exists {
+		var err error
+		wtPath, err = wl.worktrees.Create(ctx, task.ID, baseBranch)
+		if err != nil {
+			return nil, fmt.Errorf("create worktree for %s: %w", task.ID, err)
+		}
 	}
 
 	// Create run record.

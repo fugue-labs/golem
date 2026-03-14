@@ -451,10 +451,11 @@ func (o *Orchestrator) runReviewer(ctx context.Context, cancel context.CancelFun
 		Message: result.Summary,
 	})
 
-	// Release worktree: after pass the integrator uses the branch (release
-	// happens in integrateAccepted); on reject/request_changes the worker
-	// will need a fresh worktree.
-	if result.Verdict != ReviewPass {
+	// Release worktree based on verdict:
+	// - pass: integrator uses the branch, release happens in integrateAccepted
+	// - reject: worker starts from scratch, release worktree
+	// - request_changes: worker keeps existing worktree to iterate on feedback
+	if result.Verdict == ReviewReject {
 		o.workers.ReleaseWorkerWorktree(o.ctx, spec.Run.MissionID, spec.Task.ID)
 	}
 }
