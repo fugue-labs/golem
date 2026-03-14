@@ -57,7 +57,8 @@ func (rl *ReviewLauncher) DispatchPendingReviews(ctx context.Context, missionID,
 
 	var specs []*ReviewSpec
 	for _, task := range tasks {
-		// Check if a review is already running for this task.
+		// Advisory fast-path: skip if we already see an active review.
+		// The real guard is the atomic CreateRunExclusive in provisionReview.
 		if rl.hasActiveReview(ctx, task.ID) {
 			continue
 		}
@@ -68,6 +69,9 @@ func (rl *ReviewLauncher) DispatchPendingReviews(ctx context.Context, missionID,
 				"error": err.Error(),
 			})
 			continue
+		}
+		if spec == nil {
+			continue // active review detected atomically
 		}
 		specs = append(specs, spec)
 	}
@@ -108,7 +112,10 @@ func (rl *ReviewLauncher) provisionReview(ctx context.Context, m *Mission, task 
 		return nil, fmt.Errorf("get diff for %s: %w", task.ID, err)
 	}
 
-	// Create run record.
+	// Atomically create run record only if no active review exists.
+	// This prevents the TOCTOU race between hasActiveReview and CreateRun
+	// where concurrent dispatches could both pass the check and spawn
+	// duplicate reviews.
 	now := time.Now().UTC()
 	run := &Run{
 		ID:        generateID("r"),
@@ -118,8 +125,12 @@ func (rl *ReviewLauncher) provisionReview(ctx context.Context, m *Mission, task 
 		Status:    RunRunning,
 		StartedAt: &now,
 	}
-	if err := rl.store.CreateRun(ctx, run); err != nil {
+	created, err := rl.store.CreateRunExclusive(ctx, run)
+	if err != nil {
 		return nil, fmt.Errorf("create review run for %s: %w", task.ID, err)
+	}
+	if !created {
+		return nil, nil // another review is already running
 	}
 
 	rl.logEvent(ctx, m.ID, task.ID, run.ID, "review.dispatched", nil)

@@ -23,6 +23,10 @@ type Store interface {
 
 	// Runs.
 	CreateRun(ctx context.Context, r *Run) error
+	// CreateRunExclusive atomically creates a run only if no other run with the
+	// same task_id and mode is currently in RunRunning status. Returns true if
+	// the run was created, false if an active run already exists.
+	CreateRunExclusive(ctx context.Context, r *Run) (bool, error)
 	GetRun(ctx context.Context, id string) (*Run, error)
 	UpdateRun(ctx context.Context, r *Run) error
 	ListRuns(ctx context.Context, missionID string) ([]*Run, error)
