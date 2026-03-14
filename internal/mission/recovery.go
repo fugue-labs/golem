@@ -143,10 +143,11 @@ func (rm *MissionRecoveryManager) resolveNewlyReady(ctx context.Context, mission
 		return 0, err
 	}
 
-	// Build set of task IDs that are done/integrated/accepted.
+	// Build set of task IDs that are done/integrated.
+	// TaskAccepted is NOT terminal — integration can still fail.
 	doneSet := make(map[string]bool)
 	for _, t := range tasks {
-		if t.Status == TaskDone || t.Status == TaskIntegrated || t.Status == TaskAccepted {
+		if t.Status == TaskDone || t.Status == TaskIntegrated {
 			doneSet[t.ID] = true
 		}
 	}
@@ -382,7 +383,7 @@ func (rm *MissionRecoveryManager) resolveReadyTasks(ctx context.Context, mission
 
 	doneSet := make(map[string]bool)
 	for _, t := range tasks {
-		if t.Status == TaskDone || t.Status == TaskIntegrated || t.Status == TaskAccepted {
+		if t.Status == TaskDone || t.Status == TaskIntegrated {
 			doneSet[t.ID] = true
 		}
 	}
