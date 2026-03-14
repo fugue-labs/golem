@@ -324,6 +324,92 @@ func TestControllerApplyPlan(t *testing.T) {
 	}
 }
 
+func TestOpenDoltStoreRecoverDroppedDB(t *testing.T) {
+	// Verify that OpenDoltStore recovers a database that was previously dropped.
+	// This simulates the gt dolt cleanup scenario where golem_missions gets
+	// dropped as an "orphan" database.
+	dbName := fmt.Sprintf("testmissions_undrop_%d", time.Now().UnixNano())
+	const dsnParams = "?timeout=5s&readTimeout=5s&writeTimeout=5s"
+	dsn := "root@tcp(127.0.0.1:3307)/" + dbName + dsnParams
+
+	// Step 1: Create store and write data.
+	type storeResult struct {
+		store *DoltStore
+		err   error
+	}
+	ch := make(chan storeResult, 1)
+	go func() {
+		s, e := OpenDoltStore(dsn)
+		ch <- storeResult{s, e}
+	}()
+	var s1 *DoltStore
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			t.Skip("Cannot open Dolt store:", res.err)
+		}
+		s1 = res.store
+	case <-time.After(15 * time.Second):
+		t.Skip("Dolt store open timed out")
+	}
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	m := &Mission{ID: "m_undrop", Title: "Undrop Test", Goal: "Survive a drop", Status: MissionDraft, CreatedAt: now, UpdatedAt: now}
+	if err := s1.CreateMission(ctx, m); err != nil {
+		t.Fatal("create mission:", err)
+	}
+	s1.Close()
+
+	// Step 2: Drop the database (simulates gt dolt cleanup).
+	rootDB, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/"+dsnParams)
+	if err != nil {
+		t.Fatal("open root:", err)
+	}
+	if _, err := rootDB.ExecContext(ctx, "DROP DATABASE IF EXISTS `"+dbName+"`"); err != nil {
+		rootDB.Close()
+		t.Fatal("drop database:", err)
+	}
+	rootDB.Close()
+
+	// Step 3: Re-open the store — should recover via DOLT_UNDROP.
+	ch2 := make(chan storeResult, 1)
+	go func() {
+		s, e := OpenDoltStore(dsn)
+		ch2 <- storeResult{s, e}
+	}()
+	var s2 *DoltStore
+	select {
+	case res := <-ch2:
+		if res.err != nil {
+			t.Fatal("reopen after drop:", res.err)
+		}
+		s2 = res.store
+	case <-time.After(15 * time.Second):
+		t.Fatal("reopen timed out")
+	}
+	t.Cleanup(func() {
+		s2.Close()
+		cleanup, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/"+dsnParams)
+		if err != nil {
+			return
+		}
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		cleanup.ExecContext(cctx, "DROP DATABASE IF EXISTS `"+dbName+"`")
+		cleanup.Close()
+	})
+
+	// Step 4: Verify the mission data survived the drop+recovery.
+	got, err := s2.GetMission(ctx, "m_undrop")
+	if err != nil {
+		t.Fatal("get mission after recovery:", err)
+	}
+	if got.Title != "Undrop Test" {
+		t.Errorf("recovered mission title = %q, want %q", got.Title, "Undrop Test")
+	}
+}
+
 func TestResolveDSN_Defaults(t *testing.T) {
 	dsn := ResolveDSN()
 	if !strings.Contains(dsn, DefaultDoltHost) {
