@@ -124,11 +124,14 @@ type Orchestrator struct {
 	onEvent func(OrchestratorEvent)
 	logger  *slog.Logger
 
-	mu     sync.Mutex
-	active map[string]*activeAgent // runID → active agent
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
+	mu       sync.Mutex
+	active   map[string]*activeAgent // runID → active agent
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	doneOnce sync.Once
+	started  bool
+	stopped  bool
 }
 
 // NewOrchestrator creates an orchestrator wired to the concrete mission
@@ -161,14 +164,40 @@ func NewOrchestrator(
 // The loop runs until the context is cancelled, Stop() is called,
 // or the mission reaches a terminal state.
 func (o *Orchestrator) Start(ctx context.Context) {
+	o.mu.Lock()
+	if o.stopped {
+		o.mu.Unlock()
+		o.closeDone()
+		return
+	}
 	o.ctx, o.cancel = context.WithCancel(ctx)
+	o.started = true
+	o.mu.Unlock()
 	go o.loop()
 }
 
 // Stop cancels all in-flight agents and waits for the loop to exit.
+// Safe to call even if Start() was never called or is running concurrently.
 func (o *Orchestrator) Stop() {
-	o.cancel()
-	<-o.done
+	o.mu.Lock()
+	o.stopped = true
+	cancel := o.cancel
+	started := o.started
+	o.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+
+	if !started {
+		o.closeDone()
+		return // loop never ran, nothing to wait for
+	}
+
+	select {
+	case <-o.done:
+	case <-time.After(30 * time.Second):
+	}
 }
 
 // Wait blocks until the orchestrator exits (mission completed or cancelled).
@@ -187,8 +216,12 @@ func (o *Orchestrator) ActiveRunCount() int {
 // Main loop
 // ---------------------------------------------------------------------------
 
+func (o *Orchestrator) closeDone() {
+	o.doneOnce.Do(func() { close(o.done) })
+}
+
 func (o *Orchestrator) loop() {
-	defer close(o.done)
+	defer o.closeDone()
 
 	// Run first tick immediately.
 	o.tick()
