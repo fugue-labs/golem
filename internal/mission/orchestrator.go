@@ -45,6 +45,11 @@ type OrchestratorConfig struct {
 	TickInterval      time.Duration // How often to check for work. Default: 5s.
 	MaxAttempts       int           // Max attempts per task before permanent failure. Default: 3.
 	HeartbeatInterval time.Duration // How often to heartbeat running workers. Default: 5m.
+
+	// Retry/resilience settings for Dolt store operations.
+	StoreRetryAttempts         int           // Retries per store call within a tick. Default: 3.
+	StoreRetryBaseDelay        time.Duration // Initial backoff between retries. Default: 100ms.
+	MaxConsecutiveStoreFailures int           // Consecutive failed ticks before mission error. Default: 5.
 }
 
 func (c *OrchestratorConfig) applyDefaults() {
@@ -56,6 +61,15 @@ func (c *OrchestratorConfig) applyDefaults() {
 	}
 	if c.HeartbeatInterval <= 0 {
 		c.HeartbeatInterval = 5 * time.Minute
+	}
+	if c.StoreRetryAttempts <= 0 {
+		c.StoreRetryAttempts = 3
+	}
+	if c.StoreRetryBaseDelay <= 0 {
+		c.StoreRetryBaseDelay = 100 * time.Millisecond
+	}
+	if c.MaxConsecutiveStoreFailures <= 0 {
+		c.MaxConsecutiveStoreFailures = 5
 	}
 }
 
@@ -124,14 +138,15 @@ type Orchestrator struct {
 	onEvent func(OrchestratorEvent)
 	logger  *slog.Logger
 
-	mu       sync.Mutex
-	active   map[string]*activeAgent // runID → active agent
-	ctx      context.Context
-	cancel   context.CancelFunc
-	done     chan struct{}
-	doneOnce sync.Once
-	started  bool
-	stopped  bool
+	mu                       sync.Mutex
+	active                   map[string]*activeAgent // runID → active agent
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	done                     chan struct{}
+	doneOnce                 sync.Once
+	started                  bool
+	stopped                  bool
+	consecutiveStoreFailures int // ticks where all store ops failed
 }
 
 // NewOrchestrator creates an orchestrator wired to the concrete mission
@@ -240,19 +255,30 @@ func (o *Orchestrator) loop() {
 	}
 }
 
+func (o *Orchestrator) storeRetryConfig() retryConfig {
+	return retryConfig{
+		MaxAttempts: o.cfg.StoreRetryAttempts,
+		BaseDelay:   o.cfg.StoreRetryBaseDelay,
+	}
+}
+
 func (o *Orchestrator) tick() {
 	ctx := o.ctx
 	if ctx.Err() != nil {
 		return
 	}
 
-	// Check mission is still running.
-	m, err := o.store.GetMission(ctx, o.cfg.MissionID)
+	retryCfg := o.storeRetryConfig()
+
+	// Check mission is still running (with retry for transient Dolt errors).
+	m, err := retryStoreGet(ctx, retryCfg, func(c context.Context) (*Mission, error) {
+		return o.store.GetMission(c, o.cfg.MissionID)
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			return // shutting down
 		}
-		o.logger.Error("orchestrator: get mission", "error", err)
+		o.recordStoreFailure(err)
 		return
 	}
 	if m.Status.IsTerminal() {
@@ -262,6 +288,9 @@ func (o *Orchestrator) tick() {
 	if m.Status != MissionRunning {
 		return // paused, blocked, etc — skip this tick
 	}
+
+	// Reset consecutive failure counter — we successfully read mission state.
+	o.resetStoreFailures()
 
 	// Phase A: Dispatch workers for ready tasks.
 	o.dispatchWorkers(ctx)
@@ -274,6 +303,63 @@ func (o *Orchestrator) tick() {
 
 	// Phase D: Check if mission is complete.
 	o.checkCompletion(ctx)
+}
+
+// recordStoreFailure tracks consecutive store failures. After exceeding the
+// threshold, it sets the mission to failed state so operators are alerted.
+func (o *Orchestrator) recordStoreFailure(err error) {
+	o.mu.Lock()
+	o.consecutiveStoreFailures++
+	failures := o.consecutiveStoreFailures
+	threshold := o.cfg.MaxConsecutiveStoreFailures
+	o.mu.Unlock()
+
+	if IsTransientError(err) {
+		o.logger.Warn("orchestrator: transient store error",
+			"error", err,
+			"consecutive_failures", failures,
+			"threshold", threshold,
+		)
+		o.emit(OrchestratorEvent{
+			Type:    "store.transient_error",
+			Message: fmt.Sprintf("transient store error (attempt %d/%d): %v", failures, threshold, err),
+			Error:   err,
+		})
+	} else {
+		o.logger.Error("orchestrator: permanent store error", "error", err)
+		o.emit(OrchestratorEvent{
+			Type:    "store.error",
+			Message: fmt.Sprintf("permanent store error: %v", err),
+			Error:   err,
+		})
+	}
+
+	if failures >= threshold {
+		o.logger.Error("orchestrator: store failures exceeded threshold, failing mission",
+			"consecutive_failures", failures,
+			"threshold", threshold,
+		)
+		o.emit(OrchestratorEvent{
+			Type:    "mission.store_failure",
+			Message: fmt.Sprintf("mission failed: %d consecutive store failures", failures),
+			Error:   err,
+		})
+		o.cancel()
+	}
+}
+
+func (o *Orchestrator) resetStoreFailures() {
+	o.mu.Lock()
+	o.consecutiveStoreFailures = 0
+	o.mu.Unlock()
+}
+
+// ConsecutiveStoreFailures returns the current consecutive failure count
+// (for testing and observability).
+func (o *Orchestrator) ConsecutiveStoreFailures() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.consecutiveStoreFailures
 }
 
 // ---------------------------------------------------------------------------
