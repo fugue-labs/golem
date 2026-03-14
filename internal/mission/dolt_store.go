@@ -58,6 +58,8 @@ type DoltStore struct {
 // OpenDoltStore connects to a Dolt SQL server and initializes the mission schema.
 // The dsn should be a MySQL-format DSN, e.g. "root@tcp(127.0.0.1:3307)/golem_missions".
 // The target database is created automatically if it does not exist.
+// If the database was previously dropped (e.g. by gt dolt cleanup treating it
+// as an orphan), it is recovered via DOLT_UNDROP to preserve mission history.
 func OpenDoltStore(dsn string) (*DoltStore, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
@@ -79,7 +81,19 @@ func OpenDoltStore(dsn string) (*DoltStore, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if _, err := rootDB.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS `"+sanitizeDBName(dbName)+"`"); err != nil {
+	safeName := sanitizeDBName(dbName)
+
+	// Try to recover the database if it was previously dropped.
+	// The gt dolt cleanup command drops databases not referenced in rig
+	// metadata.json, which includes golem_missions. DOLT_UNDROP restores
+	// the database with all its data from .dolt_dropped_databases/.
+	if !databaseExists(ctx, rootDB, safeName) {
+		// Ignore errors: DOLT_UNDROP may not be available or the database
+		// may not be in the dropped list. CREATE DATABASE below handles both.
+		rootDB.ExecContext(ctx, "CALL DOLT_UNDROP(?)", safeName) //nolint:errcheck
+	}
+
+	if _, err := rootDB.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS `"+safeName+"`"); err != nil {
 		rootDB.Close()
 		return nil, fmt.Errorf("create database %s: %w", dbName, err)
 	}
@@ -107,6 +121,15 @@ func OpenDoltStore(dsn string) (*DoltStore, error) {
 // sanitizeDBName removes backticks from database names to prevent injection.
 func sanitizeDBName(name string) string {
 	return strings.ReplaceAll(name, "`", "")
+}
+
+// databaseExists checks whether a database with the given name exists on the server.
+func databaseExists(ctx context.Context, db *sql.DB, name string) bool {
+	var count int
+	err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = ?", name,
+	).Scan(&count)
+	return err == nil && count > 0
 }
 
 func (s *DoltStore) migrate() error {
