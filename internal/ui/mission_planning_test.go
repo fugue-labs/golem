@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -268,6 +269,52 @@ func TestCompleteMissionPlanRunRestoresDraftOnApplyFailure(t *testing.T) {
 	}
 	if got := m.messages[len(m.messages)-1].Content; !strings.Contains(got, "Failed to apply mission plan") {
 		t.Fatalf("expected apply failure message, got %q", got)
+	}
+}
+
+func TestCompleteMissionPlanRunDetectsWrappedContextCanceled(t *testing.T) {
+	m, ctrl := testMissionModel(t)
+	ctx := context.Background()
+
+	created, err := ctrl.CreateMission(ctx, mission.CreateMissionRequest{
+		Title: "Wrapped cancel test",
+		Goal:  "Detect context canceled through SSE wrapping",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := ctrl.GetMission(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Status = mission.MissionPlanning
+	stored.UpdatedAt = time.Now().UTC()
+	if err := ctrl.Store().UpdateMission(ctx, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	m.missionPlanRun = &missionPlanRun{MissionID: created.ID, PreviousStatus: mission.MissionDraft}
+
+	// Simulate an error where context.Canceled is wrapped with %v (not %w),
+	// breaking errors.Is but preserving the string "context canceled".
+	wrappedErr := fmt.Errorf("model request failed: openai: SSE read error: %v", context.Canceled)
+
+	m.completeMissionPlanRun(wrappedErr, nil)
+
+	updated, err := ctrl.GetMission(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != mission.MissionDraft {
+		t.Fatalf("mission status = %s, want %s", updated.Status, mission.MissionDraft)
+	}
+	if len(m.messages) == 0 {
+		t.Fatal("expected cancellation message")
+	}
+	last := m.messages[len(m.messages)-1]
+	if !strings.Contains(last.Content, "was cancelled") {
+		t.Fatalf("expected cancellation message, got %q", last.Content)
 	}
 }
 

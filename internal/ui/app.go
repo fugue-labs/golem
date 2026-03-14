@@ -35,6 +35,14 @@ import (
 	"github.com/fugue-labs/gollem/ext/team"
 )
 
+// isContextCanceled checks whether err represents a context cancellation.
+// It checks errors.Is first, then falls back to a string match because some
+// HTTP transports (and the OpenAI SSE reader) may wrap context.Canceled in a
+// way that breaks the error chain (e.g., using %v instead of %w).
+func isContextCanceled(err error) bool {
+	return errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "context canceled")
+}
+
 // modelPricing returns known model pricing for cost estimation.
 // Rates are cost-per-token (e.g., $3/1M input = 0.000003).
 func modelPricing() map[string]core.ModelPricing {
@@ -587,7 +595,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Record agent completion in trace.
 		errText := ""
-		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
+		if msg.err != nil && !isContextCanceled(msg.err) {
 			errText = msg.err.Error()
 		}
 		m.recordEvent(agent.EventAgentDone, agent.AgentDoneData{
@@ -611,7 +619,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agent = nil
 		m.usage = msg.usage
 		m.sessionUsage.IncrRun(msg.usage)
-		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
+		if msg.err != nil && !isContextCanceled(msg.err) {
 			errMsg := &chat.Message{
 				Kind:    chat.KindError,
 				Content: msg.err.Error(),

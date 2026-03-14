@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -32,7 +31,7 @@ func (m *Model) completeMissionPlanRun(runErr error, messages []core.ModelMessag
 	ctx := m.appCtx
 	if runErr != nil {
 		m.restoreMissionPlanStatus(ctx, ctrl, planRun)
-		if errors.Is(runErr, context.Canceled) {
+		if isContextCanceled(runErr) {
 			m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("Mission planning for `%s` was cancelled.", planRun.MissionID)})
 		}
 		return
