@@ -41,7 +41,7 @@ func TestPanelRenderWithSpec(t *testing.T) {
 	if !strings.Contains(view, "0/3 gates") {
 		t.Errorf("expected '0/3 gates' summary, got: %q", view)
 	}
-	if !strings.Contains(view, "file design.md") {
+	if !strings.Contains(view, "File design.md") {
 		t.Errorf("expected file row with spec name, got: %q", view)
 	}
 }
@@ -168,8 +168,8 @@ func TestPanelWorkflowProgression(t *testing.T) {
 	if !strings.Contains(view, "Tasks extracted") {
 		t.Errorf("expected 'Tasks extracted', got: %q", view)
 	}
-	if !strings.Contains(view, "tasks 0/5") {
-		t.Errorf("expected 'tasks 0/5', got: %q", view)
+	if !strings.Contains(view, "Tasks 0/5") {
+		t.Errorf("expected 'Tasks 0/5', got: %q", view)
 	}
 
 	// Phase 3: Implementing — partial progress.
@@ -179,8 +179,8 @@ func TestPanelWorkflowProgression(t *testing.T) {
 	if !strings.Contains(view, "Implementing") {
 		t.Errorf("expected 'Implementing', got: %q", view)
 	}
-	if !strings.Contains(view, "tasks 3/5") {
-		t.Errorf("expected 'tasks 3/5', got: %q", view)
+	if !strings.Contains(view, "Tasks 3/5") {
+		t.Errorf("expected 'Tasks 3/5', got: %q", view)
 	}
 
 	// Phase 4: Reviewing.
@@ -194,8 +194,8 @@ func TestPanelWorkflowProgression(t *testing.T) {
 	if !strings.Contains(view, "3/3 gates") {
 		t.Errorf("expected '3/3 gates', got: %q", view)
 	}
-	if !strings.Contains(view, "tasks 5/5") {
-		t.Errorf("expected 'tasks 5/5', got: %q", view)
+	if !strings.Contains(view, "Tasks 5/5") {
+		t.Errorf("expected 'Tasks 5/5', got: %q", view)
 	}
 
 	// Phase 5: Complete.
@@ -227,8 +227,8 @@ func TestPanelTaskProgressUpdates(t *testing.T) {
 	}
 
 	view := panelView(p)
-	if !strings.Contains(view, "tasks 2/8") {
-		t.Errorf("expected 'tasks 2/8' in view, got: %q", view)
+	if !strings.Contains(view, "Tasks 2/8") {
+		t.Errorf("expected 'Tasks 2/8' in view, got: %q", view)
 	}
 }
 

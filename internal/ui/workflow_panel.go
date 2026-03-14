@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -225,14 +226,10 @@ func workflowPanelSummaryWidth(m *Model, width int) string {
 		parts = append(parts, "plan "+m.planState.Summary(summaryWidth(width, compact, 12, 28)))
 	}
 	if m.invariantState.HasItems() {
-		if len(m.invariantState.Items) == 0 {
-			parts = append(parts, "Inv 0✓ 0✗ 0?")
-		} else {
-			parts = append(parts, "Inv "+m.invariantState.Summary(summaryWidth(width, compact, 16, 28)))
-		}
+		parts = append(parts, "inv "+m.invariantState.Summary(summaryWidth(width, compact, 12, 28)))
 	}
 	if m.verificationState.HasEntries() {
-		parts = append(parts, "verify "+m.verificationState.Summary(summaryWidth(width, compact, 14, 28)))
+		parts = append(parts, "verify "+m.verificationState.Summary(summaryWidth(width, compact, 12, 28)))
 	}
 	if m.hasTeamMembers() {
 		members := activeTeamMembers(m.runtime.Session.Team.Members())
@@ -290,8 +287,53 @@ func (m *Model) renderPanelSectionHeader(title, summary string, width int) strin
 	return left + strings.Repeat(" ", gap) + right
 }
 
+func panelSummaryWidth(width int) int {
+	switch {
+	case width < 24:
+		return max(10, width/2)
+	case width < 36:
+		return max(12, width-16)
+	default:
+		return max(16, width-18)
+	}
+}
+
+func compactPanelLabel(label string) string {
+	trimmed := strings.TrimSpace(label)
+	if trimmed == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(trimmed))
+	capitalizeNext := false
+	for i, r := range trimmed {
+		switch {
+		case unicode.IsSpace(r):
+			if b.Len() > 0 && !strings.HasSuffix(b.String(), " ") {
+				b.WriteByte(' ')
+			}
+			capitalizeNext = false
+		case r == '_' || r == '-' || r == '/':
+			if b.Len() > 0 && !strings.HasSuffix(b.String(), " ") {
+				b.WriteByte(' ')
+			}
+			capitalizeNext = true
+		case i == 0 || capitalizeNext:
+			b.WriteRune(unicode.ToUpper(r))
+			capitalizeNext = false
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
 func (m *Model) renderPanelDetail(label, value string, width int) string {
-	prefix := m.sty.Muted.Render(label + " ")
+	compactLabel := compactPanelLabel(label)
+	if compactLabel != "" {
+		compactLabel += " "
+	}
+	prefix := m.sty.Muted.Render(compactLabel)
 	available := max(1, width-lipgloss.Width(prefix))
 	return prefix + m.sty.Panel.TaskText.Render(ansi.Truncate(strings.TrimSpace(value), available, "…"))
 }
@@ -359,7 +401,7 @@ func (m *Model) renderPlanPanelLines(limit, width int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Plan"), m.planState.Summary(max(12, width-12)), width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Plan"), m.planState.Summary(panelSummaryWidth(width)), width)}
 	if limit == 1 {
 		return lines
 	}
@@ -401,9 +443,18 @@ func (m *Model) renderInvariantPanelLines(limit, width int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Invariants"), m.invariantState.Summary(max(16, width-16)), width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Invariants"), m.invariantState.Summary(panelSummaryWidth(width)), width)}
 	if limit == 1 {
 		return lines
+	}
+	if len(m.invariantState.Items) == 0 {
+		if m.invariantState.Extracted {
+			lines = append(lines, m.renderPanelDetail("status", "Extracted · 0 hard · 0 soft", width))
+		}
+		for len(lines) < limit {
+			lines = append(lines, "")
+		}
+		return lines[:limit]
 	}
 	itemBudget := limit - 1
 	maxItems := min(itemBudget, len(m.invariantState.Items))
@@ -450,7 +501,7 @@ func (m *Model) renderVerificationPanelLines(limit, width int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Verification"), m.verificationState.Summary(max(14, width-14)), width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Verification"), m.verificationState.Summary(panelSummaryWidth(width)), width)}
 	if limit == 1 {
 		return lines
 	}
@@ -496,7 +547,7 @@ func (m *Model) renderSpecPanelLines(limit, width int) []string {
 	if limit <= 0 || !m.specState.IsActive() {
 		return nil
 	}
-	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Spec"), m.specState.PanelSummary(max(12, width-12)), width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Spec"), m.specState.PanelSummary(panelSummaryWidth(width)), width)}
 	if limit == 1 {
 		return lines
 	}

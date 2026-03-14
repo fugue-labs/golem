@@ -201,11 +201,25 @@ func TestWorkflowPanelRendersSpecSectionWithSeparatorAndCompactFileLabel(t *test
 	if !foundSep {
 		t.Fatalf("expected separator between mission and spec sections\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "file spec.md") {
+	if !strings.Contains(rendered, "File spec.md") {
 		t.Fatalf("expected compact spec file label\n%s", rendered)
 	}
 	if strings.Contains(rendered, "requirements/auth/spec.md") {
 		t.Fatalf("expected full spec path to be compacted at narrow width\n%s", rendered)
+	}
+}
+
+func TestWorkflowPanelRendersExtractedEmptyInvariantSummary(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.invariantState = uiinvariants.State{Extracted: true}
+
+	rendered := stripANSI(m.renderWorkflowPanel(8, 40))
+
+	for _, want := range []string{"Invariants", "0✓ 0✗ 0?", "Status Extracted"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("workflow panel missing %q\n%s", want, rendered)
+		}
 	}
 }
 

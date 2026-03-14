@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/fugue-labs/golem/internal/mission"
@@ -56,22 +57,27 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 	if summary.PendingApprovals > 0 {
 		statusSummary += fmt.Sprintf(" · %d approvals", summary.PendingApprovals)
 	}
-	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Mission"), statusSummary+" · "+m.missionPanelSummaryWidth(max(12, width-12)), width)}
+	missionSummary := m.missionPanelSummaryWidth(panelSummaryWidth(width))
+	if missionSummary != "" {
+		statusSummary += " · " + missionSummary
+	}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Mission"), statusSummary, width)}
 	if limit == 1 {
 		return lines
 	}
 
-	if title := strings.TrimSpace(ms.Title); title != "" {
-		lines = append(lines, m.renderPanelDetail("title", title, width))
+	titleText := strings.TrimSpace(ms.Title)
+	if titleText != "" {
+		lines = append(lines, m.renderPanelDetail("title", titleText, width))
 		if len(lines) >= limit {
 			return lines[:limit]
 		}
 	}
 	goalText := strings.TrimSpace(ms.Goal)
 	if goalText == "" {
-		goalText = strings.TrimSpace(ms.Title)
+		goalText = titleText
 	}
-	if goalText != "" {
+	if goalText != "" && !missionGoalDuplicatesTitle(titleText, goalText) {
 		lines = append(lines, m.renderPanelDetail("goal", goalText, width))
 		if len(lines) >= limit {
 			return lines[:limit]
@@ -79,25 +85,12 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 	}
 
 	if tc.Total > 0 {
-		var countParts []string
-		if tc.Done > 0 || tc.Integrated > 0 || tc.Accepted > 0 {
-			countParts = append(countParts, fmt.Sprintf("%d✓", tc.Done+tc.Integrated+tc.Accepted))
-		}
-		if tc.Running > 0 {
-			countParts = append(countParts, fmt.Sprintf("%d◐", tc.Running))
-		}
-		if tc.Ready > 0 {
-			countParts = append(countParts, fmt.Sprintf("%d●", tc.Ready))
-		}
-		if tc.Blocked > 0 {
-			countParts = append(countParts, fmt.Sprintf("%d✗", tc.Blocked))
-		}
-		if tc.Pending > 0 {
-			countParts = append(countParts, fmt.Sprintf("%d○", tc.Pending))
-		}
-		lines = append(lines, m.renderPanelDetail("Tasks", strings.Join(countParts, " "), width))
-		if len(lines) >= limit {
-			return lines[:limit]
+		counts := missionTaskCountSummary(tc)
+		if counts != "" {
+			lines = append(lines, m.renderPanelDetail("tasks", counts, width))
+			if len(lines) >= limit {
+				return lines[:limit]
+			}
 		}
 	}
 
@@ -154,6 +147,62 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 	return lines[:limit]
 }
 
+func missionGoalDuplicatesTitle(title, goal string) bool {
+	normalize := func(s string) string {
+		s = strings.TrimSpace(strings.ToLower(s))
+		if s == "" {
+			return ""
+		}
+		var b strings.Builder
+		lastSpace := false
+		for _, r := range s {
+			switch {
+			case unicode.IsLetter(r) || unicode.IsNumber(r):
+				b.WriteRune(r)
+				lastSpace = false
+			case unicode.IsSpace(r):
+				if !lastSpace && b.Len() > 0 {
+					b.WriteByte(' ')
+					lastSpace = true
+				}
+			}
+		}
+		return strings.TrimSpace(b.String())
+	}
+	nt := normalize(title)
+	ng := normalize(goal)
+	if nt == "" || ng == "" {
+		return false
+	}
+	if nt == ng {
+		return true
+	}
+	if strings.Contains(nt, ng) || strings.Contains(ng, nt) {
+		return true
+	}
+	return false
+}
+
+func missionTaskCountSummary(tc mission.TaskCounts) string {
+	var countParts []string
+	if done := tc.Done + tc.Integrated + tc.Accepted; done > 0 {
+		countParts = append(countParts, fmt.Sprintf("%d✓", done))
+	}
+	if tc.Running > 0 {
+		countParts = append(countParts, fmt.Sprintf("%d◐", tc.Running))
+	}
+	if tc.Ready > 0 {
+		countParts = append(countParts, fmt.Sprintf("%d●", tc.Ready))
+	}
+	if tc.Blocked > 0 {
+		countParts = append(countParts, fmt.Sprintf("%d✗", tc.Blocked))
+	}
+	if tc.Pending > 0 {
+		countParts = append(countParts, fmt.Sprintf("%d○", tc.Pending))
+	}
+	return strings.Join(countParts, " ")
+}
+
 // missionPanelSummary returns a compact summary string for the panel header.
 func (m *Model) missionPanelSummary() string {
 	return m.missionPanelSummaryWidth(28)
@@ -184,26 +233,21 @@ func (m *Model) missionPanelSummaryWidth(width int) string {
 	if width < 20 {
 		return base
 	}
-	if width < 30 {
-		parts := []string{base}
-		if tc.Ready > 0 {
+	parts := []string{base}
+	if width >= 20 {
+		switch {
+		case tc.Running > 0:
+			parts = append(parts, fmt.Sprintf("%d running", tc.Running))
+		case tc.Ready > 0:
 			parts = append(parts, fmt.Sprintf("%d ready", tc.Ready))
-		} else if summary.ActiveRuns > 0 {
+		case summary.ActiveRuns > 0:
 			parts = append(parts, fmt.Sprintf("%d active", summary.ActiveRuns))
 		}
-		return strings.Join(parts, " · ")
 	}
-	parts := []string{base}
-	if tc.Running > 0 {
-		parts = append(parts, fmt.Sprintf("%d running", tc.Running))
-	}
-	if tc.Ready > 0 {
-		parts = append(parts, fmt.Sprintf("%d ready", tc.Ready))
-	}
-	if tc.Blocked > 0 {
+	if width >= 30 && tc.Blocked > 0 {
 		parts = append(parts, fmt.Sprintf("%d blocked", tc.Blocked))
 	}
-	if summary.ActiveRuns > 0 {
+	if width >= 38 && summary.ActiveRuns > 0 {
 		parts = append(parts, fmt.Sprintf("%d workers", summary.ActiveRuns))
 	}
 	return strings.Join(parts, " · ")

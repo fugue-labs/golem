@@ -43,6 +43,12 @@ func (s *State) Summary(width int) string {
 	hardPass, hardFail, hardUnresolved, softTotal, softPass, softFail := 0, 0, 0, 0, 0, 0
 	_, hardPass, hardFail, hardUnresolved, softTotal, softPass, softFail = s.Counts()
 	if len(s.Items) == 0 {
+		if s.Extracted {
+			if width < 18 {
+				return "0✓ 0✗ 0?"
+			}
+			return "hard 0✓ 0✗ 0?"
+		}
 		return "pending"
 	}
 	if width < 18 {

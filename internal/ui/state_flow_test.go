@@ -113,7 +113,7 @@ func TestViewShowsWorkflowPanelForInvariantOnlyState(t *testing.T) {
 	m.invariantState.Extracted = true
 
 	rendered := stripANSI(m.View().Content)
-	for _, want := range []string{"Workflow", "Inv 0✓ 0✗ 0?"} {
+	for _, want := range []string{"Workflow", "0✓ 0✗ 0?"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view missing %q\n%s", want, rendered)
 		}
