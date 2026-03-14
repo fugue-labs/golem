@@ -265,7 +265,7 @@ func (ie *IntegrationEngine) resolveReadyTasks(ctx context.Context, missionID st
 
 	doneSet := make(map[string]bool)
 	for _, t := range tasks {
-		if t.Status == TaskDone || t.Status == TaskIntegrated || t.Status == TaskAccepted {
+		if t.Status == TaskDone || t.Status == TaskIntegrated {
 			doneSet[t.ID] = true
 		}
 	}
