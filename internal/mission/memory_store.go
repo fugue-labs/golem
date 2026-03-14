@@ -168,6 +168,22 @@ func (s *InMemoryStore) CreateRun(_ context.Context, r *Run) error {
 	return nil
 }
 
+func (s *InMemoryStore) CreateRunExclusive(_ context.Context, r *Run) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.runs {
+		if existing.TaskID == r.TaskID && existing.Mode == r.Mode && existing.Status == RunRunning {
+			return false, nil
+		}
+	}
+	if _, ok := s.runs[r.ID]; ok {
+		return false, fmt.Errorf("run %s already exists", r.ID)
+	}
+	cp := *r
+	s.runs[r.ID] = &cp
+	return true, nil
+}
+
 func (s *InMemoryStore) GetRun(_ context.Context, id string) (*Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -36,6 +36,7 @@ func (s *mockStore) ListTasks(context.Context, string) ([]*Task, error)         
 func (s *mockStore) AddDependency(context.Context, TaskDependency) error             { panic("not implemented") }
 func (s *mockStore) ListDependencies(context.Context, string) ([]TaskDependency, error) { panic("not implemented") }
 func (s *mockStore) CreateRun(context.Context, *Run) error                           { panic("not implemented") }
+func (s *mockStore) CreateRunExclusive(context.Context, *Run) (bool, error)          { panic("not implemented") }
 func (s *mockStore) GetRun(context.Context, string) (*Run, error)                    { panic("not implemented") }
 func (s *mockStore) UpdateRun(context.Context, *Run) error                           { panic("not implemented") }
 func (s *mockStore) AppendEvent(context.Context, *Event) error                       { panic("not implemented") }

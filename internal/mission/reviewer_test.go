@@ -38,6 +38,20 @@ func (s *reviewMockStore) GetRunsForTask(_ context.Context, taskID string) ([]*R
 	return s.runsByTask[taskID], nil
 }
 
+func (s *reviewMockStore) CreateRunExclusive(_ context.Context, r *Run) (bool, error) {
+	// Check for active run with same task and mode.
+	for _, runs := range s.runsByTask {
+		for _, existing := range runs {
+			if existing.TaskID == r.TaskID && existing.Mode == r.Mode && existing.Status == RunRunning {
+				return false, nil
+			}
+		}
+	}
+	s.runs[r.ID] = r
+	s.runsByTask[r.TaskID] = append(s.runsByTask[r.TaskID], r)
+	return true, nil
+}
+
 func (s *reviewMockStore) CreateApproval(_ context.Context, a *Approval) error {
 	s.approvals = append(s.approvals, a)
 	return nil
@@ -278,6 +292,52 @@ func TestDispatchPendingReviews_MissingWorktree(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected review.provision_failed event for missing worktree")
+	}
+}
+
+func TestCreateRunExclusive_PreventsDuplicateReview(t *testing.T) {
+	store := newReviewMockStore()
+
+	ctx := context.Background()
+
+	// First review run should be created.
+	run1 := &Run{ID: "r1", TaskID: "t1", Mode: RunModeReview, Status: RunRunning}
+	created, err := store.CreateRunExclusive(ctx, run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("expected first review run to be created")
+	}
+
+	// Second review run for the same task should be rejected.
+	run2 := &Run{ID: "r2", TaskID: "t1", Mode: RunModeReview, Status: RunRunning}
+	created, err = store.CreateRunExclusive(ctx, run2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created {
+		t.Fatal("expected second review run to be rejected (duplicate)")
+	}
+
+	// A worker run for the same task should still be allowed.
+	run3 := &Run{ID: "r3", TaskID: "t1", Mode: RunModeWorker, Status: RunRunning}
+	created, err = store.CreateRunExclusive(ctx, run3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("expected worker run to be created (different mode)")
+	}
+
+	// A review run for a different task should be allowed.
+	run4 := &Run{ID: "r4", TaskID: "t2", Mode: RunModeReview, Status: RunRunning}
+	created, err = store.CreateRunExclusive(ctx, run4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("expected review run for different task to be created")
 	}
 }
 

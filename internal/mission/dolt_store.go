@@ -476,6 +476,34 @@ func (s *DoltStore) CreateRun(ctx context.Context, r *Run) error {
 	return err
 }
 
+func (s *DoltStore) CreateRunExclusive(ctx context.Context, r *Run) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO runs (id, mission_id, task_id, mode, status, lease_owner,
+			lease_expires_at, heartbeat_at, worktree_path, started_at, ended_at,
+			summary, error_text)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		FROM dual
+		WHERE NOT EXISTS (
+			SELECT 1 FROM runs WHERE task_id = ? AND mode = ? AND status = ?
+		)`,
+		r.ID, r.MissionID, r.TaskID, string(r.Mode), string(r.Status), r.LeaseOwner,
+		formatNullTime(r.LeaseExpires), formatNullTime(r.HeartbeatAt), r.WorktreePath,
+		formatNullTime(r.StartedAt), formatNullTime(r.EndedAt), r.Summary, r.ErrorText,
+		r.TaskID, string(r.Mode), string(RunRunning),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func (s *DoltStore) GetRun(ctx context.Context, id string) (*Run, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
