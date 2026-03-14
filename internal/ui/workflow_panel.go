@@ -199,6 +199,9 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 			body = append(body, m.renderMissionPanelLines(budget, contentWidth)...)
 		}
 		if showSpec {
+			if len(body) > 0 {
+				body = append(body, sep)
+			}
 			budget := perSection
 			if remainder > 0 {
 				budget++
@@ -287,16 +290,43 @@ func workflowPanelSummary(m *Model) string {
 		}
 		parts = append(parts, fmt.Sprintf("team %d/%d", running, len(members)))
 	}
-	if completed, total := m.planState.Progress(); total > 0 {
-		parts = append(parts, fmt.Sprintf("plan %d/%d", completed, total))
+	if m.planState.HasTasks() {
+		parts = append(parts, "plan "+m.planState.Summary(28))
 	}
-	if hardTotal, hardPass, hardFail, hardUnresolved, _, _, _ := m.invariantState.Counts(); hardTotal > 0 || m.invariantState.Extracted {
-		parts = append(parts, fmt.Sprintf("inv %d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved))
+	if m.invariantState.HasItems() {
+		parts = append(parts, "Inv "+m.invariantState.Summary(16))
 	}
-	if total, pass, fail, stale, inProgress := m.verificationState.Counts(); total > 0 {
-		parts = append(parts, fmt.Sprintf("verify %d✓ %d✗ %d◐ %d*", pass, fail, inProgress, stale))
+	if m.verificationState.HasEntries() {
+		parts = append(parts, "verify "+m.verificationState.Summary(28))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func (m *Model) renderPanelSectionHeader(title, summary string, width int) string {
+	left := m.sty.Panel.Title.Render(title)
+	if summary == "" {
+		return ansi.Truncate(left, max(1, width), "…")
+	}
+	maxRight := width - lipgloss.Width(left) - 1
+	if maxRight <= 0 {
+		return ansi.Truncate(left, max(1, width), "…")
+	}
+	right := m.sty.Panel.Progress.Render(ansi.Truncate(summary, maxRight, "…"))
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func (m *Model) renderPanelDetail(label, value string, width int) string {
+	prefix := m.sty.Muted.Render(label + " ")
+	available := max(1, width-lipgloss.Width(prefix))
+	return prefix + m.sty.Panel.TaskText.Render(ansi.Truncate(strings.TrimSpace(value), available, "…"))
+}
+
+func (m *Model) renderPanelOverflow(label string, remaining int) string {
+	return m.sty.Muted.Render(fmt.Sprintf("… +%d %s", remaining, label))
 }
 
 func (m *Model) renderTeamPanelLines(limit, width int) []string {
@@ -304,22 +334,30 @@ func (m *Model) renderTeamPanelLines(limit, width int) []string {
 		return nil
 	}
 	members := activeTeamMembers(m.runtime.Session.Team.Members())
-	running, idle := 0, 0
+	running, idle, starting := 0, 0, 0
 	for _, mi := range members {
 		switch mi.State.String() {
 		case "running":
 			running++
 		case "idle":
 			idle++
+		case "starting":
+			starting++
 		}
 	}
-	header := fmt.Sprintf("Team %d↑ %d○", running, idle)
-	lines := []string{m.sty.Panel.Progress.Render(header)}
+	summary := fmt.Sprintf("%d running · %d idle", running, idle)
+	if starting > 0 {
+		summary += fmt.Sprintf(" · %d starting", starting)
+	}
+	lines := []string{m.renderPanelSectionHeader("Team", summary, width)}
 	if limit == 1 {
 		return lines
 	}
 	itemBudget := limit - 1
 	maxItems := min(itemBudget, len(members))
+	if len(members) > itemBudget && itemBudget > 0 {
+		maxItems = itemBudget - 1
+	}
 	for i := range maxItems {
 		mi := members[i]
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
@@ -336,6 +374,10 @@ func (m *Model) renderTeamPanelLines(limit, width int) []string {
 		label := ansi.Truncate(mi.Name+" ("+mi.State.String()+")", max(1, width-4), "...")
 		lines = append(lines, fmt.Sprintf(" %s %s", icon, m.sty.Panel.TaskText.Render(label)))
 	}
+	remaining := len(members) - maxItems
+	if remaining > 0 && len(lines) < limit {
+		lines = append(lines, m.renderPanelOverflow("members", remaining))
+	}
 	for len(lines) < limit {
 		lines = append(lines, "")
 	}
@@ -346,8 +388,7 @@ func (m *Model) renderPlanPanelLines(limit, width int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	completed, total := m.planState.Progress()
-	lines := []string{m.sty.Panel.Progress.Render(fmt.Sprintf("Plan %d/%d completed", completed, total))}
+	lines := []string{m.renderPanelSectionHeader("Plan", m.planState.Summary(width/2), width)}
 	if limit == 1 {
 		return lines
 	}
@@ -377,7 +418,7 @@ func (m *Model) renderPlanPanelLines(limit, width int) []string {
 	}
 	remaining := len(m.planState.Tasks) - maxItems
 	if remaining > 0 && len(lines) < limit {
-		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("... +%d plan tasks", remaining)))
+		lines = append(lines, m.renderPanelOverflow("plan tasks", remaining))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")
@@ -389,11 +430,7 @@ func (m *Model) renderInvariantPanelLines(limit, width int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	hardTotal, hardPass, hardFail, hardUnresolved, _, _, _ := m.invariantState.Counts()
-	lines := []string{m.sty.Panel.Progress.Render(fmt.Sprintf("Inv %d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved))}
-	if hardTotal == 0 && !m.invariantState.Extracted {
-		lines[0] = m.sty.Panel.Progress.Render("Inv pending")
-	}
+	lines := []string{m.renderPanelSectionHeader("Invariants", m.invariantState.Summary(width/2), width)}
 	if limit == 1 {
 		return lines
 	}
@@ -430,7 +467,7 @@ func (m *Model) renderInvariantPanelLines(limit, width int) []string {
 	}
 	remaining := len(m.invariantState.Items) - maxItems
 	if remaining > 0 && len(lines) < limit {
-		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("... +%d invariants", remaining)))
+		lines = append(lines, m.renderPanelOverflow("invariants", remaining))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")
@@ -442,9 +479,7 @@ func (m *Model) renderVerificationPanelLines(limit, width int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	_, pass, fail, stale, inProgress := m.verificationState.Counts()
-	header := fmt.Sprintf("Verify %d✓ %d✗ %d◐ %d*", pass, fail, inProgress, stale)
-	lines := []string{m.sty.Panel.Progress.Render(header)}
+	lines := []string{m.renderPanelSectionHeader("Verification", m.verificationState.Summary(width/2), width)}
 	if limit == 1 {
 		return lines
 	}
@@ -478,7 +513,7 @@ func (m *Model) renderVerificationPanelLines(limit, width int) []string {
 	}
 	remaining := len(m.verificationState.Entries) - maxItems
 	if remaining > 0 && len(lines) < limit {
-		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("... +%d verifications", remaining)))
+		lines = append(lines, m.renderPanelOverflow("checks", remaining))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")
@@ -490,12 +525,14 @@ func (m *Model) renderSpecPanelLines(limit, width int) []string {
 	if limit <= 0 || !m.specState.IsActive() {
 		return nil
 	}
-	header := fmt.Sprintf("Spec — %s · %s", m.specState.PhaseLabel(), m.specState.GateSummary())
-	lines := []string{m.sty.Panel.Progress.Render(header)}
+	lines := []string{m.renderPanelSectionHeader("Spec", m.specState.PanelSummary(max(12, width/2)), width)}
 	if limit == 1 {
 		return lines
 	}
-	itemBudget := limit - 1
+	if limit > 2 {
+		lines = append(lines, m.renderPanelDetail("file", m.specState.FileLabel(max(12, width/2)), width))
+	}
+	itemBudget := limit - len(lines)
 	maxItems := min(itemBudget, len(m.specState.Gates))
 	if len(m.specState.Gates) > itemBudget && itemBudget > 0 {
 		maxItems = itemBudget - 1
@@ -513,6 +550,10 @@ func (m *Model) renderSpecPanelLines(limit, width int) []string {
 			label = m.sty.Panel.TaskText.Render(label)
 		}
 		lines = append(lines, fmt.Sprintf(" %s %s", icon, label))
+	}
+	remaining := len(m.specState.Gates) - maxItems
+	if remaining > 0 && len(lines) < limit {
+		lines = append(lines, m.renderPanelOverflow("gates", remaining))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")

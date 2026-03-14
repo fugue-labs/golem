@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/fugue-labs/golem/internal/config"
+	"github.com/fugue-labs/golem/internal/mission"
 	"github.com/fugue-labs/golem/internal/ui/chat"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
+	uispec "github.com/fugue-labs/golem/internal/ui/spec"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
 	"github.com/fugue-labs/gollem/core"
@@ -25,9 +27,9 @@ func TestCancelActiveRunClearsRunStateAndBumpsRunID(t *testing.T) {
 	m.runCtx = context.Background()
 	m.cancel = func() {}
 	m.agent = &core.Agent[string]{}
-	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
-		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
-	}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{{
+		ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh",
+	}}}
 
 	m.cancelActiveRun(false)
 
@@ -91,9 +93,9 @@ func TestClearSessionStateResetsWorkflowAndPendingState(t *testing.T) {
 	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "hi"}}
 	m.history = []core.ModelMessage{core.ModelRequest{}}
 	m.pendingMsgs = []string{"follow-up"}
-	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
-		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
-	}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{{
+		ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh",
+	}}}
 	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "ship", Status: "in_progress"}}}
 	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "tests pass", Kind: "hard", Status: "pass"}}}
 
@@ -128,21 +130,82 @@ func TestClearSessionStateResetsWorkflowAndPendingState(t *testing.T) {
 func TestWorkflowPanelRendersPlanAndInvariantSections(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
-	m.planState = plan.State{Tasks: []plan.Task{
-		{ID: "T1", Description: "inspect repo", Status: "completed"},
-		{ID: "T2", Description: "verify tests", Status: "in_progress"},
-	}}
-	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{
-		{ID: "I1", Description: "tests pass", Kind: "hard", Status: "pass"},
-		{ID: "I2", Description: "no TODOs", Kind: "hard", Status: "unknown"},
-	}}
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "inspect repo", Status: "completed"}, {ID: "T2", Description: "verify tests", Status: "in_progress"}}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "tests pass", Kind: "hard", Status: "pass"}, {ID: "I2", Description: "no TODOs", Kind: "hard", Status: "unknown"}}}
 
 	rendered := stripANSI(m.renderWorkflowPanel(10, 40))
 
-	for _, want := range []string{"Workflow", "Plan 1/2 completed", "Inv 1✓ 0✗ 1?", "inspect repo", "tests pass"} {
+	for _, want := range []string{"Workflow", "Plan", "1/2 done", "Invariants", "hard 1✓ 0✗ 1?", "inspect repo", "tests pass"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("workflow panel missing %q\n%s", want, rendered)
 		}
+	}
+}
+
+func TestWorkflowPanelRendersSpecSectionWithSeparatorAndCompactFileLabel(t *testing.T) {
+	store := mission.NewInMemoryStore()
+	ctrl := mission.NewController(store)
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.missionCtrl = ctrl
+
+	created, err := ctrl.CreateMission(context.Background(), mission.CreateMissionRequest{
+		Title:    "Test mission",
+		Goal:     "Implement feature",
+		RepoRoot: "/tmp/repo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ctrl.ApplyPlan(context.Background(), created.ID, &mission.PlanResult{
+		Summary: "test plan",
+		Tasks: []mission.PlanTask{{
+			ID:        "t_1",
+			Title:     "Implement feature",
+			Kind:      mission.TaskKindCode,
+			Objective: "Implement feature",
+			Priority:  1,
+			RiskLevel: mission.RiskLow,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctrl.StartMission(context.Background(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	m.activeMissionID = created.ID
+	m.specState = uispec.New("requirements/auth/spec.md")
+
+	rendered := stripANSI(m.renderWorkflowPanel(12, 34))
+	lines := strings.Split(rendered, "\n")
+	sepLine := strings.Repeat(styles.Separator, 32)
+	missionLine, specLine := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "Mission") {
+			missionLine = i
+		}
+		if strings.Contains(line, "Spec") {
+			specLine = i
+		}
+	}
+	if missionLine == -1 || specLine == -1 {
+		t.Fatalf("expected mission and spec sections\n%s", rendered)
+	}
+	foundSep := false
+	for _, line := range lines[missionLine+1 : specLine] {
+		if strings.Contains(line, sepLine) {
+			foundSep = true
+			break
+		}
+	}
+	if !foundSep {
+		t.Fatalf("expected separator between mission and spec sections\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "file spec.md") {
+		t.Fatalf("expected compact spec file label\n%s", rendered)
+	}
+	if strings.Contains(rendered, "requirements/auth/spec.md") {
+		t.Fatalf("expected full spec path to be compacted at narrow width\n%s", rendered)
 	}
 }
 
@@ -156,9 +219,7 @@ func TestHasWorkflowPanelIncludesInvariantOnlyState(t *testing.T) {
 
 func TestHasWorkflowPanelIncludesVerificationOnlyState(t *testing.T) {
 	m := New(&config.Config{})
-	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
-		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
-	}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"}}}
 	if !m.hasWorkflowPanel() {
 		t.Fatal("expected workflow panel when only verification entries exist")
 	}
@@ -167,14 +228,11 @@ func TestHasWorkflowPanelIncludesVerificationOnlyState(t *testing.T) {
 func TestWorkflowPanelRendersVerificationOnlySection(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
-	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
-		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
-		{ID: "V2", Command: "go build ./...", Status: "fail", Freshness: "stale"},
-	}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"}, {ID: "V2", Command: "go build ./...", Status: "fail", Freshness: "stale"}}}
 
 	rendered := stripANSI(m.renderWorkflowPanel(10, 38))
 
-	for _, want := range []string{"Workflow", "1✓ 1✗", "go test ./...", "go build ./..."} {
+	for _, want := range []string{"Workflow", "Verification", "1✓ 1✗", "go test ./...", "go build ./..."} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("verification-only panel missing %q\n%s", want, rendered)
 		}
@@ -184,33 +242,17 @@ func TestWorkflowPanelRendersVerificationOnlySection(t *testing.T) {
 func TestWorkflowPanelRendersAllThreeSections(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
-	m.planState = plan.State{Tasks: []plan.Task{
-		{ID: "T1", Description: "implement feature", Status: "completed"},
-	}}
-	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{
-		{ID: "I1", Description: "tests pass", Kind: "hard", Status: "pass"},
-	}}
-	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
-		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
-	}}
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "implement feature", Status: "completed"}}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "tests pass", Kind: "hard", Status: "pass"}}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"}}}
 
 	rendered := stripANSI(m.renderWorkflowPanel(20, 38))
 
-	for _, want := range []string{
-		"Workflow",
-		"Plan 1/1 completed",
-		"Inv 1✓ 0✗ 0?",
-		"Verify 1✓ 0✗ 0◐ 0*",
-		"implement feature",
-		"tests pass",
-		"go test ./...",
-	} {
+	for _, want := range []string{"Workflow", "Plan", "1/1 done", "Invariants", "hard 1✓ 0✗ 0?", "Verification", "1✓ 0✗ 0◐ 0*", "implement feature", "tests pass", "go test ./..."} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("three-section panel missing %q\n%s", want, rendered)
 		}
 	}
-
-	// Summary line is truncated at width=38, but should contain leading parts.
 	if !strings.Contains(rendered, "plan 1/1") {
 		t.Fatalf("summary missing plan part\n%s", rendered)
 	}
@@ -219,9 +261,7 @@ func TestWorkflowPanelRendersAllThreeSections(t *testing.T) {
 func TestWorkflowPanelRendersInProgressVerification(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
-	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
-		{ID: "V1", Command: "go test ./...", Status: "in_progress", Freshness: "fresh"},
-	}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{{ID: "V1", Command: "go test ./...", Status: "in_progress", Freshness: "fresh"}}}
 
 	rendered := stripANSI(m.renderWorkflowPanel(10, 38))
 
@@ -235,21 +275,12 @@ func TestWorkflowPanelRendersInProgressVerification(t *testing.T) {
 func TestWorkflowPanelSummaryTruncatesAtProductionWidth(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
-	m.planState = plan.State{Tasks: []plan.Task{
-		{ID: "T1", Description: "task", Status: "completed"},
-	}}
-	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{
-		{ID: "I1", Description: "inv", Kind: "hard", Status: "pass"},
-	}}
-	m.verificationState = uiverification.State{Entries: []uiverification.Entry{
-		{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"},
-	}}
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "task", Status: "completed"}}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "inv", Kind: "hard", Status: "pass"}}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{{ID: "V1", Command: "go test ./...", Status: "pass", Freshness: "fresh"}}}
 
 	rendered := stripANSI(m.renderWorkflowPanel(20, 38))
-
-	// Every line must fit within the panel width.
 	for i, line := range strings.Split(rendered, "\n") {
-		// Use rune count for width check (ANSI already stripped).
 		if w := len([]rune(line)); w > 38 {
 			t.Fatalf("line %d width=%d exceeds panel width 38: %q", i, w, line)
 		}
@@ -257,12 +288,7 @@ func TestWorkflowPanelSummaryTruncatesAtProductionWidth(t *testing.T) {
 }
 
 func TestActiveTeamMembersFiltersStoppedMembers(t *testing.T) {
-	members := []team.TeammateInfo{
-		{Name: "leader", State: team.TeammateRunning},
-		{Name: "worker-1", State: team.TeammateRunning},
-		{Name: "worker-2", State: team.TeammateStopped},
-		{Name: "worker-3", State: team.TeammateIdle},
-	}
+	members := []team.TeammateInfo{{Name: "leader", State: team.TeammateRunning}, {Name: "worker-1", State: team.TeammateRunning}, {Name: "worker-2", State: team.TeammateStopped}, {Name: "worker-3", State: team.TeammateIdle}}
 	active := activeTeamMembers(members)
 	if len(active) != 3 {
 		t.Fatalf("expected 3 active members, got %d", len(active))
@@ -275,10 +301,7 @@ func TestActiveTeamMembersFiltersStoppedMembers(t *testing.T) {
 }
 
 func TestActiveTeamMembersAllStopped(t *testing.T) {
-	members := []team.TeammateInfo{
-		{Name: "leader", State: team.TeammateStopped},
-		{Name: "worker", State: team.TeammateStopped},
-	}
+	members := []team.TeammateInfo{{Name: "leader", State: team.TeammateStopped}, {Name: "worker", State: team.TeammateStopped}}
 	active := activeTeamMembers(members)
 	if len(active) != 0 {
 		t.Fatalf("expected 0 active members, got %d", len(active))
@@ -287,12 +310,8 @@ func TestActiveTeamMembersAllStopped(t *testing.T) {
 
 func TestPurgeStaleTeamNilsWhenAllWorkersStopped(t *testing.T) {
 	tm := team.NewTeam(team.TeamConfig{Name: "test-team", Leader: "leader"})
-
 	sess := &codetool.Session{Team: tm}
 	m := New(&config.Config{})
-
-	// Members() starts empty in the new API — purgeStaleTeam should preserve
-	// the team when there are no non-leader members (len <= 1).
 	m.purgeStaleTeam(sess)
 	if sess.Team == nil {
 		t.Fatal("expected team to be preserved when no teammates exist")

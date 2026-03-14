@@ -47,6 +47,9 @@ func TestCountsReturnsCorrectTotals(t *testing.T) {
 	if inProgress != 1 {
 		t.Fatalf("inProgress=%d", inProgress)
 	}
+	if got := state.Summary(40); got != "1 pass · 1 fail · 1 running · 1 stale" {
+		t.Fatalf("Summary(40)=%q", got)
+	}
 }
 
 func TestBadgeReflectsWorstStatus(t *testing.T) {

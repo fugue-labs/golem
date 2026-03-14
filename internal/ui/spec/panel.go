@@ -65,9 +65,13 @@ func (p Panel) View() tea.View {
 	}
 
 	var b strings.Builder
-	header := fmt.Sprintf("Spec — %s · %s", p.state.PhaseLabel(), p.state.GateSummary())
-	b.WriteString(header)
+	b.WriteString("Spec")
+	if summary := p.state.PanelSummary(max(12, p.width-8)); summary != "" {
+		b.WriteString(" — ")
+		b.WriteString(summary)
+	}
 	b.WriteByte('\n')
+	b.WriteString(fmt.Sprintf(" file %s\n", p.state.FileLabel(max(12, p.width-6))))
 
 	for _, g := range p.state.Gates {
 		icon := "○"
@@ -79,7 +83,7 @@ func (p Panel) View() tea.View {
 
 	completed, total := p.state.Progress()
 	if total > 0 {
-		b.WriteString(fmt.Sprintf("Tasks: %d/%d\n", completed, total))
+		b.WriteString(fmt.Sprintf(" tasks %d/%d\n", completed, total))
 	}
 
 	return tea.NewView(b.String())

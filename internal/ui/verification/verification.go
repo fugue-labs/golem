@@ -1,6 +1,7 @@
 package verification
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/fugue-labs/gollem/ext/codetool"
@@ -67,6 +68,28 @@ func (s *State) Counts() (total, pass, fail, stale, inProgress int) {
 		}
 	}
 	return
+}
+
+// Summary returns a width-aware verification summary for panel headers.
+func (s *State) Summary(width int) string {
+	total, pass, fail, stale, inProgress := s.Counts()
+	if total == 0 {
+		return "0 checks"
+	}
+	if width < 18 {
+		return fmt.Sprintf("%d✓ %d✗", pass, fail)
+	}
+	if width < 30 {
+		return fmt.Sprintf("%d✓ %d✗ %d◐ %d*", pass, fail, inProgress, stale)
+	}
+	parts := []string{fmt.Sprintf("%d pass", pass), fmt.Sprintf("%d fail", fail)}
+	if inProgress > 0 {
+		parts = append(parts, fmt.Sprintf("%d running", inProgress))
+	}
+	if stale > 0 {
+		parts = append(parts, fmt.Sprintf("%d stale", stale))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // Badge returns a compact status indicator for the status bar.

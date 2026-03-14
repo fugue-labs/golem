@@ -93,6 +93,25 @@ func TestPhaseLabel(t *testing.T) {
 	}
 }
 
+func TestPanelSummaryIncludesTaskProgressWhenWidthAllows(t *testing.T) {
+	s := New("spec.md")
+	s.SetPhase(PhaseImplementing)
+	s.SetTaskProgress(2, 5)
+	if got := s.PanelSummary(60); got != "Implementing · 0/3 gates · 2/5 tasks" {
+		t.Fatalf("PanelSummary(60)=%q", got)
+	}
+}
+
+func TestPanelFileLabelPrefersBaseNameWhenCompact(t *testing.T) {
+	s := New("requirements/auth/spec.md")
+	if got := s.FileLabel(12); got != "spec.md" {
+		t.Fatalf("FileLabel(12)=%q", got)
+	}
+	if got := s.FileLabel(40); got != "requirements/auth/spec.md" {
+		t.Fatalf("FileLabel(40)=%q", got)
+	}
+}
+
 func TestNormalizePhase(t *testing.T) {
 	tests := []struct {
 		input    string

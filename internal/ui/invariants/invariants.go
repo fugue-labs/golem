@@ -1,6 +1,7 @@
 package invariants
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/fugue-labs/gollem/ext/codetool"
@@ -36,6 +37,22 @@ func FromToolState(snapshot codetool.InvariantsState) State {
 }
 
 func (s *State) HasItems() bool { return s.Extracted || len(s.Items) > 0 }
+
+// Summary returns a width-aware hard/soft invariant summary for panel headers.
+func (s *State) Summary(width int) string {
+	hardTotal, hardPass, hardFail, hardUnresolved, softTotal, softPass, softFail := s.Counts()
+	if hardTotal == 0 && !s.Extracted {
+		return "pending"
+	}
+	if width < 18 {
+		return fmt.Sprintf("%d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved)
+	}
+	hardSummary := fmt.Sprintf("hard %d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved)
+	if width < 34 || softTotal == 0 {
+		return hardSummary
+	}
+	return hardSummary + fmt.Sprintf(" · soft %d✓ %d✗", softPass, softFail)
+}
 
 // Counts returns hard/soft invariant summary counts.
 func (s *State) Counts() (hardTotal, hardPass, hardFail, hardUnresolved, softTotal, softPass, softFail int) {

@@ -52,27 +52,25 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 
 	ms := summary.Mission
 	tc := summary.TaskCounts
-
-	// Header line: Mission status.
-	statusIcon := missionStatusIcon(ms.Status)
-	header := fmt.Sprintf("Mission %s %s", statusIcon, ms.Status)
-	lines := []string{m.sty.Panel.Progress.Render(header)}
+	statusSummary := fmt.Sprintf("%s %s", missionStatusIcon(ms.Status), ms.Status)
+	if summary.PendingApprovals > 0 {
+		statusSummary += fmt.Sprintf(" · %d approvals", summary.PendingApprovals)
+	}
+	lines := []string{m.renderPanelSectionHeader("Mission", statusSummary+" · "+m.missionPanelSummaryWidth(max(12, width/2)), width)}
 	if limit == 1 {
 		return lines
 	}
 
-	// Title line (truncated).
 	title := ansi.Truncate(ms.Title, max(1, width-2), "…")
-	lines = append(lines, m.sty.Panel.TaskText.Render(title))
+	lines = append(lines, m.renderPanelDetail("goal", title, width))
 	if len(lines) >= limit {
 		return lines[:limit]
 	}
 
-	// Task summary counts.
 	if tc.Total > 0 {
 		var countParts []string
-		if tc.Done > 0 {
-			countParts = append(countParts, fmt.Sprintf("%d✓", tc.Done))
+		if tc.Done > 0 || tc.Integrated > 0 || tc.Accepted > 0 {
+			countParts = append(countParts, fmt.Sprintf("%d✓", tc.Done+tc.Integrated+tc.Accepted))
 		}
 		if tc.Running > 0 {
 			countParts = append(countParts, fmt.Sprintf("%d◐", tc.Running))
@@ -86,53 +84,44 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 		if tc.Pending > 0 {
 			countParts = append(countParts, fmt.Sprintf("%d○", tc.Pending))
 		}
-		taskLine := fmt.Sprintf("Tasks %d/%d %s", tc.Done+tc.Integrated+tc.Accepted, tc.Total, strings.Join(countParts, " "))
-		lines = append(lines, m.sty.Panel.Progress.Render(taskLine))
+		lines = append(lines, m.renderPanelDetail("Tasks", strings.Join(countParts, " "), width))
 		if len(lines) >= limit {
 			return lines[:limit]
 		}
 	}
 
-	// Active worker status cards.
 	runs, _ := ctrl.Store().ListRuns(ctx, m.activeMissionID)
 	if activeRuns := filterActiveRuns(runs); len(activeRuns) > 0 && len(lines) < limit {
-		// Build a task lookup for worker card labels.
 		allTasks, _ := ctrl.Store().ListTasks(ctx, m.activeMissionID)
 		taskMap := make(map[string]*mission.Task, len(allTasks))
 		for _, t := range allTasks {
 			taskMap[t.ID] = t
 		}
-
 		workerBudget := limit - len(lines)
-		// Reserve at least 2 lines for task list if there are tasks.
 		if len(allTasks) > 0 && workerBudget > len(activeRuns)+2 {
 			workerBudget = min(workerBudget-2, len(activeRuns))
 		} else {
 			workerBudget = min(workerBudget, len(activeRuns))
 		}
-
 		for i := range workerBudget {
 			r := activeRuns[i]
 			card := m.renderWorkerCard(r, taskMap[r.TaskID], width)
 			lines = append(lines, card)
 		}
 		if len(activeRuns) > workerBudget && len(lines) < limit {
-			lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("… +%d workers", len(activeRuns)-workerBudget)))
+			lines = append(lines, m.renderPanelOverflow("workers", len(activeRuns)-workerBudget))
 		}
 	}
 
-	// Individual tasks (remaining space).
 	tasks, _ := ctrl.Store().ListTasks(ctx, m.activeMissionID)
 	itemBudget := limit - len(lines)
 	if itemBudget <= 0 {
 		return lines[:limit]
 	}
-
 	maxItems := min(itemBudget, len(tasks))
 	if len(tasks) > itemBudget && itemBudget > 0 {
-		maxItems = itemBudget - 1 // leave room for "... +N" line
+		maxItems = itemBudget - 1
 	}
-
 	for i := range maxItems {
 		t := tasks[i]
 		icon := m.taskIcon(t.Status)
@@ -144,12 +133,10 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 		}
 		lines = append(lines, fmt.Sprintf(" %s %s", icon, desc))
 	}
-
 	remaining := len(tasks) - maxItems
 	if remaining > 0 && len(lines) < limit {
-		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("… +%d tasks", remaining)))
+		lines = append(lines, m.renderPanelOverflow("tasks", remaining))
 	}
-
 	for len(lines) < limit {
 		lines = append(lines, "")
 	}
@@ -158,6 +145,10 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 
 // missionPanelSummary returns a compact summary string for the panel header.
 func (m *Model) missionPanelSummary() string {
+	return m.missionPanelSummaryWidth(28)
+}
+
+func (m *Model) missionPanelSummaryWidth(width int) string {
 	if !m.hasMissionState() {
 		return ""
 	}
@@ -175,11 +166,30 @@ func (m *Model) missionPanelSummary() string {
 
 	tc := summary.TaskCounts
 	done := tc.Done + tc.Integrated + tc.Accepted
-	base := fmt.Sprintf("mission %d/%d", done, tc.Total)
-	if summary.ActiveRuns > 0 {
-		return fmt.Sprintf("%s (%d workers)", base, summary.ActiveRuns)
+	if width < 16 {
+		return fmt.Sprintf("%d/%d", done, tc.Total)
 	}
-	return base
+	base := fmt.Sprintf("%d/%d done", done, tc.Total)
+	if width < 28 {
+		if summary.ActiveRuns > 0 {
+			return fmt.Sprintf("%s · %d active", base, summary.ActiveRuns)
+		}
+		return base
+	}
+	parts := []string{base}
+	if tc.Running > 0 {
+		parts = append(parts, fmt.Sprintf("%d running", tc.Running))
+	}
+	if tc.Ready > 0 {
+		parts = append(parts, fmt.Sprintf("%d ready", tc.Ready))
+	}
+	if tc.Blocked > 0 {
+		parts = append(parts, fmt.Sprintf("%d blocked", tc.Blocked))
+	}
+	if summary.ActiveRuns > 0 {
+		parts = append(parts, fmt.Sprintf("%d workers", summary.ActiveRuns))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func missionStatusIcon(s mission.MissionStatus) string {

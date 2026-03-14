@@ -33,6 +33,9 @@ func TestFromToolStateCopiesAndCountsItems(t *testing.T) {
 	if softTotal != 1 || softPass != 1 || softFail != 0 {
 		t.Fatalf("unexpected soft counts: total=%d pass=%d fail=%d", softTotal, softPass, softFail)
 	}
+	if got := state.Summary(50); got != "hard 1✓ 0✗ 1? · soft 1✓ 0✗" {
+		t.Fatalf("Summary(50)=%q", got)
+	}
 }
 
 func TestFromToolStateHandlesEmptySnapshot(t *testing.T) {

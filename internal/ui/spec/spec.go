@@ -2,6 +2,7 @@ package spec
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -87,6 +88,38 @@ func (s *State) GateSummary() string {
 		}
 	}
 	return fmt.Sprintf("%d/%d gates", passed, total)
+}
+
+// PanelSummary returns a width-aware summary string for panel headers.
+func (s *State) PanelSummary(width int) string {
+	base := fmt.Sprintf("%s · %s", s.PhaseLabel(), s.GateSummary())
+	if width < 22 {
+		return s.GateSummary()
+	}
+	completed, total := s.Progress()
+	if total > 0 {
+		progress := fmt.Sprintf("%d/%d tasks", completed, total)
+		if width < len(base)+len(progress)+3 {
+			return base
+		}
+		return base + " · " + progress
+	}
+	return base
+}
+
+// FileLabel returns a compact label for the loaded spec file.
+func (s *State) FileLabel(width int) string {
+	label := strings.TrimSpace(s.FilePath)
+	if width <= 0 || label == "" {
+		return label
+	}
+	if width <= len([]rune(filepath.Base(label))) {
+		return filepath.Base(label)
+	}
+	if len([]rune(label)) <= width {
+		return label
+	}
+	return filepath.Base(label)
 }
 
 // AdvanceGate marks the named gate as passed and advances the phase.

@@ -31,6 +31,9 @@ func TestFromDeepPlanNormalizesStatuses(t *testing.T) {
 	if completed, total := state.Progress(); completed != 1 || total != 3 {
 		t.Fatalf("progress = %d/%d, want 1/3", completed, total)
 	}
+	if got := state.Summary(60); got != "1/3 done · 1 active · 1 pending" {
+		t.Fatalf("Summary(60)=%q", got)
+	}
 }
 
 func TestFromDeepPlanKeepsEmptyState(t *testing.T) {

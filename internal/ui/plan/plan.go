@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/fugue-labs/gollem/ext/deep"
@@ -41,6 +42,22 @@ func fromDeepTasks(tasks []deep.PlanTask) []Task {
 
 func (s *State) HasTasks() bool { return len(s.Tasks) > 0 }
 
+func (s *State) StatusCounts() (pending, inProgress, completed, blocked int) {
+	for _, t := range s.Tasks {
+		switch normalizeTaskStatus(t.Status) {
+		case "completed":
+			completed++
+		case "in_progress":
+			inProgress++
+		case "blocked":
+			blocked++
+		default:
+			pending++
+		}
+	}
+	return
+}
+
 // Progress returns completed and total task counts.
 func (s *State) Progress() (completed, total int) {
 	total = len(s.Tasks)
@@ -50,6 +67,35 @@ func (s *State) Progress() (completed, total int) {
 		}
 	}
 	return
+}
+
+// Summary returns a width-aware progress summary for panel headers.
+func (s *State) Summary(width int) string {
+	completed, total := s.Progress()
+	pending, inProgress, _, blocked := s.StatusCounts()
+	if total == 0 {
+		return "0 tasks"
+	}
+	if width < 16 {
+		return fmt.Sprintf("%d/%d", completed, total)
+	}
+	parts := []string{fmt.Sprintf("%d/%d done", completed, total)}
+	if width < 30 {
+		if inProgress > 0 {
+			parts = append(parts, fmt.Sprintf("%d active", inProgress))
+		}
+		return strings.Join(parts, " · ")
+	}
+	if inProgress > 0 {
+		parts = append(parts, fmt.Sprintf("%d active", inProgress))
+	}
+	if blocked > 0 {
+		parts = append(parts, fmt.Sprintf("%d blocked", blocked))
+	}
+	if pending > 0 {
+		parts = append(parts, fmt.Sprintf("%d pending", pending))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func normalizeTask(task Task) Task {

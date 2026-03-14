@@ -286,8 +286,8 @@ func TestMissionPanelSummaryFormat(t *testing.T) {
 	m.activeMissionID = missionID
 
 	summary := m.missionPanelSummary()
-	if summary != "mission 1/2" {
-		t.Fatalf("summary=%q, want %q", summary, "mission 1/2")
+	if summary != "1/2 done · 1 ready" {
+		t.Fatalf("summary=%q, want %q", summary, "1/2 done · 1 ready")
 	}
 }
 
