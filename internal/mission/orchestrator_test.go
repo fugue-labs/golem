@@ -1063,3 +1063,56 @@ func TestOrchestratorRejectReleasesWorktree(t *testing.T) {
 	})
 	t.Log("Worktree correctly released on reject")
 }
+
+func TestOrchestratorHeartbeatNoRaceOnCompletion(t *testing.T) {
+	// Regression test: heartbeatLoop and runWorker must not race on spec.Run.
+	// Use a very short heartbeat interval so the heartbeat fires frequently,
+	// increasing the chance of catching a race under -race.
+	store := newMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	store.CreateMission(ctx, &Mission{
+		ID:        "m1",
+		Status:    MissionRunning,
+		Budget:    Budget{MaxConcurrentWorkers: 2},
+		CreatedAt: now,
+		UpdatedAt: now,
+		StartedAt: &now,
+	})
+	store.CreateTask(ctx, &Task{
+		ID:        "t1",
+		MissionID: "m1",
+		Title:     "Heartbeat race task",
+		Kind:      TaskKindCode,
+		Objective: "Test heartbeat synchronization",
+		Status:    TaskReady,
+		Priority:  1,
+		RiskLevel: RiskLow,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+
+	spawner := &mockSpawner{}
+	events := make(chan OrchestratorEvent, 100)
+	orch := newTestOrchestrator(store, spawner, events)
+	// Very short heartbeat to increase race window.
+	orch.cfg.HeartbeatInterval = 1 * time.Millisecond
+
+	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	orch.Start(testCtx)
+	defer orch.Stop()
+
+	waitFor(t, 2*time.Second, "worker spawn", func() bool {
+		return spawner.workerCount() >= 1
+	})
+
+	// Let the heartbeat fire several times before completing.
+	time.Sleep(20 * time.Millisecond)
+
+	// Complete the worker — this accesses spec.Run fields. Under -race,
+	// this would fail if heartbeatLoop isn't properly synchronized.
+	spawner.getWorkerHandle(0).complete("done", nil)
+	waitForEvent(t, events, "worker.completed", 2*time.Second)
+}

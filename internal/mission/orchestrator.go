@@ -299,11 +299,22 @@ func (o *Orchestrator) runWorker(ctx context.Context, cancel context.CancelFunc,
 
 	// Start heartbeat goroutine.
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
-	defer heartbeatCancel()
-	go o.heartbeatLoop(heartbeatCtx, spec)
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		o.heartbeatLoop(heartbeatCtx, spec)
+	}()
 
 	// Wait for agent completion.
 	summary, err := handle.Wait()
+
+	// Stop the heartbeat goroutine and wait for it to finish before
+	// accessing spec.Run, preventing a data race between heartbeatLoop
+	// modifying Run.HeartbeatAt/LeaseExpires and the code below
+	// modifying Run.Status/EndedAt/Summary.
+	heartbeatCancel()
+	<-heartbeatDone
+
 	if err != nil && ctx.Err() != nil {
 		return // worker context cancelled (timeout or independent cancellation)
 	}
