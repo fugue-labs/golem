@@ -46,22 +46,16 @@ func TestBuildRuntimePromptListsToolSurfaces(t *testing.T) {
 
 	prompt := buildRuntimePrompt(cfg, state, nil)
 	for _, want := range []string{
-		"## Tool surfaces",
-		"- Guaranteed repo tools: `bash`, `bash_status`, `bash_kill`, `view`, `edit`, `write`, `multi_edit`, `glob`, `grep`, `ls`, `lsp`",
-		"- Guaranteed workflow tools: `planning`, `invariants`, `verification`",
-		"- Delegate: `on`",
-		"- Execute code: `on`",
-		"- Open image: `off`",
-		"- Ask user: `on`",
-		"- Effective router model: `router-mini`",
+		"# Runtime",
+		"Model: gpt-test",
+		"Timeout: 1m0s",
+		"Tools:",
+		"delegate",
+		"execute_code",
+		"ask_user",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("runtime prompt missing %q\n%s", want, prompt)
-		}
-	}
-	for _, label := range []string{"Delegate:", "Execute code:", "Open image:", "Ask user:"} {
-		if got := strings.Count(prompt, label); got != 1 {
-			t.Fatalf("%s count=%d, want 1\n%s", label, got, prompt)
 		}
 	}
 }
