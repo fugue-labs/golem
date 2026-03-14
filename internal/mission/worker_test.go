@@ -419,6 +419,7 @@ func TestBuildWorkerPrompt(t *testing.T) {
 		{"acceptance criteria 2", "Unauthorized requests return 401"},
 		{"rule about worktree", "Work ONLY within your worktree"},
 		{"rule about commits", "Commit your changes"},
+		{"rule about push", "Push your branch to the remote"},
 	}
 
 	for _, c := range checks {

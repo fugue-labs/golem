@@ -111,6 +111,38 @@ func (wm *WorktreeManager) List() map[string]string {
 	return result
 }
 
+// RecoverFromRemote fetches a previously pushed branch from the remote and
+// resets the worktree to match it. This handles the edge case where a worktree
+// was lost (e.g., cleaned up) but the worker had pushed their changes.
+// Returns true if recovery was successful, false if the remote branch doesn't
+// exist or the recovery failed (in which case the worktree starts fresh).
+func (wm *WorktreeManager) RecoverFromRemote(ctx context.Context, taskID string) bool {
+	wm.mu.Lock()
+	wtPath, exists := wm.active[taskID]
+	wm.mu.Unlock()
+	if !exists {
+		return false
+	}
+
+	branchName := "mission/worker/" + taskID
+
+	// Fetch the remote branch (may not exist if worker never pushed).
+	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", branchName)
+	fetch.Dir = wm.repoRoot
+	if _, err := fetch.CombinedOutput(); err != nil {
+		return false
+	}
+
+	// Reset the local branch to match the remote.
+	reset := exec.CommandContext(ctx, "git", "reset", "--hard", "origin/"+branchName)
+	reset.Dir = wtPath
+	if _, err := reset.CombinedOutput(); err != nil {
+		return false
+	}
+
+	return true
+}
+
 // CleanupOrphans prunes worktrees that are no longer tracked by the manager.
 // This handles stale worktrees left behind by crashed workers or unclean shutdowns.
 func (wm *WorktreeManager) CleanupOrphans(ctx context.Context) error {
