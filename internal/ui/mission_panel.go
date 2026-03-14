@@ -22,10 +22,12 @@ func (m *Model) missionController() *mission.Controller {
 		return m.missionCtrl
 	}
 
-	// Initialize mission store on first use (connects to Dolt server).
+	// Prefer the durable Dolt-backed store when available, but fall back to an
+	// in-memory store so local/e2e sessions can still use mission commands.
 	store, err := mission.OpenDoltStore(mission.ResolveDSN())
 	if err != nil {
-		return nil
+		m.missionCtrl = mission.NewController(mission.NewInMemoryStore())
+		return m.missionCtrl
 	}
 	m.missionCtrl = mission.NewController(store)
 	return m.missionCtrl
