@@ -164,6 +164,7 @@ func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cm
 	extraOpts = append(extraOpts,
 		core.WithHooks[string](m.agentHooks()),
 		core.WithAgentMiddleware[string](m.steeringMiddleware()),
+		core.WithAgentMiddleware[string](diffuseReadLoopMiddleware(6)),
 		core.WithCostTracker[string](m.costTracker),
 	)
 	if m.cfg.PermissionMode == "suggest" {
@@ -287,7 +288,7 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 
 // steeringMiddleware injects queued user messages before each model turn.
 func (m *Model) steeringMiddleware() core.AgentMiddleware {
-	return core.RequestOnlyMiddleware(func(
+	return func(
 		ctx context.Context,
 		messages []core.ModelMessage,
 		settings *core.ModelSettings,
@@ -308,7 +309,7 @@ func (m *Model) steeringMiddleware() core.AgentMiddleware {
 			}
 		}
 		return next(ctx, messages, settings, params)
-	})
+	}
 }
 
 // ─── Budget management ──────────────────────────────────────────────────────
