@@ -478,9 +478,12 @@ func (o *Orchestrator) integrateAccepted(ctx context.Context) {
 		return
 	}
 	for _, r := range results {
+		// Always release the worker worktree after integration attempt,
+		// regardless of success or failure. Failing to release on error
+		// causes worktree leaks (orphaned worktrees never cleaned up).
+		o.workers.ReleaseWorkerWorktree(ctx, o.cfg.MissionID, r.TaskID)
+
 		if r.Success {
-			// Integration succeeded — release the worker worktree.
-			o.workers.ReleaseWorkerWorktree(ctx, o.cfg.MissionID, r.TaskID)
 			o.emit(OrchestratorEvent{
 				Type:    "integration.completed",
 				TaskID:  r.TaskID,
