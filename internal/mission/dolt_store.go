@@ -3,7 +3,6 @@ package mission
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -140,6 +139,14 @@ func (s *DoltStore) migrate() error {
 			return fmt.Errorf("exec schema statement: %w\nSQL: %s", err, stmt)
 		}
 	}
+	for _, stmt := range doltMigrationStatements {
+		if _, err := s.db.Exec(stmt); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") || strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
+				continue
+			}
+			return fmt.Errorf("exec migration statement: %w\nSQL: %s", err, stmt)
+		}
+	}
 	return nil
 }
 
@@ -156,6 +163,8 @@ var doltSchemaStatements = []string{
 		budget_json     TEXT NOT NULL DEFAULT '{}',
 		success_criteria_json TEXT NOT NULL DEFAULT '[]',
 		integration_ref VARCHAR(255) NOT NULL DEFAULT '',
+		plan_state_json TEXT NOT NULL DEFAULT '{}',
+		metadata_json   TEXT NOT NULL DEFAULT '{}',
 		created_at      TEXT NOT NULL,
 		updated_at      TEXT NOT NULL,
 		started_at      TEXT,
@@ -178,6 +187,8 @@ var doltSchemaStatements = []string{
 		risk_level              VARCHAR(32) NOT NULL DEFAULT 'low',
 		attempt_count           INT NOT NULL DEFAULT 0,
 		blocking_reason         TEXT NOT NULL,
+		outcome_json            TEXT NOT NULL DEFAULT '{}',
+		metadata_json           TEXT NOT NULL DEFAULT '{}',
 		created_at              TEXT NOT NULL,
 		updated_at              TEXT NOT NULL,
 		INDEX idx_tasks_mission (mission_id),
@@ -191,19 +202,27 @@ var doltSchemaStatements = []string{
 	)`,
 
 	`CREATE TABLE IF NOT EXISTS runs (
-		id               VARCHAR(255) PRIMARY KEY,
-		mission_id       VARCHAR(255) NOT NULL,
-		task_id          VARCHAR(255) NOT NULL DEFAULT '',
-		mode             VARCHAR(64) NOT NULL,
-		status           VARCHAR(64) NOT NULL DEFAULT 'queued',
-		lease_owner      VARCHAR(255) NOT NULL DEFAULT '',
-		lease_expires_at TEXT,
-		heartbeat_at     TEXT,
-		worktree_path    VARCHAR(512) NOT NULL DEFAULT '',
-		started_at       TEXT,
-		ended_at         TEXT,
-		summary          TEXT NOT NULL,
-		error_text       TEXT NOT NULL,
+		id                VARCHAR(255) PRIMARY KEY,
+		mission_id        VARCHAR(255) NOT NULL,
+		task_id           VARCHAR(255) NOT NULL DEFAULT '',
+		parent_run_id     VARCHAR(255) NOT NULL DEFAULT '',
+		mode              VARCHAR(64) NOT NULL,
+		status            VARCHAR(64) NOT NULL DEFAULT 'queued',
+		lease_owner       VARCHAR(255) NOT NULL DEFAULT '',
+		lease_expires_at  TEXT,
+		heartbeat_at      TEXT,
+		worktree_path     VARCHAR(512) NOT NULL DEFAULT '',
+		base_ref          VARCHAR(255) NOT NULL DEFAULT '',
+		started_at        TEXT,
+		ended_at          TEXT,
+		summary           TEXT NOT NULL,
+		error_text        TEXT NOT NULL,
+		outcome_json      TEXT NOT NULL DEFAULT '{}',
+		lease_json        TEXT NOT NULL DEFAULT '{}',
+		command_json      TEXT NOT NULL DEFAULT '{}',
+		control_json      TEXT NOT NULL DEFAULT '{}',
+		verification_json TEXT NOT NULL DEFAULT '{}',
+		metadata_json     TEXT NOT NULL DEFAULT '{}',
 		INDEX idx_runs_mission (mission_id),
 		INDEX idx_runs_task (task_id)
 	)`,
@@ -214,8 +233,13 @@ var doltSchemaStatements = []string{
 		task_id       VARCHAR(255) NOT NULL DEFAULT '',
 		run_id        VARCHAR(255) NOT NULL DEFAULT '',
 		type          VARCHAR(64) NOT NULL,
+		role          VARCHAR(64) NOT NULL DEFAULT '',
 		relative_path TEXT NOT NULL,
 		sha256        VARCHAR(64) NOT NULL DEFAULT '',
+		media_type    VARCHAR(255) NOT NULL DEFAULT '',
+		size_bytes    BIGINT NOT NULL DEFAULT 0,
+		content_json  TEXT NOT NULL DEFAULT '{}',
+		metadata_json TEXT NOT NULL DEFAULT '{}',
 		created_at    TEXT NOT NULL,
 		INDEX idx_artifacts_mission (mission_id)
 	)`,
@@ -227,23 +251,57 @@ var doltSchemaStatements = []string{
 		run_id        VARCHAR(255) NOT NULL DEFAULT '',
 		kind          VARCHAR(64) NOT NULL,
 		status        VARCHAR(64) NOT NULL DEFAULT 'pending',
+		approver      VARCHAR(255) NOT NULL DEFAULT '',
+		reason        TEXT NOT NULL,
 		request_json  TEXT NOT NULL DEFAULT '{}',
 		response_json TEXT NOT NULL DEFAULT '{}',
+		metadata_json TEXT NOT NULL DEFAULT '{}',
 		created_at    TEXT NOT NULL,
 		resolved_at   TEXT,
 		INDEX idx_approvals_mission (mission_id)
 	)`,
 
 	`CREATE TABLE IF NOT EXISTS events (
-		id           BIGINT AUTO_INCREMENT PRIMARY KEY,
-		mission_id   VARCHAR(255) NOT NULL,
-		task_id      VARCHAR(255) NOT NULL DEFAULT '',
-		run_id       VARCHAR(255) NOT NULL DEFAULT '',
-		type         VARCHAR(128) NOT NULL,
-		payload_json TEXT NOT NULL DEFAULT '{}',
-		created_at   TEXT NOT NULL,
+		id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+		mission_id     VARCHAR(255) NOT NULL,
+		task_id        VARCHAR(255) NOT NULL DEFAULT '',
+		run_id         VARCHAR(255) NOT NULL DEFAULT '',
+		type           VARCHAR(128) NOT NULL,
+		schema_version INT NOT NULL DEFAULT 1,
+		correlation_id VARCHAR(255) NOT NULL DEFAULT '',
+		causation_id   VARCHAR(255) NOT NULL DEFAULT '',
+		payload_json   TEXT NOT NULL DEFAULT '{}',
+		metadata_json  TEXT NOT NULL DEFAULT '{}',
+		created_at     TEXT NOT NULL,
 		INDEX idx_events_mission (mission_id)
 	)`,
+}
+
+var doltMigrationStatements = []string{
+	`ALTER TABLE missions ADD COLUMN plan_state_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE missions ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE tasks ADD COLUMN outcome_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE tasks ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE runs ADD COLUMN parent_run_id VARCHAR(255) NOT NULL DEFAULT ''`,
+	`ALTER TABLE runs ADD COLUMN base_ref VARCHAR(255) NOT NULL DEFAULT ''`,
+	`ALTER TABLE runs ADD COLUMN outcome_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE runs ADD COLUMN lease_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE runs ADD COLUMN command_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE runs ADD COLUMN control_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE runs ADD COLUMN verification_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE runs ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE artifacts ADD COLUMN role VARCHAR(64) NOT NULL DEFAULT ''`,
+	`ALTER TABLE artifacts ADD COLUMN media_type VARCHAR(255) NOT NULL DEFAULT ''`,
+	`ALTER TABLE artifacts ADD COLUMN size_bytes BIGINT NOT NULL DEFAULT 0`,
+	`ALTER TABLE artifacts ADD COLUMN content_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE artifacts ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE approvals ADD COLUMN approver VARCHAR(255) NOT NULL DEFAULT ''`,
+	`ALTER TABLE approvals ADD COLUMN reason TEXT NOT NULL`,
+	`ALTER TABLE approvals ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE events ADD COLUMN schema_version INT NOT NULL DEFAULT 1`,
+	`ALTER TABLE events ADD COLUMN correlation_id VARCHAR(255) NOT NULL DEFAULT ''`,
+	`ALTER TABLE events ADD COLUMN causation_id VARCHAR(255) NOT NULL DEFAULT ''`,
+	`ALTER TABLE events ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`,
 }
 
 // Close closes the database connection.
@@ -258,16 +316,18 @@ func (s *DoltStore) CreateMission(ctx context.Context, m *Mission) error {
 	defer s.mu.Unlock()
 
 	policyJSON := marshalOrDefault(m.Policy, "{}")
-	budgetJSON, _ := json.Marshal(m.Budget)
-	criteriaJSON, _ := json.Marshal(m.SuccessCriteria)
+	budgetJSON := marshalJSONOrDefault(m.Budget, "{}")
+	criteriaJSON := marshalJSONOrDefault(m.SuccessCriteria, "[]")
+	planStateJSON := marshalOrDefault(m.PlanStateJSON, "{}")
+	metadataJSON := marshalOrDefault(m.MetadataJSON, "{}")
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO missions (id, title, goal, repo_root, base_commit, base_branch, status,
-			policy_json, budget_json, success_criteria_json, integration_ref,
+			policy_json, budget_json, success_criteria_json, integration_ref, plan_state_json, metadata_json,
 			created_at, updated_at, started_at, ended_at, last_replan_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.Title, m.Goal, m.RepoRoot, m.BaseCommit, m.BaseBranch, string(m.Status),
-		string(policyJSON), string(budgetJSON), string(criteriaJSON), m.IntegrationRef,
+		policyJSON, budgetJSON, criteriaJSON, m.IntegrationRef, planStateJSON, metadataJSON,
 		formatTime(m.CreatedAt), formatTime(m.UpdatedAt),
 		formatNullTime(m.StartedAt), formatNullTime(m.EndedAt), formatNullTime(m.LastReplanAt),
 	)
@@ -280,7 +340,7 @@ func (s *DoltStore) GetMission(ctx context.Context, id string) (*Mission, error)
 
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, title, goal, repo_root, base_commit, base_branch, status,
-			policy_json, budget_json, success_criteria_json, integration_ref,
+			policy_json, budget_json, success_criteria_json, integration_ref, plan_state_json, metadata_json,
 			created_at, updated_at, started_at, ended_at, last_replan_at
 		FROM missions WHERE id = ?`, id)
 
@@ -292,16 +352,18 @@ func (s *DoltStore) UpdateMission(ctx context.Context, m *Mission) error {
 	defer s.mu.Unlock()
 
 	policyJSON := marshalOrDefault(m.Policy, "{}")
-	budgetJSON, _ := json.Marshal(m.Budget)
-	criteriaJSON, _ := json.Marshal(m.SuccessCriteria)
+	budgetJSON := marshalJSONOrDefault(m.Budget, "{}")
+	criteriaJSON := marshalJSONOrDefault(m.SuccessCriteria, "[]")
+	planStateJSON := marshalOrDefault(m.PlanStateJSON, "{}")
+	metadataJSON := marshalOrDefault(m.MetadataJSON, "{}")
 
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE missions SET title=?, goal=?, repo_root=?, base_commit=?, base_branch=?, status=?,
-			policy_json=?, budget_json=?, success_criteria_json=?, integration_ref=?,
+			policy_json=?, budget_json=?, success_criteria_json=?, integration_ref=?, plan_state_json=?, metadata_json=?,
 			updated_at=?, started_at=?, ended_at=?, last_replan_at=?
 		WHERE id=?`,
 		m.Title, m.Goal, m.RepoRoot, m.BaseCommit, m.BaseBranch, string(m.Status),
-		string(policyJSON), string(budgetJSON), string(criteriaJSON), m.IntegrationRef,
+		policyJSON, budgetJSON, criteriaJSON, m.IntegrationRef, planStateJSON, metadataJSON,
 		formatTime(m.UpdatedAt), formatNullTime(m.StartedAt), formatNullTime(m.EndedAt),
 		formatNullTime(m.LastReplanAt),
 		m.ID,
@@ -315,7 +377,7 @@ func (s *DoltStore) ListMissions(ctx context.Context) ([]*Mission, error) {
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, title, goal, repo_root, base_commit, base_branch, status,
-			policy_json, budget_json, success_criteria_json, integration_ref,
+			policy_json, budget_json, success_criteria_json, integration_ref, plan_state_json, metadata_json,
 			created_at, updated_at, started_at, ended_at, last_replan_at
 		FROM missions ORDER BY created_at DESC`)
 	if err != nil {
@@ -340,19 +402,21 @@ func (s *DoltStore) CreateTask(ctx context.Context, t *Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	scopeJSON, _ := json.Marshal(t.Scope)
-	criteriaJSON, _ := json.Marshal(t.AcceptanceCriteria)
+	scopeJSON := marshalJSONOrDefault(t.Scope, "{}")
+	criteriaJSON := marshalJSONOrDefault(t.AcceptanceCriteria, "[]")
 	reviewJSON := marshalOrDefault(t.ReviewRequirements, "{}")
+	outcomeJSON := marshalJSONOrDefault(t.Outcome, "{}")
+	metadataJSON := marshalOrDefault(t.MetadataJSON, "{}")
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO tasks (id, mission_id, title, kind, objective, status, priority,
 			scope_json, acceptance_criteria_json, review_requirements_json,
-			estimated_effort, risk_level, attempt_count, blocking_reason,
+			estimated_effort, risk_level, attempt_count, blocking_reason, outcome_json, metadata_json,
 			created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.MissionID, t.Title, string(t.Kind), t.Objective, string(t.Status), t.Priority,
-		string(scopeJSON), string(criteriaJSON), string(reviewJSON),
-		t.EstimatedEffort, string(t.RiskLevel), t.AttemptCount, t.BlockingReason,
+		scopeJSON, criteriaJSON, reviewJSON,
+		t.EstimatedEffort, string(t.RiskLevel), t.AttemptCount, t.BlockingReason, outcomeJSON, metadataJSON,
 		formatTime(t.CreatedAt), formatTime(t.UpdatedAt),
 	)
 	return err
@@ -365,7 +429,7 @@ func (s *DoltStore) GetTask(ctx context.Context, id string) (*Task, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, mission_id, title, kind, objective, status, priority,
 			scope_json, acceptance_criteria_json, review_requirements_json,
-			estimated_effort, risk_level, attempt_count, blocking_reason,
+			estimated_effort, risk_level, attempt_count, blocking_reason, outcome_json, metadata_json,
 			created_at, updated_at
 		FROM tasks WHERE id = ?`, id)
 
@@ -376,19 +440,21 @@ func (s *DoltStore) UpdateTask(ctx context.Context, t *Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	scopeJSON, _ := json.Marshal(t.Scope)
-	criteriaJSON, _ := json.Marshal(t.AcceptanceCriteria)
+	scopeJSON := marshalJSONOrDefault(t.Scope, "{}")
+	criteriaJSON := marshalJSONOrDefault(t.AcceptanceCriteria, "[]")
 	reviewJSON := marshalOrDefault(t.ReviewRequirements, "{}")
+	outcomeJSON := marshalJSONOrDefault(t.Outcome, "{}")
+	metadataJSON := marshalOrDefault(t.MetadataJSON, "{}")
 
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE tasks SET title=?, kind=?, objective=?, status=?, priority=?,
 			scope_json=?, acceptance_criteria_json=?, review_requirements_json=?,
-			estimated_effort=?, risk_level=?, attempt_count=?, blocking_reason=?,
+			estimated_effort=?, risk_level=?, attempt_count=?, blocking_reason=?, outcome_json=?, metadata_json=?,
 			updated_at=?
 		WHERE id=?`,
 		t.Title, string(t.Kind), t.Objective, string(t.Status), t.Priority,
-		string(scopeJSON), string(criteriaJSON), string(reviewJSON),
-		t.EstimatedEffort, string(t.RiskLevel), t.AttemptCount, t.BlockingReason,
+		scopeJSON, criteriaJSON, reviewJSON,
+		t.EstimatedEffort, string(t.RiskLevel), t.AttemptCount, t.BlockingReason, outcomeJSON, metadataJSON,
 		formatTime(t.UpdatedAt),
 		t.ID,
 	)
@@ -402,7 +468,7 @@ func (s *DoltStore) ListTasks(ctx context.Context, missionID string) ([]*Task, e
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, mission_id, title, kind, objective, status, priority,
 			scope_json, acceptance_criteria_json, review_requirements_json,
-			estimated_effort, risk_level, attempt_count, blocking_reason,
+			estimated_effort, risk_level, attempt_count, blocking_reason, outcome_json, metadata_json,
 			created_at, updated_at
 		FROM tasks WHERE mission_id = ? ORDER BY priority DESC, created_at ASC`, missionID)
 	if err != nil {
@@ -464,14 +530,22 @@ func (s *DoltStore) CreateRun(ctx context.Context, r *Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	outcomeJSON := marshalJSONOrDefault(r.Outcome, "{}")
+	leaseJSON := marshalOrDefault(r.LeaseJSON, "{}")
+	commandJSON := marshalOrDefault(r.CommandJSON, "{}")
+	controlJSON := marshalOrDefault(r.ControlJSON, "{}")
+	verificationJSON := marshalOrDefault(r.VerificationJSON, "{}")
+	metadataJSON := marshalOrDefault(r.MetadataJSON, "{}")
+
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO runs (id, mission_id, task_id, mode, status, lease_owner,
-			lease_expires_at, heartbeat_at, worktree_path, started_at, ended_at,
-			summary, error_text)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ID, r.MissionID, r.TaskID, string(r.Mode), string(r.Status), r.LeaseOwner,
-		formatNullTime(r.LeaseExpires), formatNullTime(r.HeartbeatAt), r.WorktreePath,
+		`INSERT INTO runs (id, mission_id, task_id, parent_run_id, mode, status, lease_owner,
+			lease_expires_at, heartbeat_at, worktree_path, base_ref, started_at, ended_at,
+			summary, error_text, outcome_json, lease_json, command_json, control_json, verification_json, metadata_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, r.MissionID, r.TaskID, r.ParentRunID, string(r.Mode), string(r.Status), r.LeaseOwner,
+		formatNullTime(r.LeaseExpires), formatNullTime(r.HeartbeatAt), r.WorktreePath, r.BaseRef,
 		formatNullTime(r.StartedAt), formatNullTime(r.EndedAt), r.Summary, r.ErrorText,
+		outcomeJSON, leaseJSON, commandJSON, controlJSON, verificationJSON, metadataJSON,
 	)
 	return err
 }
@@ -481,9 +555,9 @@ func (s *DoltStore) GetRun(ctx context.Context, id string) (*Run, error) {
 	defer s.mu.RUnlock()
 
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, mission_id, task_id, mode, status, lease_owner,
-			lease_expires_at, heartbeat_at, worktree_path, started_at, ended_at,
-			summary, error_text
+		`SELECT id, mission_id, task_id, parent_run_id, mode, status, lease_owner,
+			lease_expires_at, heartbeat_at, worktree_path, base_ref, started_at, ended_at,
+			summary, error_text, outcome_json, lease_json, command_json, control_json, verification_json, metadata_json
 		FROM runs WHERE id = ?`, id)
 
 	return scanRun(row)
@@ -493,14 +567,23 @@ func (s *DoltStore) UpdateRun(ctx context.Context, r *Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	outcomeJSON := marshalJSONOrDefault(r.Outcome, "{}")
+	leaseJSON := marshalOrDefault(r.LeaseJSON, "{}")
+	commandJSON := marshalOrDefault(r.CommandJSON, "{}")
+	controlJSON := marshalOrDefault(r.ControlJSON, "{}")
+	verificationJSON := marshalOrDefault(r.VerificationJSON, "{}")
+	metadataJSON := marshalOrDefault(r.MetadataJSON, "{}")
+
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE runs SET task_id=?, mode=?, status=?, lease_owner=?,
-			lease_expires_at=?, heartbeat_at=?, worktree_path=?,
-			started_at=?, ended_at=?, summary=?, error_text=?
+		`UPDATE runs SET task_id=?, parent_run_id=?, mode=?, status=?, lease_owner=?,
+			lease_expires_at=?, heartbeat_at=?, worktree_path=?, base_ref=?,
+			started_at=?, ended_at=?, summary=?, error_text=?, outcome_json=?, lease_json=?,
+			command_json=?, control_json=?, verification_json=?, metadata_json=?
 		WHERE id=?`,
-		r.TaskID, string(r.Mode), string(r.Status), r.LeaseOwner,
-		formatNullTime(r.LeaseExpires), formatNullTime(r.HeartbeatAt), r.WorktreePath,
-		formatNullTime(r.StartedAt), formatNullTime(r.EndedAt), r.Summary, r.ErrorText,
+		r.TaskID, r.ParentRunID, string(r.Mode), string(r.Status), r.LeaseOwner,
+		formatNullTime(r.LeaseExpires), formatNullTime(r.HeartbeatAt), r.WorktreePath, r.BaseRef,
+		formatNullTime(r.StartedAt), formatNullTime(r.EndedAt), r.Summary, r.ErrorText, outcomeJSON, leaseJSON,
+		commandJSON, controlJSON, verificationJSON, metadataJSON,
 		r.ID,
 	)
 	return err
@@ -511,9 +594,9 @@ func (s *DoltStore) ListRuns(ctx context.Context, missionID string) ([]*Run, err
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, mission_id, task_id, mode, status, lease_owner,
-			lease_expires_at, heartbeat_at, worktree_path, started_at, ended_at,
-			summary, error_text
+		`SELECT id, mission_id, task_id, parent_run_id, mode, status, lease_owner,
+			lease_expires_at, heartbeat_at, worktree_path, base_ref, started_at, ended_at,
+			summary, error_text, outcome_json, lease_json, command_json, control_json, verification_json, metadata_json
 		FROM runs WHERE mission_id = ? ORDER BY id ASC`, missionID)
 	if err != nil {
 		return nil, err
@@ -538,10 +621,15 @@ func (s *DoltStore) AppendEvent(ctx context.Context, e *Event) error {
 	defer s.mu.Unlock()
 
 	payloadJSON := marshalOrDefault(e.PayloadJSON, "{}")
+	metadataJSON := marshalOrDefault(e.MetadataJSON, "{}")
+	schemaVersion := e.SchemaVersion
+	if schemaVersion == 0 {
+		schemaVersion = defaultEventSchemaVersion
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO events (mission_id, task_id, run_id, type, payload_json, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		e.MissionID, e.TaskID, e.RunID, e.Type, string(payloadJSON), formatTime(e.CreatedAt),
+		`INSERT INTO events (mission_id, task_id, run_id, type, schema_version, correlation_id, causation_id, payload_json, metadata_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.MissionID, e.TaskID, e.RunID, e.Type, schemaVersion, e.CorrelationID, e.CausationID, payloadJSON, metadataJSON, formatTime(e.CreatedAt),
 	)
 	return err
 }
@@ -550,7 +638,7 @@ func (s *DoltStore) ListEvents(ctx context.Context, missionID string, limit int)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	q := `SELECT id, mission_id, task_id, run_id, type, payload_json, created_at
+	q := `SELECT id, mission_id, task_id, run_id, type, schema_version, correlation_id, causation_id, payload_json, metadata_json, created_at
 		FROM events WHERE mission_id = ? ORDER BY id DESC`
 	if limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", limit)
@@ -564,15 +652,11 @@ func (s *DoltStore) ListEvents(ctx context.Context, missionID string, limit int)
 
 	var events []*Event
 	for rows.Next() {
-		var e Event
-		var createdStr string
-		var payloadStr string
-		if err := rows.Scan(&e.ID, &e.MissionID, &e.TaskID, &e.RunID, &e.Type, &payloadStr, &createdStr); err != nil {
+		e, err := scanEventRows(rows)
+		if err != nil {
 			return nil, err
 		}
-		e.PayloadJSON = json.RawMessage(payloadStr)
-		e.CreatedAt = parseTime(createdStr)
-		events = append(events, &e)
+		events = append(events, e)
 	}
 	return events, rows.Err()
 }
@@ -583,10 +667,12 @@ func (s *DoltStore) CreateArtifact(ctx context.Context, a *Artifact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	contentJSON := marshalOrDefault(a.ContentJSON, "{}")
+	metadataJSON := marshalOrDefault(a.MetadataJSON, "{}")
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO artifacts (id, mission_id, task_id, run_id, type, relative_path, sha256, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.MissionID, a.TaskID, a.RunID, a.Type, a.RelativePath, a.SHA256, formatTime(a.CreatedAt),
+		`INSERT INTO artifacts (id, mission_id, task_id, run_id, type, role, relative_path, sha256, media_type, size_bytes, content_json, metadata_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.MissionID, a.TaskID, a.RunID, a.Type, a.Role, a.RelativePath, a.SHA256, a.MediaType, a.SizeBytes, contentJSON, metadataJSON, formatTime(a.CreatedAt),
 	)
 	return err
 }
@@ -596,7 +682,7 @@ func (s *DoltStore) ListArtifacts(ctx context.Context, missionID string) ([]*Art
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, mission_id, task_id, run_id, type, relative_path, sha256, created_at
+		`SELECT id, mission_id, task_id, run_id, type, role, relative_path, sha256, media_type, size_bytes, content_json, metadata_json, created_at
 		FROM artifacts WHERE mission_id = ? ORDER BY id ASC`, missionID)
 	if err != nil {
 		return nil, err
@@ -605,13 +691,11 @@ func (s *DoltStore) ListArtifacts(ctx context.Context, missionID string) ([]*Art
 
 	var artifacts []*Artifact
 	for rows.Next() {
-		var a Artifact
-		var createdStr string
-		if err := rows.Scan(&a.ID, &a.MissionID, &a.TaskID, &a.RunID, &a.Type, &a.RelativePath, &a.SHA256, &createdStr); err != nil {
+		a, err := scanArtifactRows(rows)
+		if err != nil {
 			return nil, err
 		}
-		a.CreatedAt = parseTime(createdStr)
-		artifacts = append(artifacts, &a)
+		artifacts = append(artifacts, a)
 	}
 	return artifacts, rows.Err()
 }
@@ -624,13 +708,14 @@ func (s *DoltStore) CreateApproval(ctx context.Context, a *Approval) error {
 
 	reqJSON := marshalOrDefault(a.RequestJSON, "{}")
 	respJSON := marshalOrDefault(a.ResponseJSON, "{}")
+	metadataJSON := marshalOrDefault(a.MetadataJSON, "{}")
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO approvals (id, mission_id, task_id, run_id, kind, status,
-			request_json, response_json, created_at, resolved_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.MissionID, a.TaskID, a.RunID, a.Kind, string(a.Status),
-		string(reqJSON), string(respJSON), formatTime(a.CreatedAt), formatNullTime(a.ResolvedAt),
+		`INSERT INTO approvals (id, mission_id, task_id, run_id, kind, status, approver, reason,
+			request_json, response_json, metadata_json, created_at, resolved_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.MissionID, a.TaskID, a.RunID, a.Kind, string(a.Status), a.Approver, a.Reason,
+		reqJSON, respJSON, metadataJSON, formatTime(a.CreatedAt), formatNullTime(a.ResolvedAt),
 	)
 	return err
 }
@@ -639,36 +724,23 @@ func (s *DoltStore) GetApproval(ctx context.Context, id string) (*Approval, erro
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var a Approval
-	var reqStr, respStr, createdStr string
-	var resolvedStr sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, mission_id, task_id, run_id, kind, status, request_json, response_json, created_at, resolved_at
-		FROM approvals WHERE id = ?`, id).
-		Scan(&a.ID, &a.MissionID, &a.TaskID, &a.RunID, &a.Kind, &a.Status,
-			&reqStr, &respStr, &createdStr, &resolvedStr)
-	if err != nil {
-		return nil, err
-	}
-	a.RequestJSON = json.RawMessage(reqStr)
-	a.ResponseJSON = json.RawMessage(respStr)
-	a.CreatedAt = parseTime(createdStr)
-	if resolvedStr.Valid {
-		t := parseTime(resolvedStr.String)
-		a.ResolvedAt = &t
-	}
-	return &a, nil
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, mission_id, task_id, run_id, kind, status, approver, reason, request_json, response_json, metadata_json, created_at, resolved_at
+		FROM approvals WHERE id = ?`, id)
+	return scanApproval(row)
 }
 
 func (s *DoltStore) UpdateApproval(ctx context.Context, a *Approval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	reqJSON := marshalOrDefault(a.RequestJSON, "{}")
 	respJSON := marshalOrDefault(a.ResponseJSON, "{}")
+	metadataJSON := marshalOrDefault(a.MetadataJSON, "{}")
 
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET status=?, response_json=?, resolved_at=? WHERE id=?`,
-		string(a.Status), string(respJSON), formatNullTime(a.ResolvedAt), a.ID)
+		`UPDATE approvals SET status=?, approver=?, reason=?, request_json=?, response_json=?, metadata_json=?, resolved_at=? WHERE id=?`,
+		string(a.Status), a.Approver, a.Reason, reqJSON, respJSON, metadataJSON, formatNullTime(a.ResolvedAt), a.ID)
 	return err
 }
 
@@ -677,7 +749,7 @@ func (s *DoltStore) ListApprovals(ctx context.Context, missionID string) ([]*App
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, mission_id, task_id, run_id, kind, status, request_json, response_json, created_at, resolved_at
+		`SELECT id, mission_id, task_id, run_id, kind, status, approver, reason, request_json, response_json, metadata_json, created_at, resolved_at
 		FROM approvals WHERE mission_id = ? ORDER BY id ASC`, missionID)
 	if err != nil {
 		return nil, err
@@ -686,21 +758,11 @@ func (s *DoltStore) ListApprovals(ctx context.Context, missionID string) ([]*App
 
 	var approvals []*Approval
 	for rows.Next() {
-		var a Approval
-		var reqStr, respStr, createdStr string
-		var resolvedStr sql.NullString
-		if err := rows.Scan(&a.ID, &a.MissionID, &a.TaskID, &a.RunID, &a.Kind, &a.Status,
-			&reqStr, &respStr, &createdStr, &resolvedStr); err != nil {
+		a, err := scanApprovalRows(rows)
+		if err != nil {
 			return nil, err
 		}
-		a.RequestJSON = json.RawMessage(reqStr)
-		a.ResponseJSON = json.RawMessage(respStr)
-		a.CreatedAt = parseTime(createdStr)
-		if resolvedStr.Valid {
-			t := parseTime(resolvedStr.String)
-			a.ResolvedAt = &t
-		}
-		approvals = append(approvals, &a)
+		approvals = append(approvals, a)
 	}
 	return approvals, rows.Err()
 }
@@ -735,7 +797,7 @@ func (s *DoltStore) GetMissionSummary(ctx context.Context, missionID string) (*M
 			counts.Pending = count
 		case TaskReady:
 			counts.Ready = count
-		case TaskRunning:
+		case TaskRunning, TaskLeased:
 			counts.Running = count
 		case TaskAwaitingReview:
 			counts.AwaitingReview = count
@@ -747,7 +809,7 @@ func (s *DoltStore) GetMissionSummary(ctx context.Context, missionID string) (*M
 			counts.Done = count
 		case TaskBlocked:
 			counts.Blocked = count
-		case TaskFailed:
+		case TaskFailed, TaskRejected, TaskSuperseded:
 			counts.Failed = count
 		}
 	}
@@ -780,7 +842,7 @@ func (s *DoltStore) GetReadyTasks(ctx context.Context, missionID string) ([]*Tas
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, mission_id, title, kind, objective, status, priority,
 			scope_json, acceptance_criteria_json, review_requirements_json,
-			estimated_effort, risk_level, attempt_count, blocking_reason,
+			estimated_effort, risk_level, attempt_count, blocking_reason, outcome_json, metadata_json,
 			created_at, updated_at
 		FROM tasks WHERE mission_id = ? AND status = 'ready'
 		ORDER BY priority DESC, created_at ASC`, missionID)
@@ -807,7 +869,7 @@ func (s *DoltStore) GetTasksByStatus(ctx context.Context, missionID string, stat
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, mission_id, title, kind, objective, status, priority,
 			scope_json, acceptance_criteria_json, review_requirements_json,
-			estimated_effort, risk_level, attempt_count, blocking_reason,
+			estimated_effort, risk_level, attempt_count, blocking_reason, outcome_json, metadata_json,
 			created_at, updated_at
 		FROM tasks WHERE mission_id = ? AND status = ?
 		ORDER BY priority DESC, created_at ASC`, missionID, string(status))
@@ -832,9 +894,9 @@ func (s *DoltStore) GetRunsForTask(ctx context.Context, taskID string) ([]*Run, 
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, mission_id, task_id, mode, status, lease_owner,
-			lease_expires_at, heartbeat_at, worktree_path, started_at, ended_at,
-			summary, error_text
+		`SELECT id, mission_id, task_id, parent_run_id, mode, status, lease_owner,
+			lease_expires_at, heartbeat_at, worktree_path, base_ref, started_at, ended_at,
+			summary, error_text, outcome_json, lease_json, command_json, control_json, verification_json, metadata_json
 		FROM runs WHERE task_id = ? ORDER BY id ASC`, taskID)
 	if err != nil {
 		return nil, err

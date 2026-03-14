@@ -43,18 +43,19 @@ const (
 	TaskBlocked        TaskStatus = "blocked"
 	TaskFailed         TaskStatus = "failed"
 	TaskRejected       TaskStatus = "rejected"
+	TaskSuperseded     TaskStatus = "superseded"
 )
 
 // TaskKind categorizes the type of work a task represents.
 type TaskKind string
 
 const (
-	TaskKindCode              TaskKind = "code"
-	TaskKindTest              TaskKind = "test"
-	TaskKindDocs              TaskKind = "docs"
-	TaskKindInvestigation     TaskKind = "investigation"
-	TaskKindIntegrationFixup  TaskKind = "integration_followup"
-	TaskKindReviewFix         TaskKind = "review_fix"
+	TaskKindCode             TaskKind = "code"
+	TaskKindTest             TaskKind = "test"
+	TaskKindDocs             TaskKind = "docs"
+	TaskKindInvestigation    TaskKind = "investigation"
+	TaskKindIntegrationFixup TaskKind = "integration_followup"
+	TaskKindReviewFix        TaskKind = "review_fix"
 )
 
 // RunStatus represents the lifecycle of a run.
@@ -100,6 +101,16 @@ const (
 	RiskHigh   RiskLevel = "high"
 )
 
+// Outcome captures a normalized durable result for a task or run.
+type Outcome struct {
+	Status      string          `json:"status,omitempty"`
+	Summary     string          `json:"summary,omitempty"`
+	ErrorText   string          `json:"error_text,omitempty"`
+	ArtifactIDs []string        `json:"artifact_ids,omitempty"`
+	ApprovalIDs []string        `json:"approval_ids,omitempty"`
+	PayloadJSON json.RawMessage `json:"payload_json,omitempty"`
+}
+
 // Mission represents a high-level objective being orchestrated.
 type Mission struct {
 	ID              string          `json:"id"`
@@ -113,6 +124,8 @@ type Mission struct {
 	Budget          Budget          `json:"budget"`
 	SuccessCriteria []string        `json:"success_criteria,omitempty"`
 	IntegrationRef  string          `json:"integration_ref,omitempty"`
+	PlanStateJSON   json.RawMessage `json:"plan_state_json,omitempty"`
+	MetadataJSON    json.RawMessage `json:"metadata_json,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
 	StartedAt       *time.Time      `json:"started_at,omitempty"`
@@ -122,13 +135,13 @@ type Mission struct {
 
 // Budget defines resource limits for a mission.
 type Budget struct {
-	MaxConcurrentWorkers  int           `json:"max_concurrent_workers,omitempty"`
-	MaxTotalRuns          int           `json:"max_total_runs,omitempty"`
-	MaxModelCalls         int           `json:"max_model_calls,omitempty"`
-	MaxCostUSD            float64       `json:"max_cost_usd,omitempty"`
-	MaxWallClockDuration  time.Duration `json:"max_wall_clock_duration,omitempty"`
-	MaxReplans            int           `json:"max_replans,omitempty"`
-	MaxConsecutiveFailures int          `json:"max_consecutive_failures,omitempty"`
+	MaxConcurrentWorkers   int           `json:"max_concurrent_workers,omitempty"`
+	MaxTotalRuns           int           `json:"max_total_runs,omitempty"`
+	MaxModelCalls          int           `json:"max_model_calls,omitempty"`
+	MaxCostUSD             float64       `json:"max_cost_usd,omitempty"`
+	MaxWallClockDuration   time.Duration `json:"max_wall_clock_duration,omitempty"`
+	MaxReplans             int           `json:"max_replans,omitempty"`
+	MaxConsecutiveFailures int           `json:"max_consecutive_failures,omitempty"`
 }
 
 // Task represents a single unit of work within a mission.
@@ -147,6 +160,8 @@ type Task struct {
 	RiskLevel          RiskLevel       `json:"risk_level"`
 	AttemptCount       int             `json:"attempt_count"`
 	BlockingReason     string          `json:"blocking_reason,omitempty"`
+	Outcome            Outcome         `json:"outcome,omitempty"`
+	MetadataJSON       json.RawMessage `json:"metadata_json,omitempty"`
 	CreatedAt          time.Time       `json:"created_at"`
 	UpdatedAt          time.Time       `json:"updated_at"`
 }
@@ -165,56 +180,76 @@ type TaskDependency struct {
 
 // Run represents a single execution attempt (planner, worker, review, or integration).
 type Run struct {
-	ID            string     `json:"id"`
-	MissionID     string     `json:"mission_id"`
-	TaskID        string     `json:"task_id,omitempty"`
-	Mode          RunMode    `json:"mode"`
-	Status        RunStatus  `json:"status"`
-	LeaseOwner    string     `json:"lease_owner,omitempty"`
-	LeaseExpires  *time.Time `json:"lease_expires_at,omitempty"`
-	HeartbeatAt   *time.Time `json:"heartbeat_at,omitempty"`
-	WorktreePath  string     `json:"worktree_path,omitempty"`
-	StartedAt     *time.Time `json:"started_at,omitempty"`
-	EndedAt       *time.Time `json:"ended_at,omitempty"`
-	Summary       string     `json:"summary,omitempty"`
-	ErrorText     string     `json:"error_text,omitempty"`
+	ID               string          `json:"id"`
+	MissionID        string          `json:"mission_id"`
+	TaskID           string          `json:"task_id,omitempty"`
+	ParentRunID      string          `json:"parent_run_id,omitempty"`
+	Mode             RunMode         `json:"mode"`
+	Status           RunStatus       `json:"status"`
+	LeaseOwner       string          `json:"lease_owner,omitempty"`
+	LeaseExpires     *time.Time      `json:"lease_expires_at,omitempty"`
+	HeartbeatAt      *time.Time      `json:"heartbeat_at,omitempty"`
+	WorktreePath     string          `json:"worktree_path,omitempty"`
+	BaseRef          string          `json:"base_ref,omitempty"`
+	StartedAt        *time.Time      `json:"started_at,omitempty"`
+	EndedAt          *time.Time      `json:"ended_at,omitempty"`
+	Summary          string          `json:"summary,omitempty"`
+	ErrorText        string          `json:"error_text,omitempty"`
+	Outcome          Outcome         `json:"outcome,omitempty"`
+	LeaseJSON        json.RawMessage `json:"lease_json,omitempty"`
+	CommandJSON      json.RawMessage `json:"command_json,omitempty"`
+	ControlJSON      json.RawMessage `json:"control_json,omitempty"`
+	VerificationJSON json.RawMessage `json:"verification_json,omitempty"`
+	MetadataJSON     json.RawMessage `json:"metadata_json,omitempty"`
 }
 
 // Artifact represents a durable output from a run.
 type Artifact struct {
-	ID           string    `json:"id"`
-	MissionID    string    `json:"mission_id"`
-	TaskID       string    `json:"task_id,omitempty"`
-	RunID        string    `json:"run_id,omitempty"`
-	Type         string    `json:"type"`
-	RelativePath string    `json:"relative_path"`
-	SHA256       string    `json:"sha256,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           string          `json:"id"`
+	MissionID    string          `json:"mission_id"`
+	TaskID       string          `json:"task_id,omitempty"`
+	RunID        string          `json:"run_id,omitempty"`
+	Type         string          `json:"type"`
+	Role         string          `json:"role,omitempty"`
+	RelativePath string          `json:"relative_path"`
+	SHA256       string          `json:"sha256,omitempty"`
+	MediaType    string          `json:"media_type,omitempty"`
+	SizeBytes    int64           `json:"size_bytes,omitempty"`
+	ContentJSON  json.RawMessage `json:"content_json,omitempty"`
+	MetadataJSON json.RawMessage `json:"metadata_json,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 // Approval represents a pending or resolved approval gate.
 type Approval struct {
-	ID          string          `json:"id"`
-	MissionID   string          `json:"mission_id"`
-	TaskID      string          `json:"task_id,omitempty"`
-	RunID       string          `json:"run_id,omitempty"`
-	Kind        string          `json:"kind"`
-	Status      ApprovalStatus  `json:"status"`
-	RequestJSON json.RawMessage `json:"request_json,omitempty"`
+	ID           string          `json:"id"`
+	MissionID    string          `json:"mission_id"`
+	TaskID       string          `json:"task_id,omitempty"`
+	RunID        string          `json:"run_id,omitempty"`
+	Kind         string          `json:"kind"`
+	Status       ApprovalStatus  `json:"status"`
+	Approver     string          `json:"approver,omitempty"`
+	Reason       string          `json:"reason,omitempty"`
+	RequestJSON  json.RawMessage `json:"request_json,omitempty"`
 	ResponseJSON json.RawMessage `json:"response_json,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	ResolvedAt  *time.Time      `json:"resolved_at,omitempty"`
+	MetadataJSON json.RawMessage `json:"metadata_json,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	ResolvedAt   *time.Time      `json:"resolved_at,omitempty"`
 }
 
 // Event represents an append-only event in the mission log.
 type Event struct {
-	ID          int64           `json:"id"`
-	MissionID   string          `json:"mission_id"`
-	TaskID      string          `json:"task_id,omitempty"`
-	RunID       string          `json:"run_id,omitempty"`
-	Type        string          `json:"type"`
-	PayloadJSON json.RawMessage `json:"payload_json,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
+	ID            int64           `json:"id"`
+	MissionID     string          `json:"mission_id"`
+	TaskID        string          `json:"task_id,omitempty"`
+	RunID         string          `json:"run_id,omitempty"`
+	Type          string          `json:"type"`
+	SchemaVersion int             `json:"schema_version,omitempty"`
+	CorrelationID string          `json:"correlation_id,omitempty"`
+	CausationID   string          `json:"causation_id,omitempty"`
+	PayloadJSON   json.RawMessage `json:"payload_json,omitempty"`
+	MetadataJSON  json.RawMessage `json:"metadata_json,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
 }
 
 // ReviewVerdict represents the outcome of a review run.
@@ -222,6 +257,8 @@ type ReviewVerdict string
 
 const (
 	ReviewPass           ReviewVerdict = "pass"
+	ReviewFail           ReviewVerdict = "fail"
+	ReviewPartial        ReviewVerdict = "partial"
 	ReviewReject         ReviewVerdict = "reject"
 	ReviewRequestChanges ReviewVerdict = "request_changes"
 )
@@ -253,12 +290,12 @@ type IntegrationResult struct {
 
 // CreateMissionRequest contains the parameters for creating a new mission.
 type CreateMissionRequest struct {
-	Title      string   `json:"title"`
-	Goal       string   `json:"goal"`
-	RepoRoot   string   `json:"repo_root"`
-	BaseCommit string   `json:"base_commit"`
-	BaseBranch string   `json:"base_branch"`
-	Budget     Budget   `json:"budget,omitempty"`
+	Title      string `json:"title"`
+	Goal       string `json:"goal"`
+	RepoRoot   string `json:"repo_root"`
+	BaseCommit string `json:"base_commit"`
+	BaseBranch string `json:"base_branch"`
+	Budget     Budget `json:"budget,omitempty"`
 }
 
 // PlanResult represents the output of a planning run.
@@ -278,16 +315,18 @@ type PlanTask struct {
 	Priority           int       `json:"priority"`
 	Scope              TaskScope `json:"scope"`
 	AcceptanceCriteria []string  `json:"acceptance_criteria,omitempty"`
+	ReviewRequirements []string  `json:"review_requirements,omitempty"`
 	EstimatedEffort    string    `json:"estimated_effort,omitempty"`
 	RiskLevel          RiskLevel `json:"risk_level"`
+	BlockingReason     string    `json:"blocking_reason,omitempty"`
 }
 
 // MissionSummary provides a concise view of mission state for the TUI.
 type MissionSummary struct {
-	Mission      *Mission `json:"mission"`
-	TaskCounts   TaskCounts `json:"task_counts"`
-	ActiveRuns   int      `json:"active_runs"`
-	PendingApprovals int  `json:"pending_approvals"`
+	Mission          *Mission   `json:"mission"`
+	TaskCounts       TaskCounts `json:"task_counts"`
+	ActiveRuns       int        `json:"active_runs"`
+	PendingApprovals int        `json:"pending_approvals"`
 }
 
 // TaskCounts aggregates task states for display.

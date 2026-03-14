@@ -39,8 +39,7 @@ func (s *InMemoryStore) CreateMission(_ context.Context, m *Mission) error {
 	if _, ok := s.missions[m.ID]; ok {
 		return fmt.Errorf("mission %s already exists", m.ID)
 	}
-	cp := *m
-	s.missions[m.ID] = &cp
+	s.missions[m.ID] = cloneMission(m)
 	return nil
 }
 
@@ -51,8 +50,7 @@ func (s *InMemoryStore) GetMission(_ context.Context, id string) (*Mission, erro
 	if !ok {
 		return nil, fmt.Errorf("mission %s not found", id)
 	}
-	cp := *m
-	return &cp, nil
+	return cloneMission(m), nil
 }
 
 func (s *InMemoryStore) UpdateMission(_ context.Context, m *Mission) error {
@@ -61,8 +59,7 @@ func (s *InMemoryStore) UpdateMission(_ context.Context, m *Mission) error {
 	if _, ok := s.missions[m.ID]; !ok {
 		return fmt.Errorf("mission %s not found", m.ID)
 	}
-	cp := *m
-	s.missions[m.ID] = &cp
+	s.missions[m.ID] = cloneMission(m)
 	return nil
 }
 
@@ -71,8 +68,7 @@ func (s *InMemoryStore) ListMissions(_ context.Context) ([]*Mission, error) {
 	defer s.mu.Unlock()
 	out := make([]*Mission, 0, len(s.missions))
 	for _, m := range s.missions {
-		cp := *m
-		out = append(out, &cp)
+		out = append(out, cloneMission(m))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CreatedAt.After(out[j].CreatedAt)
@@ -86,8 +82,7 @@ func (s *InMemoryStore) CreateTask(_ context.Context, t *Task) error {
 	if _, ok := s.tasks[t.ID]; ok {
 		return fmt.Errorf("task %s already exists", t.ID)
 	}
-	cp := *t
-	s.tasks[t.ID] = &cp
+	s.tasks[t.ID] = cloneTask(t)
 	return nil
 }
 
@@ -98,8 +93,7 @@ func (s *InMemoryStore) GetTask(_ context.Context, id string) (*Task, error) {
 	if !ok {
 		return nil, fmt.Errorf("task %s not found", id)
 	}
-	cp := *t
-	return &cp, nil
+	return cloneTask(t), nil
 }
 
 func (s *InMemoryStore) UpdateTask(_ context.Context, t *Task) error {
@@ -108,8 +102,7 @@ func (s *InMemoryStore) UpdateTask(_ context.Context, t *Task) error {
 	if _, ok := s.tasks[t.ID]; !ok {
 		return fmt.Errorf("task %s not found", t.ID)
 	}
-	cp := *t
-	s.tasks[t.ID] = &cp
+	s.tasks[t.ID] = cloneTask(t)
 	return nil
 }
 
@@ -119,8 +112,7 @@ func (s *InMemoryStore) ListTasks(_ context.Context, missionID string) ([]*Task,
 	var out []*Task
 	for _, t := range s.tasks {
 		if t.MissionID == missionID {
-			cp := *t
-			out = append(out, &cp)
+			out = append(out, cloneTask(t))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -163,8 +155,7 @@ func (s *InMemoryStore) CreateRun(_ context.Context, r *Run) error {
 	if _, ok := s.runs[r.ID]; ok {
 		return fmt.Errorf("run %s already exists", r.ID)
 	}
-	cp := *r
-	s.runs[r.ID] = &cp
+	s.runs[r.ID] = cloneRun(r)
 	return nil
 }
 
@@ -175,8 +166,7 @@ func (s *InMemoryStore) GetRun(_ context.Context, id string) (*Run, error) {
 	if !ok {
 		return nil, fmt.Errorf("run %s not found", id)
 	}
-	cp := *r
-	return &cp, nil
+	return cloneRun(r), nil
 }
 
 func (s *InMemoryStore) UpdateRun(_ context.Context, r *Run) error {
@@ -185,8 +175,7 @@ func (s *InMemoryStore) UpdateRun(_ context.Context, r *Run) error {
 	if _, ok := s.runs[r.ID]; !ok {
 		return fmt.Errorf("run %s not found", r.ID)
 	}
-	cp := *r
-	s.runs[r.ID] = &cp
+	s.runs[r.ID] = cloneRun(r)
 	return nil
 }
 
@@ -196,8 +185,7 @@ func (s *InMemoryStore) ListRuns(_ context.Context, missionID string) ([]*Run, e
 	var out []*Run
 	for _, r := range s.runs {
 		if r.MissionID == missionID {
-			cp := *r
-			out = append(out, &cp)
+			out = append(out, cloneRun(r))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -217,9 +205,14 @@ func (s *InMemoryStore) AppendEvent(_ context.Context, e *Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextEventID++
-	e.ID = s.nextEventID
-	cp := *e
-	s.events = append(s.events, &cp)
+	cp := cloneEvent(e)
+	cp.ID = s.nextEventID
+	if cp.SchemaVersion == 0 {
+		cp.SchemaVersion = defaultEventSchemaVersion
+	}
+	e.ID = cp.ID
+	e.SchemaVersion = cp.SchemaVersion
+	s.events = append(s.events, cp)
 	return nil
 }
 
@@ -229,8 +222,7 @@ func (s *InMemoryStore) ListEvents(_ context.Context, missionID string, limit in
 	var out []*Event
 	for _, e := range s.events {
 		if e.MissionID == missionID {
-			cp := *e
-			out = append(out, &cp)
+			out = append(out, cloneEvent(e))
 		}
 	}
 	if limit > 0 && len(out) > limit {
@@ -242,8 +234,7 @@ func (s *InMemoryStore) ListEvents(_ context.Context, missionID string, limit in
 func (s *InMemoryStore) CreateArtifact(_ context.Context, a *Artifact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cp := *a
-	s.artifacts = append(s.artifacts, &cp)
+	s.artifacts = append(s.artifacts, cloneArtifact(a))
 	return nil
 }
 
@@ -253,8 +244,7 @@ func (s *InMemoryStore) ListArtifacts(_ context.Context, missionID string) ([]*A
 	var out []*Artifact
 	for _, a := range s.artifacts {
 		if a.MissionID == missionID {
-			cp := *a
-			out = append(out, &cp)
+			out = append(out, cloneArtifact(a))
 		}
 	}
 	return out, nil
@@ -266,8 +256,7 @@ func (s *InMemoryStore) CreateApproval(_ context.Context, a *Approval) error {
 	if _, ok := s.approvals[a.ID]; ok {
 		return fmt.Errorf("approval %s already exists", a.ID)
 	}
-	cp := *a
-	s.approvals[a.ID] = &cp
+	s.approvals[a.ID] = cloneApproval(a)
 	return nil
 }
 
@@ -278,8 +267,7 @@ func (s *InMemoryStore) GetApproval(_ context.Context, id string) (*Approval, er
 	if !ok {
 		return nil, fmt.Errorf("approval %s not found", id)
 	}
-	cp := *a
-	return &cp, nil
+	return cloneApproval(a), nil
 }
 
 func (s *InMemoryStore) UpdateApproval(_ context.Context, a *Approval) error {
@@ -288,8 +276,7 @@ func (s *InMemoryStore) UpdateApproval(_ context.Context, a *Approval) error {
 	if _, ok := s.approvals[a.ID]; !ok {
 		return fmt.Errorf("approval %s not found", a.ID)
 	}
-	cp := *a
-	s.approvals[a.ID] = &cp
+	s.approvals[a.ID] = cloneApproval(a)
 	return nil
 }
 
@@ -299,8 +286,7 @@ func (s *InMemoryStore) ListApprovals(_ context.Context, missionID string) ([]*A
 	var out []*Approval
 	for _, a := range s.approvals {
 		if a.MissionID == missionID {
-			cp := *a
-			out = append(out, &cp)
+			out = append(out, cloneApproval(a))
 		}
 	}
 	return out, nil
@@ -313,7 +299,7 @@ func (s *InMemoryStore) GetMissionSummary(_ context.Context, missionID string) (
 		s.mu.Unlock()
 		return nil, fmt.Errorf("mission %s not found", missionID)
 	}
-	mCopy := *m
+	mCopy := cloneMission(m)
 
 	var counts TaskCounts
 	for _, t := range s.tasks {
@@ -338,14 +324,14 @@ func (s *InMemoryStore) GetMissionSummary(_ context.Context, missionID string) (
 			counts.Done++
 		case TaskBlocked:
 			counts.Blocked++
-		case TaskFailed, TaskRejected:
+		case TaskFailed, TaskRejected, TaskSuperseded:
 			counts.Failed++
 		}
 	}
 
 	var activeRuns int
 	for _, r := range s.runs {
-		if r.MissionID == missionID && r.Status == RunRunning {
+		if r.MissionID == missionID && (r.Status == RunQueued || r.Status == RunRunning) {
 			activeRuns++
 		}
 	}
@@ -359,7 +345,7 @@ func (s *InMemoryStore) GetMissionSummary(_ context.Context, missionID string) (
 	s.mu.Unlock()
 
 	return &MissionSummary{
-		Mission:          &mCopy,
+		Mission:          mCopy,
 		TaskCounts:       counts,
 		ActiveRuns:       activeRuns,
 		PendingApprovals: pendingApprovals,
@@ -372,8 +358,7 @@ func (s *InMemoryStore) GetReadyTasks(_ context.Context, missionID string) ([]*T
 	var out []*Task
 	for _, t := range s.tasks {
 		if t.MissionID == missionID && t.Status == TaskReady {
-			cp := *t
-			out = append(out, &cp)
+			out = append(out, cloneTask(t))
 		}
 	}
 	return out, nil
@@ -385,8 +370,7 @@ func (s *InMemoryStore) GetTasksByStatus(_ context.Context, missionID string, st
 	var out []*Task
 	for _, t := range s.tasks {
 		if t.MissionID == missionID && t.Status == status {
-			cp := *t
-			out = append(out, &cp)
+			out = append(out, cloneTask(t))
 		}
 	}
 	return out, nil
@@ -398,8 +382,7 @@ func (s *InMemoryStore) GetRunsForTask(_ context.Context, taskID string) ([]*Run
 	var out []*Run
 	for _, r := range s.runs {
 		if r.TaskID == taskID {
-			cp := *r
-			out = append(out, &cp)
+			out = append(out, cloneRun(r))
 		}
 	}
 	return out, nil
