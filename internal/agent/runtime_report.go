@@ -169,15 +169,45 @@ func RenderRuntimeSummary(report RuntimeReport) string {
 
 func RenderRuntimePrompt(report RuntimeReport) string {
 	var b strings.Builder
-	b.WriteString("# Golem Runtime Profile\n\n")
-	b.WriteString("## Effective runtime\n")
-	writeBulletLines(&b, runtimeProfileLines(report))
-	b.WriteString("\n## Tool surfaces\n")
-	writeBulletLines(&b, toolSurfaceLines(report))
+	b.WriteString("# Runtime\n")
+	fmt.Fprintf(&b, "Model: %s\n", report.Model)
+	if report.Timeout != "" {
+		fmt.Fprintf(&b, "Timeout: %s\n", report.Timeout)
+	}
+	fmt.Fprintf(&b, "Git: %s", report.GitRepo)
+	if report.GitBranch != "" {
+		fmt.Fprintf(&b, " (%s)", report.GitBranch)
+	}
+	b.WriteString("\n")
+
+	// Compact tool list: only names, only enabled optional tools.
+	var tools []string
+	tools = append(tools, report.ToolSurfaces.RepoTools...)
+	tools = append(tools, report.ToolSurfaces.WorkflowTools...)
+	if report.ToolSurfaces.Delegate == "on" {
+		tools = append(tools, "delegate")
+	}
+	if report.ToolSurfaces.ExecuteCode == "on" {
+		tools = append(tools, "execute_code")
+	}
+	if report.ToolSurfaces.WebSearch == "on" {
+		tools = append(tools, "web_search")
+	}
+	if report.ToolSurfaces.FetchURL == "on" {
+		tools = append(tools, "fetch_url")
+	}
+	if report.ToolSurfaces.AskUser == "on" {
+		tools = append(tools, "ask_user")
+	}
+	fmt.Fprintf(&b, "Tools: %s\n", strings.Join(tools, ", "))
+
+	if report.PermissionMode != "" {
+		fmt.Fprintf(&b, "Permissions: %s\n", report.PermissionMode)
+	}
+
 	writeValidationSections(&b, report.Validation, "## Validation errors", "## Validation warnings")
 	if report.RuntimeError != "" {
-		b.WriteString("\n## Runtime note\n")
-		fmt.Fprintf(&b, "- %s\n", report.RuntimeError)
+		fmt.Fprintf(&b, "Runtime error: %s\n", report.RuntimeError)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

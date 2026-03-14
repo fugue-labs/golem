@@ -206,14 +206,11 @@ func buildRuntimePrompt(cfg *config.Config, runtime RuntimeState, activeSkills [
 	}
 
 	if len(activeSkills) > 0 {
-		b.WriteString("\n## Active skills\n")
-		for _, s := range activeSkills {
-			fmt.Fprintf(&b, "\n### %s\n", s.Name)
-			if content := strings.TrimSpace(s.Content); content != "" {
-				b.WriteString(content)
-				b.WriteString("\n")
-			}
+		names := make([]string, len(activeSkills))
+		for i, s := range activeSkills {
+			names[i] = s.Name
 		}
+		fmt.Fprintf(&b, "\nSkills: %s\n", strings.Join(names, ", "))
 	}
 	return b.String()
 }
