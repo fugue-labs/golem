@@ -239,6 +239,48 @@ func TestDispatchPendingReviews_NotRunning(t *testing.T) {
 	}
 }
 
+func TestDispatchPendingReviews_MissingWorktree(t *testing.T) {
+	store := newReviewMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning, BaseBranch: "main"}
+
+	task := &Task{ID: "t1", MissionID: "m1", Status: TaskAwaitingReview}
+	store.tasks["t1"] = task
+	store.tasksByStatus[TaskAwaitingReview] = []*Task{task}
+
+	// Worker run with a non-existent worktree path.
+	workerRun := &Run{
+		ID:           "r_worker",
+		MissionID:    "m1",
+		TaskID:       "t1",
+		Mode:         RunModeWorker,
+		Status:       RunSucceeded,
+		WorktreePath: "/tmp/nonexistent-worktree-path-reviewer-test",
+	}
+	store.runsByTask["t1"] = []*Run{workerRun}
+
+	launcher := NewReviewLauncher(store)
+	specs, err := launcher.DispatchPendingReviews(context.Background(), "m1", "/tmp/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should get 0 specs because provision fails due to missing worktree.
+	if len(specs) != 0 {
+		t.Fatalf("expected 0 specs (worktree missing), got %d", len(specs))
+	}
+
+	// Should have a provision_failed event.
+	found := false
+	for _, e := range store.events {
+		if e.Type == "review.provision_failed" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected review.provision_failed event for missing worktree")
+	}
+}
+
 func TestBuildReviewPrompt(t *testing.T) {
 	task := &Task{
 		ID:        "t1",

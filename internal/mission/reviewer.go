@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -94,6 +95,11 @@ func (rl *ReviewLauncher) provisionReview(ctx context.Context, m *Mission, task 
 	workerRun, err := rl.lastSucceededWorkerRun(ctx, task.ID)
 	if err != nil {
 		return nil, fmt.Errorf("find worker run for %s: %w", task.ID, err)
+	}
+
+	// Validate worktree path exists before proceeding.
+	if _, err := os.Stat(workerRun.WorktreePath); err != nil {
+		return nil, fmt.Errorf("worktree missing for task %s: %w", task.ID, err)
 	}
 
 	// Get the diff.
