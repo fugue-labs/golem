@@ -22,9 +22,9 @@ func (m *Model) missionController() *mission.Controller {
 		return m.missionCtrl
 	}
 
-	// Prefer the durable Dolt-backed store when available, but fall back to an
-	// in-memory store so local/e2e sessions can still use mission commands.
-	store, err := mission.OpenDoltStore(mission.ResolveDSN())
+	// Use a local SQLite database for mission state — no external server needed.
+	// Falls back to in-memory store if SQLite fails (e.g. read-only filesystem).
+	store, err := mission.OpenSQLiteStore(mission.ResolveSQLitePath())
 	if err != nil {
 		m.missionCtrl = mission.NewController(mission.NewInMemoryStore())
 		return m.missionCtrl

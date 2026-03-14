@@ -15,6 +15,7 @@ require (
 	github.com/fugue-labs/gollem v0.1.10-0.20260309050238-84dc0900d269
 	github.com/fugue-labs/monty-go v0.0.0-20260221005309-f9f147b4245f
 	github.com/go-sql-driver/mysql v1.9.3
+	modernc.org/sqlite v1.46.1
 )
 
 require (
@@ -58,7 +59,6 @@ require (
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.46.1 // indirect
 )
 
 replace github.com/fugue-labs/gollem => ../gollem

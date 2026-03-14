@@ -90,7 +90,7 @@ func (m *Model) initStore() tea.Cmd {
 		if m.ctrl != nil {
 			return m.doRefresh()
 		}
-		store, err := mission.OpenDoltStore(mission.ResolveDSN())
+		store, err := mission.OpenSQLiteStore(mission.ResolveSQLitePath())
 		if err != nil {
 			return refreshDoneMsg{err: fmt.Errorf("open mission store: %w", err)}
 		}
