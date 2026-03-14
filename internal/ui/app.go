@@ -354,7 +354,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.SetWidth(msg.Width - 4)
+		m.input.SetWidth(max(1, msg.Width-4))
 
 		// Fallback: initialize styles if BackgroundColorMsg never arrived
 		// (e.g., in PTY environments that don't support OSC 11 queries).
@@ -1208,14 +1208,14 @@ func (m *Model) View() tea.View {
 		return tea.NewView("Loading...")
 	}
 
-	var sections []string
+	header := m.renderHeader()
+	input := m.renderInput()
+	status := m.renderStatusBar()
 
-	// Header.
-	sections = append(sections, m.renderHeader())
-
-	// Chat messages area (header=2 + input + status=1 + padding).
-	inputHeight := m.currentInputHeight()
-	chatHeight := m.height - 3 - inputHeight
+	headerHeight := lipgloss.Height(header)
+	inputHeight := lipgloss.Height(input)
+	statusHeight := lipgloss.Height(status)
+	chatHeight := m.height - headerHeight - inputHeight - statusHeight
 	if chatHeight < 1 {
 		chatHeight = 1
 	}
@@ -1224,9 +1224,9 @@ func (m *Model) View() tea.View {
 	const minWidthForPanel = 110
 	showPanel := m.hasWorkflowPanel() && m.width >= minWidthForPanel
 
-	chatWidth := m.width
+	chatWidth := max(1, m.width)
 	if showPanel {
-		chatWidth = m.width - panelWidth
+		chatWidth = max(1, m.width-panelWidth)
 	}
 
 	chatSection := m.renderChat(chatHeight, chatWidth)
@@ -1247,14 +1247,8 @@ func (m *Model) View() tea.View {
 		}
 		chatSection = strings.Join(combined, "\n")
 	}
-	sections = append(sections, chatSection)
 
-	// Input area — always show textarea so user can type while agent works.
-	sections = append(sections, m.renderInput())
-
-	// Status bar.
-	sections = append(sections, m.renderStatusBar())
-
+	sections := []string{header, chatSection, input, status}
 	v := tea.NewView(strings.Join(sections, "\n"))
 	v.AltScreen = true
 	return v
@@ -1477,7 +1471,7 @@ func (m *Model) renderChat(height, width int) string {
 }
 
 func (m *Model) renderWelcome(height, width int) string {
-	bodyWidth := max(28, width-4)
+	bodyWidth := max(18, width-4)
 	var lines []string
 	lines = append(lines, "")
 	lines = append(lines, m.sty.StatusBar.Accent.Render(" GOLEM ")+" "+m.sty.Bold.Render("Ship changes with more confidence"))
@@ -1515,9 +1509,13 @@ func (m *Model) renderInput() string {
 }
 
 func (m *Model) renderInputBusyOrIdle() string {
+	bodyWidth := m.width
 	prompt := m.sty.Input.Prompt.Render(" " + styles.PromptIcon + " ")
 	body := prompt + m.input.View()
-	box := m.sty.Input.Focused.Width(max(24, m.width)).Render(body)
+	box := m.sty.Input.Focused.Render(body)
+	if bodyWidth > 0 {
+		box = m.sty.Input.Focused.Width(bodyWidth).Render(body)
+	}
 	if !m.busy {
 		return box
 	}
@@ -1528,7 +1526,7 @@ func (m *Model) renderInputBusyOrIdle() string {
 	if m.activeToolName != "" {
 		activity = "Running " + m.activeToolName
 		if m.activeToolArgs != "" {
-			activity += " " + truncateText(m.activeToolArgs, 40)
+			activity += " " + truncateText(m.activeToolArgs, max(8, bodyWidth-24))
 		}
 	}
 	meta := []string{activity, elapsed.String()}
@@ -1537,6 +1535,9 @@ func (m *Model) renderInputBusyOrIdle() string {
 	}
 	meta = append(meta, "type and press Enter to steer", "Esc cancels")
 	status := m.sty.Muted.Render("  " + sp + " " + strings.Join(meta, " · "))
+	if bodyWidth > 0 {
+		status = m.sty.Muted.Width(bodyWidth).Render("  " + sp + " " + strings.Join(meta, " · "))
+	}
 	return status + "\n" + box
 }
 
