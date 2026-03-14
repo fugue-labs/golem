@@ -122,18 +122,19 @@ func renderUserMessage(msg *Message, sty *styles.Styles, width int) string {
 	}
 
 	header := "  " + sty.Chat.UserBorder.Render(styles.PromptIcon) + " " + sty.Chat.UserLabel.Render("You")
-	body := lipgloss.NewStyle().Width(max(16, width-8)).Render(content)
-	return header + "\n" + renderGuidedBlock(body, "    ", sty.Chat.UserBorder.Render("│"))
+	body := lipgloss.NewStyle().Width(max(16, width-6)).Render(content)
+	return header + "\n" + renderGuidedBlock(body, "    ", sty.Chat.UserBorder.Render("│"), width)
 }
 
 func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string {
-	if strings.TrimSpace(msg.Content) == "" {
+	content := strings.TrimSpace(msg.Content)
+	if content == "" {
 		return ""
 	}
 
 	header := "  " + sty.Chat.AssistantBorder.Render(styles.ModelIcon) + " " + sty.Chat.AssistantLabel.Render("Assistant")
-	body := common.RenderMarkdown(sty, msg.Content, width-8)
-	return header + "\n" + renderGuidedBlock(body, "    ", sty.Chat.AssistantBorder.Render("│"))
+	body := common.RenderMarkdown(sty, content, max(20, width-6))
+	return header + "\n" + renderGuidedBlock(body, "    ", sty.Chat.AssistantBorder.Render("│"), width)
 }
 
 func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
@@ -154,10 +155,13 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 
 	var sections []string
 	if detail := renderToolInvocation(msg, sty, width); detail != "" {
-		sections = append(sections, sty.Tool.OutputMeta.Render("call")+" "+detail)
+		sections = append(sections, sty.Tool.OutputMeta.Render("call")+"  "+detail)
 	}
 	if shouldRenderToolResult(msg) {
 		body := renderToolCallResult(msg, sty, width)
+		if msg.Status == ToolError {
+			body = renderToolErrorOutput(msg, sty, width)
+		}
 		if body != "" {
 			if len(sections) > 0 {
 				sections = append(sections, "")
@@ -168,7 +172,7 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 	if len(sections) == 0 {
 		return header
 	}
-	return header + "\n" + renderGuidedBlock(strings.Join(sections, "\n"), "    ", sty.Tool.OutputBorder.Render("│"))
+	return header + "\n" + renderGuidedBlock(strings.Join(sections, "\n"), "    ", sty.Tool.OutputBorder.Render("│"), width)
 }
 
 func renderToolInvocation(msg *Message, sty *styles.Styles, width int) string {
@@ -252,11 +256,14 @@ func renderIndentedLines(content, firstPrefix, nextPrefix string) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderGuidedBlock(content, firstIndent, guide string) string {
+func renderGuidedBlock(content, firstIndent, guide string, width int) string {
 	if content == "" {
 		return ""
 	}
-	return renderIndentedLines(content, firstIndent+guide+" ", firstIndent+guide+" ")
+	prefix := firstIndent + guide + " "
+	contentWidth := max(1, width-lipgloss.Width(stripANSI(prefix)))
+	content = common.ClampANSI(content, contentWidth)
+	return renderIndentedLines(content, prefix, prefix)
 }
 
 func renderMetaBadge(sty *styles.Styles, label string) string {
@@ -377,6 +384,22 @@ func findToolCallFor(msg *Message, allMessages []*Message) *Message {
 	return nil
 }
 
+func renderToolErrorOutput(msg *Message, sty *styles.Styles, width int) string {
+	content := strings.TrimRight(msg.Content, "\n")
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+
+	switch msg.ToolName {
+	case "bash":
+		return renderBashResult(content, sty, width)
+	case "view", "grep", "glob", "ls":
+		return renderPlainResult(content, sty, width)
+	default:
+		return renderPlainResult(content, sty, width)
+	}
+}
+
 func renderToolResult(msg *Message, sty *styles.Styles, width int, allMessages []*Message) string {
 	// Results are now merged into their tool call messages and rendered
 	// inline by renderToolCall. KindToolResult messages should be empty.
@@ -400,6 +423,9 @@ func shouldRenderToolResult(msg *Message) bool {
 	}
 	if strings.TrimSpace(msg.Content) != "" {
 		return true
+	}
+	if msg.Status == ToolError {
+		return false
 	}
 	switch msg.ToolName {
 	case "view", "write", "bash", "grep", "glob", "ls":
@@ -451,19 +477,23 @@ func renderViewResult(content string, toolCall *Message, sty *styles.Styles, wid
 		}
 	}
 
-	highlightedLines := strings.Split(common.SyntaxHighlight(strings.Join(codeLines, "\n"), fileName), "\n")
+	highlightedLines := common.SyntaxHighlightLines(strings.Join(codeLines, "\n"), fileName)
+	if len(highlightedLines) == 0 {
+		highlightedLines = codeLines
+	}
 	meta := joinNonEmpty(fileName, fmt.Sprintf("%d lines", totalLines))
 	if truncated {
 		meta = joinNonEmpty(meta, fmt.Sprintf("showing first %d", len(rawLines)))
 	}
 
 	rendered := []string{renderResultHeader(sty, "file", meta)}
+	available := max(0, width-18)
+	highlightedLines = common.ClampANSILines(highlightedLines, available)
 	for i, hline := range highlightedLines {
 		num := sty.Tool.DiffContext.Render("     │ ")
 		if i < len(lineNums) && lineNums[i] != "" {
 			num = sty.Tool.DiffContext.Render(fmt.Sprintf("%4s│ ", lineNums[i]))
 		}
-		hline = ansi.Truncate(hline, max(0, width-18), "")
 		rendered = append(rendered, num+hline)
 	}
 	if truncated {
@@ -491,9 +521,10 @@ func renderBashResult(content string, sty *styles.Styles, width int) string {
 		meta = joinNonEmpty(meta, fmt.Sprintf("showing last %d", len(lines)))
 	}
 	rendered := []string{renderResultHeader(sty, "shell output", meta)}
-	for _, line := range lines {
+	available := max(0, width-14)
+	for _, line := range common.ClampANSILines(lines, available) {
 		glyph := sty.Tool.ContentLine.Render("│ ")
-		trimmed := strings.TrimSpace(line)
+		trimmed := strings.TrimSpace(stripANSI(line))
 		switch {
 		case strings.HasPrefix(trimmed, "$") || strings.HasPrefix(trimmed, ">"):
 			glyph = sty.Tool.CommandPrompt.Render("$ ")
@@ -502,7 +533,7 @@ func renderBashResult(content string, sty *styles.Styles, width int) string {
 		case strings.HasPrefix(strings.ToLower(trimmed), "warning"):
 			glyph = sty.Tool.IconPending.Render("! ")
 		}
-		rendered = append(rendered, glyph+ansi.Truncate(line, max(0, width-14), "..."))
+		rendered = append(rendered, glyph+line)
 	}
 	return strings.Join(rendered, "\n")
 }
@@ -567,13 +598,14 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 	currentFile := ""
 	meta := joinNonEmpty(footer, fmt.Sprintf("%d hits", totalMatches))
 	rendered := []string{renderResultHeader(sty, "search results", meta)}
+	metaWidth := max(0, width-12)
 
 	for _, gl := range parsed {
 		if gl.filePath == "" && gl.code == "" {
 			continue
 		}
 		if gl.filePath == "" {
-			rendered = append(rendered, sty.Tool.OutputMeta.Render(ansi.Truncate(gl.code, max(0, width-12), "...")))
+			rendered = append(rendered, sty.Tool.OutputMeta.Render(common.ClampANSI(gl.code, metaWidth)))
 			continue
 		}
 		if shownMatches >= maxMatches {
@@ -586,7 +618,7 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 		}
 		if relPath != currentFile {
 			currentFile = relPath
-			rendered = append(rendered, sty.Tool.NameNormal.Render(relPath))
+			rendered = append(rendered, sty.Tool.NameNormal.Render(common.ClampANSI(relPath, max(0, width-6))))
 		}
 
 		marker := sty.Tool.ContentLine.Render("  ")
@@ -596,7 +628,7 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 		loc := sty.Tool.DiffContext.Render("L" + gl.lineNum)
 		code := strings.TrimRight(common.SyntaxHighlight(gl.code, gl.filePath), "\n")
 		available := max(0, width-lipgloss.Width(marker)-lipgloss.Width(loc)-14)
-		code = ansi.Truncate(code, available, "...")
+		code = common.ClampANSI(code, available)
 		rendered = append(rendered, marker+loc+"  "+code)
 		shownMatches++
 	}

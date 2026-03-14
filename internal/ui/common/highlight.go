@@ -9,6 +9,7 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	chromastyles "github.com/alecthomas/chroma/v2/styles"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // SyntaxHighlight applies syntax highlighting to source code.
@@ -80,6 +81,32 @@ func SyntaxHighlightLines(source, fileName string) []string {
 		lines = lines[:len(rawLines)]
 	}
 	return lines
+}
+
+// ClampANSI truncates each rendered line to the provided visible width while
+// preserving ANSI escape sequences.
+func ClampANSI(text string, width int) string {
+	if text == "" {
+		return ""
+	}
+	return strings.Join(ClampANSILines(strings.Split(text, "\n"), width), "\n")
+}
+
+// ClampANSILines truncates each rendered line to the provided visible width
+// while preserving ANSI escape sequences.
+func ClampANSILines(lines []string, width int) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	clamped := make([]string, len(lines))
+	for i, line := range lines {
+		if width <= 0 {
+			clamped[i] = ""
+			continue
+		}
+		clamped[i] = ansi.Truncate(line, width, "")
+	}
+	return clamped
 }
 
 func normalizeHighlightedSource(source string) string {

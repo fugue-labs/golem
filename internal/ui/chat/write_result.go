@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/x/ansi"
 	"github.com/fugue-labs/golem/internal/ui/common"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
@@ -57,8 +56,10 @@ func renderWriteResult(content string, toolCall *Message, sty *styles.Styles, wi
 	if len(highlighted) == 0 {
 		highlighted = preview
 	}
-	for _, line := range highlighted {
-		rendered = append(rendered, sty.Tool.DiffAdd.Render("+ ")+ansi.Truncate(line, max(0, width-14), "..."))
+	highlighted = common.ClampANSILines(highlighted, max(0, width-18))
+	for i, line := range highlighted {
+		gutter := sty.Tool.DiffContext.Render(fmt.Sprintf("%4d│ ", i+1))
+		rendered = append(rendered, gutter+sty.Tool.DiffAdd.Render("+")+" "+line)
 	}
 	if truncated {
 		rendered = append(rendered, sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more lines)", len(codeLines)-maxLines)))

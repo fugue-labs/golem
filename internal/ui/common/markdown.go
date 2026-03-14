@@ -21,11 +21,8 @@ func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 	}
 
 	rendererWidth := width
-	switch {
-	case strings.Contains(content, markdownCodeFence):
-		rendererWidth = max(width+4, width)
-	case hasMarkdownTable(content):
-		rendererWidth = max(width+8, width)
+	if strings.Contains(content, markdownCodeFence) || hasMarkdownTable(content) {
+		rendererWidth = max(rendererWidth, width)
 	}
 
 	r, err := glamour.NewTermRenderer(
@@ -36,13 +33,13 @@ func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 		glamour.WithPreservedNewLines(),
 	)
 	if err != nil {
-		return content
+		return ClampANSI(content, width)
 	}
 	result, err := r.Render(content)
 	if err != nil {
-		return content
+		return ClampANSI(content, width)
 	}
-	return normalizeRenderedMarkdown(result)
+	return clampRenderedMarkdown(result, width)
 }
 
 func hasMarkdownTable(content string) bool {
@@ -56,6 +53,14 @@ func hasMarkdownTable(content string) bool {
 		}
 	}
 	return false
+}
+
+func clampRenderedMarkdown(result string, width int) string {
+	result = normalizeRenderedMarkdown(result)
+	if result == "" {
+		return ""
+	}
+	return ClampANSI(result, width)
 }
 
 func normalizeRenderedMarkdown(result string) string {
