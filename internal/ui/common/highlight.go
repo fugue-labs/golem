@@ -14,9 +14,7 @@ import (
 // SyntaxHighlight applies syntax highlighting to source code.
 // fileName is used to detect the language; falls back to content analysis.
 func SyntaxHighlight(source, fileName string) string {
-	source = strings.ReplaceAll(source, "\r\n", "\n")
-	source = strings.ReplaceAll(source, "\t", "    ")
-	source = strings.TrimRight(source, "\n")
+	source = normalizeHighlightedSource(source)
 	if strings.TrimSpace(source) == "" {
 		return source
 	}
@@ -58,4 +56,34 @@ func SyntaxHighlight(source, fileName string) string {
 	}
 
 	return strings.TrimRight(buf.String(), "\n")
+}
+
+// SyntaxHighlightLines applies syntax highlighting while preserving the
+// original logical line count so callers can render stable gutters.
+func SyntaxHighlightLines(source, fileName string) []string {
+	source = normalizeHighlightedSource(source)
+	if source == "" {
+		return nil
+	}
+
+	rawLines := strings.Split(source, "\n")
+	highlighted := SyntaxHighlight(source, fileName)
+	if highlighted == "" {
+		return rawLines
+	}
+
+	lines := strings.Split(highlighted, "\n")
+	for len(lines) < len(rawLines) {
+		lines = append(lines, "")
+	}
+	if len(lines) > len(rawLines) {
+		lines = lines[:len(rawLines)]
+	}
+	return lines
+}
+
+func normalizeHighlightedSource(source string) string {
+	source = strings.ReplaceAll(source, "\r\n", "\n")
+	source = strings.ReplaceAll(source, "\t", "    ")
+	return strings.TrimRight(source, "\n")
 }

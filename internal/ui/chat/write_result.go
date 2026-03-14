@@ -24,14 +24,20 @@ func renderWriteResult(content string, toolCall *Message, sty *styles.Styles, wi
 	if path == "" {
 		path = formatDisplayPath(args.FilePath)
 	}
-	codeLines := strings.Split(strings.TrimRight(args.Content, "\n"), "\n")
-	if len(codeLines) == 1 && codeLines[0] == "" {
-		codeLines = nil
+
+	trimmedContent := strings.TrimRight(args.Content, "\n")
+	var codeLines []string
+	if trimmedContent != "" {
+		codeLines = strings.Split(trimmedContent, "\n")
 	}
 
-	summary := content
+	summary := strings.TrimSpace(content)
 	if summary == "" {
-		summary = fmt.Sprintf("created %d lines", len(codeLines))
+		if len(codeLines) == 0 {
+			summary = "wrote empty file"
+		} else {
+			summary = fmt.Sprintf("wrote %d lines", len(codeLines))
+		}
 	}
 
 	rendered := []string{renderResultHeader(sty, "write", joinNonEmpty(path, summary))}
@@ -41,19 +47,18 @@ func renderWriteResult(content string, toolCall *Message, sty *styles.Styles, wi
 	}
 
 	preview := codeLines
-	maxLines := 8
+	maxLines := 10
 	truncated := len(preview) > maxLines
 	if truncated {
 		preview = preview[:maxLines]
 	}
 
-	highlighted := strings.Split(common.SyntaxHighlight(strings.Join(preview, "\n"), path), "\n")
-	for i, line := range highlighted {
-		prefix := sty.Tool.DiffAdd.Render("+ ")
-		if i >= len(preview) {
-			prefix = sty.Tool.ContentLine.Render("  ")
-		}
-		rendered = append(rendered, prefix+ansi.Truncate(line, max(0, width-14), "..."))
+	highlighted := common.SyntaxHighlightLines(strings.Join(preview, "\n"), path)
+	if len(highlighted) == 0 {
+		highlighted = preview
+	}
+	for _, line := range highlighted {
+		rendered = append(rendered, sty.Tool.DiffAdd.Render("+ ")+ansi.Truncate(line, max(0, width-14), "..."))
 	}
 	if truncated {
 		rendered = append(rendered, sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more lines)", len(codeLines)-maxLines)))

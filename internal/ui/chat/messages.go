@@ -154,11 +154,14 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 
 	var sections []string
 	if detail := renderToolInvocation(msg, sty, width); detail != "" {
-		sections = append(sections, detail)
+		sections = append(sections, sty.Tool.OutputMeta.Render("call")+" "+detail)
 	}
-	if msg.Content != "" {
+	if shouldRenderToolResult(msg) {
 		body := renderToolCallResult(msg, sty, width)
 		if body != "" {
+			if len(sections) > 0 {
+				sections = append(sections, "")
+			}
 			sections = append(sections, body)
 		}
 	}
@@ -190,7 +193,7 @@ func renderToolInvocation(msg *Message, sty *styles.Styles, width int) string {
 	if args := strings.TrimSpace(msg.ToolArgs); args != "" {
 		return sty.Tool.ParamMain.Render(ansi.Truncate(args, available, "..."))
 	}
-	return ""
+	return sty.Tool.StateWaiting.Render("waiting for input")
 }
 
 func extractPrimaryToolPath(msg *Message) string {
@@ -269,7 +272,7 @@ func renderResultHeader(sty *styles.Styles, label, meta string) string {
 	if meta != "" {
 		line += " " + renderMetaBadge(sty, meta)
 	}
-	return "  " + line
+	return line
 }
 
 func formatDisplayPath(path string) string {
@@ -378,10 +381,32 @@ func renderToolResult(msg *Message, sty *styles.Styles, width int, allMessages [
 	// Results are now merged into their tool call messages and rendered
 	// inline by renderToolCall. KindToolResult messages should be empty.
 	// Render as plain result only if orphaned content somehow exists.
-	if msg.Content == "" {
+	_ = allMessages
+	if !shouldRenderToolResult(msg) {
 		return ""
 	}
+	if msg.ToolName != "" {
+		return renderToolCallResult(msg, sty, width)
+	}
 	return renderPlainResult(msg.Content, sty, width)
+}
+
+func shouldRenderToolResult(msg *Message) bool {
+	if msg == nil {
+		return false
+	}
+	if msg.Status != ToolSuccess && msg.Status != ToolError {
+		return false
+	}
+	if strings.TrimSpace(msg.Content) != "" {
+		return true
+	}
+	switch msg.ToolName {
+	case "view", "write", "bash", "grep", "glob", "ls":
+		return true
+	default:
+		return false
+	}
 }
 
 // renderViewResult renders file content with syntax highlighting.

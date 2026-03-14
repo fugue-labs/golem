@@ -21,8 +21,11 @@ func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 	}
 
 	rendererWidth := width
-	if strings.Contains(content, markdownCodeFence) {
-		rendererWidth = max(width+2, width)
+	switch {
+	case strings.Contains(content, markdownCodeFence):
+		rendererWidth = max(width+4, width)
+	case hasMarkdownTable(content):
+		rendererWidth = max(width+8, width)
 	}
 
 	r, err := glamour.NewTermRenderer(
@@ -39,5 +42,27 @@ func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 	if err != nil {
 		return content
 	}
-	return strings.TrimSuffix(strings.TrimRight(result, "\n"), "\n")
+	return normalizeRenderedMarkdown(result)
+}
+
+func hasMarkdownTable(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.Count(trimmed, "|") < 2 {
+			continue
+		}
+		if strings.Contains(trimmed, "---") || strings.HasPrefix(trimmed, "|") {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRenderedMarkdown(result string) string {
+	result = strings.ReplaceAll(result, "\r\n", "\n")
+	result = strings.TrimRight(result, "\n")
+	for strings.Contains(result, "\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
+	}
+	return result
 }
