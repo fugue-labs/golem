@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -170,5 +172,46 @@ func TestAgentDoneCapturesRunSummary(t *testing.T) {
 	}
 	if got := len(model.lastRunSummary.Transcript); got != 1 {
 		t.Fatalf("transcript entries=%d, want 1", got)
+	}
+}
+
+func TestIsContextCanceled(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"direct context.Canceled", context.Canceled, true},
+		{"wrapped with %w", fmt.Errorf("outer: %w", context.Canceled), true},
+		{"double wrapped with %w", fmt.Errorf("model request failed: %w", fmt.Errorf("openai: SSE read error: %w", context.Canceled)), true},
+		{"wrapped with %v (broken chain)", fmt.Errorf("openai: SSE read error: %v", context.Canceled), true},
+		{"SSE error chain with %v", fmt.Errorf("model request failed: %w", fmt.Errorf("openai: SSE read error: %v", context.Canceled)), true},
+		{"unrelated error", errors.New("connection refused"), false},
+		{"deadline exceeded", context.DeadlineExceeded, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isContextCanceled(tt.err); got != tt.want {
+				t.Fatalf("isContextCanceled(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentDoneWrappedCancelNotShownAsError(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", APIKey: "test-key"})
+	m.runID = 10
+	m.busy = true
+
+	// Simulate an error where context.Canceled is wrapped with %v,
+	// breaking errors.Is but preserving the "context canceled" string.
+	wrappedErr := fmt.Errorf("model request failed: openai: SSE read error: %v", context.Canceled)
+	updated, _ := m.Update(agentDoneMsg{runID: 10, err: wrappedErr})
+	model := updated.(*Model)
+
+	for _, msg := range model.messages {
+		if msg.Kind == chat.KindError {
+			t.Fatalf("context cancel with broken wrapping shown as error: %q", msg.Content)
+		}
 	}
 }
