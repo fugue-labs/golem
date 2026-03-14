@@ -1866,256 +1866,171 @@ Mission execution must compose with existing workflow proofing:
 - verification results should feed the existing verification UI concepts
 - mission status should integrate with the current workflow panel rather than invent a second unrelated execution UI
 
-## 21.4 Core Go interface contracts
+## 21.4 Verified current Gollem API boundary
 
-The design should use **interfaces at true subsystem boundaries** and keep concrete orchestration types concrete.
-
-Required interface boundaries:
+This repository currently depends on `github.com/fugue-labs/gollem` via `go.mod` with:
 
 ```go
-type MissionStore interface {
-    CreateMission(ctx context.Context, m Mission) (Mission, error)
-    GetMission(ctx context.Context, missionID string) (Mission, error)
-    SavePlan(ctx context.Context, missionID string, plan PlanSnapshot) error
-    LeaseReadyTasks(ctx context.Context, missionID string, req LeaseRequest) ([]TaskLease, error)
-    HeartbeatRun(ctx context.Context, runID string, at time.Time) error
-    CompleteRun(ctx context.Context, result RunResult) error
-    CreateApproval(ctx context.Context, req ApprovalRequest) (Approval, error)
-    ResolveApproval(ctx context.Context, decision ApprovalDecision) error
-    AppendEvent(ctx context.Context, evt Event) error
-    RecordArtifact(ctx context.Context, a ArtifactRecord) error
-}
-
-type Planner interface {
-    InitialPlan(ctx context.Context, req InitialPlanRequest) (PlanDraft, error)
-    Replan(ctx context.Context, req ReplanRequest) (PlanDraft, error)
-}
-
-type RoleRunner interface {
-    Run(ctx context.Context, spec RunSpec) (RunResult, error)
-}
-
-type IntegrationEngine interface {
-    ApplyAcceptedTask(ctx context.Context, req IntegrationRequest) (IntegrationResult, error)
-}
-
-type WorktreeManager interface {
-    Create(ctx context.Context, spec WorktreeSpec) (WorktreeHandle, error)
-    Cleanup(ctx context.Context, handle WorktreeHandle) error
-}
+replace github.com/fugue-labs/gollem => ../gollem
 ```
 
-## 21.4.1 Core Go data types
+For this investigation, the local checkout available for that replace target was verified at `/Users/trevor/ws/gollem` on commit `adb6610b3d3792b4be28d2f1a0acfedf3907f8f9` (branch `codex/runtime-event-normalization`). That checkout also had uncommitted branch-local changes, so this section separates:
 
-The implementation should use explicit typed models rather than map-heavy orchestration code.
+- **verified current API**: committed symbols present at `adb6610b3d3792b4be28d2f1a0acfedf3907f8f9`
+- **proposed future/local-only API**: uncommitted additions visible only in that local checkout
 
-Illustrative shapes:
+### 21.4.1 Verified current reusable primitives in `ext/orchestrator`
 
-```go
-type Mission struct {
-    ID              string
-    Title           string
-    Goal            string
-    RepoRoot        string
-    BaseCommit      string
-    BaseBranch      string
-    Status          MissionStatus
-    Policy          MissionPolicy
-    Budget          MissionBudget
-    SuccessCriteria []string
-    IntegrationRef  string
-    CreatedAt       time.Time
-    UpdatedAt       time.Time
-    StartedAt       *time.Time
-    EndedAt         *time.Time
-    LastReplanAt    *time.Time
-}
+The committed reusable orchestration surface is `ext/orchestrator`, not the speculative `ext/mission` package described earlier in this PRD.
 
-type Task struct {
-    ID                 string
-    MissionID          string
-    Title              string
-    Kind               TaskKind
-    Objective          string
-    Status             TaskStatus
-    Priority           int
-    Scope              TaskScope
-    AcceptanceCriteria []string
-    ReviewRequirements []string
-    EstimatedEffort    string
-    RiskLevel          RiskLevel
-    AttemptCount       int
-    BlockingReason     string
-    CreatedAt          time.Time
-    UpdatedAt          time.Time
-}
+**Verified current API at `adb6610b3d3792b4be28d2f1a0acfedf3907f8f9`:**
 
-type Run struct {
-    ID             string
-    MissionID      string
-    TaskID         string
-    Mode           RunMode
-    Status         RunStatus
-    LeaseOwner     string
-    LeaseExpiresAt *time.Time
-    HeartbeatAt    *time.Time
-    WorktreePath   string
-    StartedAt      *time.Time
-    EndedAt        *time.Time
-    Summary        string
-    ErrorText      string
-}
+- task primitives: `orchestrator.Task`, `TaskStatus`, `RunRef`, `Lease`, `TaskResult`
+- task mutation/query types: `CreateTaskRequest`, `UpdateTaskRequest`, `TaskFilter`, `ClaimTaskRequest`, `ClaimedTask`
+- stores: `TaskStore`, `LeaseStore`, `CommandStore`, `ArtifactStore`
+- command primitives: `Command`, `CommandKind`, `CommandStatus`, `CreateCommandRequest`, `CommandFilter`, `ClaimCommandRequest`
+- artifact primitives: `Artifact`, `ArtifactSpec`, `CreateArtifactRequest`, `ArtifactFilter`
+- runner/scheduler primitives: `TaskOutcome`, `Runner`, `RunnerFunc`, `AgentRunner`, `NewAgentRunner`, `WithTaskPrompt`, `WithTaskRunOptions`, `WithTaskResultMetadata`, `WithTaskArtifacts`, `Scheduler`, `NewScheduler`, `DefaultSchedulerConfig`, `WithWorkerID`, `WithPollInterval`, `WithLeaseTTL`, `WithLeaseRenewInterval`, `WithMaxConcurrentRuns`, `WithSchedulerClock`, `WithSchedulerErrorHandler`
+- concrete lifecycle event structs published by the SQLite store through `core.EventBus`: `TaskCreatedEvent`, `TaskUpdatedEvent`, `TaskDeletedEvent`, `TaskClaimedEvent`, `LeaseRenewedEvent`, `LeaseReleasedEvent`, `TaskRequeuedEvent`, `TaskCompletedEvent`, `TaskFailedEvent`, `TaskCanceledEvent`, `ArtifactCreatedEvent`, `CommandCreatedEvent`, `CommandHandledEvent`
 
-type Approval struct {
-    ID           string
-    MissionID    string
-    TaskID       string
-    RunID        string
-    Kind         ApprovalKind
-    Status       ApprovalStatus
-    RequestJSON  []byte
-    ResponseJSON []byte
-    CreatedAt    time.Time
-    ResolvedAt   *time.Time
-}
+### 21.4.2 Verified current runtime events in `core`
 
-type Event struct {
-    ID        int64
-    MissionID string
-    TaskID    string
-    RunID     string
-    Type      EventType
-    Payload   []byte
-    CreatedAt time.Time
-}
-```
+The committed runtime event surface is in `core/runtime_events.go`:
 
-These types should live close to the mission primitives, not be spread across UI packages.
+- `core.RuntimeEvent`
+- `core.RunStartedEvent`
+- `core.RunCompletedEvent`
+- `core.ToolCalledEvent`
+- constructors `NewRunStartedEvent`, `NewRunCompletedEvent`, `NewToolCalledEvent`
 
-## 21.4.2 Controller-facing request/result types
+These are the only verified current normalized runtime lifecycle events in this Gollem revision.
 
-The orchestration core should use typed request/result structs for all boundary crossings.
+Important correction: `core.NormalizeHistory()` in `core/normalize.go` is **not** an orchestration-event normalizer. It only cleans `[]ModelMessage` history by removing orphaned tool returns, stripping stale images, and dropping empty requests. Any future runtime-event normalization layer must be introduced as a new API; it must not be documented as if `NormalizeHistory()` already does that job.
 
-Minimum expected shapes:
+### 21.4.3 Proposed future/local-only API in the inspected checkout
 
-```go
-type LeaseRequest struct {
-    MaxLeases        int
-    ReserveReviewers int
-    Now              time.Time
-}
+The inspected local Gollem checkout also contained uncommitted additions that are **not** part of the verified current API at `adb6610b3d3792b4be28d2f1a0acfedf3907f8f9`:
 
-type TaskLease struct {
-    Task          Task
-    Run           Run
-    LeaseToken    string
-    LeaseDeadline time.Time
-}
+- `ext/orchestrator/history.go` adding `EventKind`, `EventRecord`, `EventFilter`, and `EventStore`
+- `ext/orchestrator/sqlite/history.go` adding SQLite persistence/query support for durable orchestration history
+- corresponding uncommitted edits in `ext/orchestrator/types.go` / `ext/orchestrator/sqlite/store.go`
 
-type RunSpec struct {
-    Mission   Mission
-    Task      Task
-    Run       Run
-    Worktree  WorktreeHandle
-    TaskSpec  TaskSpecArtifact
-    Policy    MissionPolicy
-}
+Those additions are useful directionally, especially for replacing Golem's local append-only mission event table, but they should be treated as **proposed future API on a local branch** until they are committed upstream and referenced by this repository.
 
-type RunResult struct {
-    RunID         string
-    Status        RunStatus
-    Summary       string
-    ErrorText     string
-    ArtifactRefs  []ArtifactRecord
-    FollowupTasks []TaskDraft
-}
+## 21.5 Concrete mapping from current `internal/mission` to verified current Gollem primitives
 
-type IntegrationRequest struct {
-    Mission Mission
-    Task    Task
-    Run     Run
-}
+The alignment boundary should be drawn around reusable execution/orchestration mechanics, while mission product semantics remain in Golem until Gollem grows explicit first-class support.
 
-type IntegrationResult struct {
-    Result        string
-    AppliedCommit string
-    ArtifactRefs  []ArtifactRecord
-    FollowupTasks []TaskDraft
-}
-```
+| Current Golem concern | Current source | Verified current Gollem primitive | Boundary decision |
+|---|---|---|---|
+| Mission identity, goal, repo root, base commit/branch, budget, success criteria, mission lifecycle | `internal/mission.Mission` | No committed `ext/orchestrator` equivalent | Keep product-local in Golem for now |
+| Task durable identity | `internal/mission.Task.ID` | `orchestrator.Task.ID` | Align directly |
+| Task type/category | `internal/mission.Task.Kind` | `orchestrator.Task.Kind` | Align directly |
+| Task title | `internal/mission.Task.Title` | `orchestrator.Task.Subject` | Map directly |
+| Task detailed objective | `internal/mission.Task.Objective` | `orchestrator.Task.Description` | Map directly |
+| Task execution input/prompt seed | worker/reviewer prompt builders | `orchestrator.Task.Input` | Store normalized task run input here |
+| Task dependencies | `TaskDependency`, `Controller.resolveReadyTasks`, `Recovery.resolveReadyTasks` | `orchestrator.Task.Blocks` / `BlockedBy` | Align directly; dependency edges should stop living in a parallel bespoke model |
+| Task attempt accounting | `Task.AttemptCount` | `orchestrator.Task.Attempt`, `MaxAttempts`, `LastError`, `Retryable` | Align directly |
+| Task priority, writable/readable scope, acceptance criteria, review requirements, estimated effort, risk level | `internal/mission.Task` fields | `orchestrator.Task.Metadata` | Keep semantics product-local, but persist inside canonical orchestrator metadata rather than separate task schema fields |
+| Task ready state | `TaskReady` plus `GetReadyTasks` | derived from `orchestrator.TaskPending` plus dependency/lease checks in `TaskStore.ClaimReadyTask` | Make `ready` a derived product view, not a separate canonical state |
+| Task running/leased state | `TaskLeased`, `TaskRunning`, `Run.LeaseOwner`, `Run.LeaseExpires`, `Run.HeartbeatAt` | `orchestrator.TaskRunning`, `Lease`, `LeaseStore.RenewLease`, `LeaseStore.ReleaseLease`, `RunRef` | Move canonical leasing into Gollem |
+| Task awaiting review / accepted / integrated / done / rejected | `TaskAwaitingReview`, `TaskAccepted`, `TaskIntegrated`, `TaskDone`, `TaskRejected` | No committed first-class equivalents in `orchestrator.TaskStatus` | Keep as Golem product-level phase projection for now, backed by artifacts/metadata/approvals instead of a second lease model |
+| Worker/review/integration run identity | `internal/mission.Run` | `orchestrator.RunRef` for the active attempt | Align attempt identity, but keep phase-specific run history/product reporting local until Gollem exposes a richer run model |
+| Worker result summary, tool state, usage, structured output | `Run.Summary`, `Run.ErrorText`, worker artifacts | `orchestrator.TaskResult`, `TaskOutcome` | Align directly |
+| Review result payload | `ReviewResult` | `TaskResult.Output` and/or `ArtifactStore` body | Reuse Gollem result/artifact primitives; keep review policy local |
+| Integration result payload | `IntegrationResult` | `TaskResult.Output` and/or `ArtifactStore` body | Reuse Gollem artifact/result containers; keep integration policy local |
+| Artifacts | `internal/mission.Artifact` | `orchestrator.Artifact`, `ArtifactSpec`, `ArtifactStore` | Align storage primitive; map `Type -> Kind`, `RelativePath/sha256 -> Name/Metadata` |
+| Cancel/retry control flow | ad hoc controller/orchestrator transitions | `CommandCancelTask`, `CommandRetryTask`, `CommandStore` | Align task-scoped control commands to Gollem |
+| Mission pause/resume/approve gates | `Controller.PauseMission`, approvals, dashboard state | No committed mission-level command/approval primitive | Keep product-local in Golem |
+| Append-only mission event log | `internal/mission.Event`, `Store.AppendEvent` | committed event structs exist, but no committed durable `EventStore` at this revision | Keep durable event log local until upstream history API is committed |
+| Runtime execution lifecycle | ad hoc run/orchestrator events | `core.RuntimeEvent`, `RunStartedEvent`, `RunCompletedEvent`, `ToolCalledEvent` | Align directly for agent/tool observability |
 
-Using typed request/result structs is required to keep the controller loop understandable and testable.
+### 21.5.1 Status translation rule
 
-v1 should avoid interfaces for:
+The most important anti-divergence rule is that Golem should stop treating `ready`, `leased`, and `running` as a separate homegrown orchestration state machine once `ext/orchestrator` is adopted.
 
-- the mission controller itself
-- the scheduler core
-- pure state transition helpers
+For the current committed Gollem API:
 
-Those should be concrete packages/types unless a second real implementation appears.
+- **canonical schedulable states** should come from `orchestrator.TaskStatus` + dependency edges + lease presence
+- **product-facing mission phases** such as `awaiting_review`, `accepted`, `integrated`, and `done` may remain Golem projections until Gollem grows explicit first-class support for post-run review/integration phases
 
-## 21.4.3 Near-code mission controller API
+That preserves one reusable execution model while still letting Golem render richer product UX.
 
-The implementation should make the controller API explicit enough that a coding agent can scaffold it directly.
+### 21.5.2 Runtime-event alignment rule
 
-Illustrative shape:
+Runtime-event alignment should use the committed `core` event surface exactly as it exists today:
 
-```go
-type Controller struct {
-    store       MissionStore
-    planner     Planner
-    runner      RoleRunner
-    integration IntegrationEngine
-    worktrees   WorktreeManager
-    clock       Clock
-    logger      Logger
-}
+- planner/worker/reviewer/integration agent start -> `core.RunStartedEvent`
+- planner/worker/reviewer/integration agent finish -> `core.RunCompletedEvent`
+- tool invocation within those runs -> `core.ToolCalledEvent`
 
-func NewController(deps ControllerDeps) (*Controller, error)
-func (c *Controller) CreateMission(ctx context.Context, req CreateMissionRequest) (Mission, error)
-func (c *Controller) StartMission(ctx context.Context, missionID string) error
-func (c *Controller) PauseMission(ctx context.Context, missionID string, hard bool) error
-func (c *Controller) ResumeMission(ctx context.Context, missionID string) error
-func (c *Controller) CancelMission(ctx context.Context, missionID string) error
-func (c *Controller) Tick(ctx context.Context, missionID string) error
-func (c *Controller) Recover(ctx context.Context, missionID string) error
-func (c *Controller) Approve(ctx context.Context, approvalID string) error
-func (c *Controller) Reject(ctx context.Context, approvalID string, reason string) error
-```
+Mission-specific events such as `mission.created`, `plan.applied`, `review.passed`, `integration.completed`, or approval resolution remain product-level orchestration events. They should not be mislabeled as `core.RuntimeEvent` unless Gollem later introduces a committed broader event taxonomy.
 
-Behavioral expectations:
+## 21.6 Migration sequence
 
-1. `CreateMission` persists canonical mission state before any planning work begins
-2. `StartMission` only transitions from an allowed pre-run state
-3. `Tick` is the single orchestration step function and must stay idempotent enough for crash/restart tolerance
-4. `Recover` must reconcile leases, worktrees, and derived mission phase
-5. approval methods must resolve canonical approval state and emit matching events
+The order of operations matters. Persistence and execution should align first; CLI/TUI should remain adapters over derived state until the lower-level boundary is stable.
 
-## 21.5 Package dependency rules
+### 21.6.1 Change first: persistence and execution boundary
+
+1. **Adopt `ext/orchestrator` for task execution state before changing UI flows.**
+   - Replace Golem-local ready/lease bookkeeping in `internal/mission/scheduler.go`, `worker.go`, and recovery logic with `TaskStore`, `LeaseStore`, `CommandStore`, and `Scheduler`.
+   - Keep mission rows and approval rows local while task execution moves to Gollem primitives.
+2. **Move worker results and evidence to `TaskResult` + `ArtifactStore`.**
+   - Treat current worker summary, verification evidence, diffs, and review JSON as canonical result/artifact payloads rather than bespoke run-table fields.
+3. **Emit committed `core.RuntimeEvent` values for all agent/tool lifecycle telemetry.**
+   - Join them back to mission/task IDs in Golem projection code as needed.
+4. **Use `CommandStore` for task-scoped cancel/retry.**
+   - Stop inventing one-off task retry/cancel control paths in Golem once Gollem commands are available.
+
+### 21.6.2 Change second: post-run mission phases
+
+After the execution core is aligned, choose one of these paths for review/integration phases:
+
+1. **Short-term product-local projection**
+   - keep `awaiting_review` / `accepted` / `integrated` / `done` as Golem-derived mission/task views backed by orchestrator task metadata, review artifacts, and approval records
+2. **Future upstream extension**
+   - if review/integration semantics need to be reusable across products, upstream either:
+     - richer task phase/status support in `ext/orchestrator`, or
+     - a thin mission wrapper package on top of `ext/orchestrator`
+
+Do **not** fork a second lease/scheduler model in Golem while waiting for that future extension.
+
+### 21.6.3 Safe to keep product-specific in Golem
+
+These concerns can remain product-local without creating orchestration drift:
+
+- `internal/ui/mission_commands.go` command parsing and help text
+- `internal/ui/dashboard/dashboard.go` rendering, focus, and summary panes
+- `main.go` dashboard entrypoint and CLI wiring
+- mission goal/policy/budget UX
+- approval UX and human decision presentation
+- local git/worktree shelling in `internal/mission/worktree.go`
+- mission summary/task-count projections used only for display
+
+## 21.7 Package dependency rules
 
 Implementation must follow these dependency rules:
 
-1. `internal/mission` in Golem may depend on Gollem mission primitives, config, local git/worktree code, and UI adapters.
-2. Gollem mission packages must not depend on Bubble Tea UI code.
+1. `internal/mission` in Golem may depend on verified Gollem primitives in `ext/orchestrator` and `core/runtime_events.go`, plus product config, local git/worktree code, and UI adapters.
+2. Gollem orchestration packages must not depend on Bubble Tea UI code or Golem-specific mission rendering.
 3. Store code must not import UI rendering types.
-4. Planner/worker/review runners must depend on abstract run specs and result types, not direct UI models.
-5. UI packages may observe mission state and events, but must not own canonical mission transitions.
-6. Approval rendering code may format approval requests, but only the mission controller may resolve canonical approval state.
+4. Planner/worker/review runners should depend on `orchestrator.Task`, `ClaimedTask`, `TaskOutcome`, `TaskResult`, and artifacts rather than bespoke UI models.
+5. UI packages may observe derived mission state and runtime events, but must not own canonical lease/scheduler transitions.
+6. Approval rendering code may format approval requests, but only Golem's mission controller may resolve product-local approval state until Gollem exposes a committed reusable approval primitive.
 
-## 21.6 Anti-corruption boundary between Golem and Gollem
+## 21.8 Anti-corruption boundary between Golem and Gollem
 
 The product/framework seam must be explicit.
 
-Gollem mission packages are the reusable orchestration core.
-Golem mission packages are the product adapter layer.
+- **Gollem owns reusable execution mechanics**: task persistence, dependency edges, leases, task-scoped commands, artifacts, runner glue, scheduler logic, and runtime lifecycle events.
+- **Golem owns product semantics**: missions, mission phases, approval UX, dashboard rendering, CLI/TUI wording, repo-specific worktree policy, and integration/review policy that is not yet first-class in Gollem.
 
 Rules:
 
-1. Gollem must not import Bubble Tea, product styling, or CLI presentation code.
-2. Golem may translate product config/UI actions into Gollem mission requests, but must not fork canonical state semantics.
-3. JSON/CLI formatting belongs in Golem.
-4. canonical mission state transitions, event taxonomy, and artifact contracts belong in Gollem mission primitives.
-5. any convenience view model introduced in Golem must be derived from canonical mission state, not become a second source of truth.
+1. Golem may translate mission/task UX into `ext/orchestrator` requests, but must not fork canonical lease, claim, retry, or artifact semantics.
+2. Golem-specific view models must be projections over canonical orchestrator state plus product-local mission state.
+3. If a concern is reusable across products and already has a committed Gollem primitive, use that primitive instead of extending `internal/mission` independently.
+4. If a concern is not yet covered by committed Gollem API, keep it explicitly product-local and document it as such rather than pretending Gollem already provides it.
 
 Violations of this boundary are architecture regressions.
 
@@ -2123,85 +2038,61 @@ Violations of this boundary are architecture regressions.
 
 ## 22. Package and File Layout
 
-## 22.1 Recommended Gollem layout
+## 22.1 Verified current Gollem layout
 
 ```text
-ext/mission/
-  mission.go
+core/
+  runtime_events.go
+  normalize.go
+
+ext/orchestrator/
   types.go
   store.go
-  sqlite_store.go
-  scheduler.go
-  controller.go
-  planner.go
-  runner.go
-  review.go
-  integration.go
+  commands.go
   artifacts.go
   events.go
-  policy.go
-  worktree.go
-  recovery.go
-  fake_model.go
+  runner.go
+  scheduler.go
+  memory/
+  sqlite/
 ```
 
 ### File responsibilities
 
-- `mission.go`: public entry points and high-level package docs
-- `types.go`: core enums, data types, and JSON-serializable contracts
-- `store.go`: MissionStore interface and transaction boundary helpers
-- `sqlite_store.go`: concrete SQLite persistence and migration wiring
-- `scheduler.go`: ready-queue selection, scope conflict rules, lease assignment
-- `controller.go`: orchestration entry points and controller subroutines
-- `planner.go`: planner interface and planner request/result shaping
-- `runner.go`: shared role-runner orchestration glue
-- `review.go`: review result normalization and review-specific helpers
-- `integration.go`: integration engine contracts and deterministic apply helpers
-- `artifacts.go`: artifact naming, validation, and hashing helpers
-- `events.go`: event taxonomy, event payload structs, and append helpers
-- `policy.go`: budget checks, approval classification, retry policy helpers
-- `worktree.go`: worktree abstractions independent of concrete git shelling
-- `recovery.go`: startup reconciliation and lease-loss recovery helpers
-- `fake_model.go`: deterministic fixture-model harness for tests
+- `core/runtime_events.go`: committed runtime lifecycle event interface and concrete event types
+- `core/normalize.go`: message-history cleanup only; not orchestration-event normalization
+- `ext/orchestrator/types.go`: task, run-ref, lease, task-result, and request/filter primitives
+- `ext/orchestrator/store.go`: `TaskStore` / `LeaseStore` interfaces
+- `ext/orchestrator/commands.go`: task-scoped control-command primitives and `CommandStore`
+- `ext/orchestrator/artifacts.go`: immutable task/run artifact primitives and `ArtifactStore`
+- `ext/orchestrator/events.go`: concrete lifecycle event payload structs published via `core.EventBus`
+- `ext/orchestrator/runner.go`: `Runner`, `TaskOutcome`, and `AgentRunner` glue to `core.Agent`
+- `ext/orchestrator/scheduler.go`: reusable polling/lease-renewal/concurrency scheduler
+- `ext/orchestrator/memory` and `ext/orchestrator/sqlite`: concrete store implementations
 
-## 22.2 Recommended Golem layout
+## 22.2 Proposed future Gollem additions (not verified current API)
 
-```text
-internal/mission/
-  service.go
-  commands.go
-  runtime.go
-  approval.go
-  worktree.go
-  smoke_live_test.go
+Only after the API is committed upstream should this repository depend on any of the following:
 
-internal/ui/
-  mission_model.go
-  mission_view.go
-  mission_cmds.go
-```
+- durable orchestration history APIs such as `EventRecord` / `EventStore`
+- a higher-level `ext/mission` wrapper package
+- first-class review/integration/approval mission semantics above `ext/orchestrator`
+- runtime-event normalization beyond the currently committed `core.RuntimeEvent` types
 
-### File responsibilities
+## 22.3 Expected current Golem integration points
 
-- `internal/mission/service.go`: product-facing mission service wiring to Gollem primitives
-- `internal/mission/commands.go`: CLI command registration and JSON output shaping
-- `internal/mission/runtime.go`: provider/runtime configuration for planner/worker/reviewer runs
-- `internal/mission/approval.go`: approval presentation helpers and policy-driven decision mapping
-- `internal/mission/worktree.go`: local git worktree implementation
-- `internal/mission/smoke_live_test.go`: opt-in live-provider smoke scenarios
-- `internal/ui/mission_model.go`: Bubble Tea mission state model and message handling
-- `internal/ui/mission_view.go`: mission board rendering and detail panes
-- `internal/ui/mission_cmds.go`: async commands bridging UI actions to mission service operations
-
-## 22.3 Expected current integration points
-
+- `internal/mission/types.go`
+- `internal/mission/store.go`
+- `internal/mission/controller.go`
+- `internal/mission/orchestrator.go`
+- `internal/mission/scheduler.go`
+- `internal/mission/worker.go`
+- `internal/mission/reviewer.go`
+- `internal/mission/integrator.go`
+- `internal/mission/recovery.go`
+- `internal/ui/mission_commands.go`
+- `internal/ui/dashboard/dashboard.go`
 - `main.go`
-- `internal/config/config.go`
-- `internal/agent/agent.go`
-- `internal/agent/runtime_state.go`
-- `internal/ui/app.go`
-- `internal/ui/commands.go`
-- `internal/ui/workflow_panel.go`
 
 ---
 
@@ -2332,14 +2223,19 @@ func (c *Controller) Tick(ctx context.Context, missionID string) error {
         }
     }
 
-    ready := c.store.ListReadyTasks(ctx, missionID)
-    leases, err := c.store.LeaseReadyTasks(ctx, missionID, c.buildLeaseRequest(mission, ready))
-    if err != nil {
-        return err
-    }
-
-    for _, lease := range leases {
-        go c.runWorkerOrReviewer(c.childContext(missionID), lease)
+    for {
+        claim, err := c.tasks.ClaimReadyTask(ctx, orchestrator.ClaimTaskRequest{
+            WorkerID: c.workerID,
+            LeaseTTL: c.leaseTTL,
+            Now:      c.now(),
+        })
+        if errors.Is(err, orchestrator.ErrNoReadyTask) {
+            break
+        }
+        if err != nil {
+            return err
+        }
+        go c.runWorkerOrReviewer(c.childContext(missionID), claim)
     }
 
     return c.updateMissionPhase(ctx, missionID)
@@ -2360,7 +2256,7 @@ The implementation should also spell out and unit-test these subroutines:
 
 ```go
 func (c *Controller) shouldReplan(ctx context.Context, mission Mission) bool
-func (c *Controller) handleReplanProposal(ctx context.Context, mission Mission, draft PlanDraft) error
+func (c *Controller) handleReplanProposal(ctx context.Context, mission Mission, draft PlanResult) error
 func (c *Controller) applyIntegrationResult(ctx context.Context, mission Mission, task Task, result IntegrationResult) error
 func (c *Controller) recoverExpiredLeases(ctx context.Context, mission Mission) error
 ```
