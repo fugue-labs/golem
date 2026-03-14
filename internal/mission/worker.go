@@ -348,30 +348,23 @@ func (wl *WorkerLauncher) logEvent(ctx context.Context, missionID, taskID, runID
 func BuildWorkerPrompt(task *Task, worktreePath string) string {
 	var b strings.Builder
 
-	b.WriteString("# Worker Task\n\n")
-	b.WriteString(fmt.Sprintf("**Task ID:** %s\n", task.ID))
-	b.WriteString(fmt.Sprintf("**Title:** %s\n", task.Title))
-	b.WriteString(fmt.Sprintf("**Kind:** %s\n", task.Kind))
-	b.WriteString(fmt.Sprintf("**Working Directory:** %s\n\n", worktreePath))
+	b.WriteString(fmt.Sprintf("# Task: %s\n\n", task.Title))
 
 	b.WriteString("## Objective\n\n")
 	b.WriteString(task.Objective)
 	b.WriteString("\n\n")
 
-	if len(task.Scope.WritePaths) > 0 {
-		b.WriteString("## Writable Scope\n\n")
-		b.WriteString("You may only modify files under these paths:\n")
-		for _, p := range task.Scope.WritePaths {
-			b.WriteString(fmt.Sprintf("- `%s`\n", p))
+	if len(task.Scope.WritePaths) > 0 || len(task.Scope.ReadPaths) > 0 {
+		b.WriteString("## Scope\n\n")
+		if len(task.Scope.WritePaths) > 0 {
+			b.WriteString("Write to: ")
+			b.WriteString(strings.Join(task.Scope.WritePaths, ", "))
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
-	}
-
-	if len(task.Scope.ReadPaths) > 0 {
-		b.WriteString("## Read Scope\n\n")
-		b.WriteString("These paths provide useful context:\n")
-		for _, p := range task.Scope.ReadPaths {
-			b.WriteString(fmt.Sprintf("- `%s`\n", p))
+		if len(task.Scope.ReadPaths) > 0 {
+			b.WriteString("Read from: ")
+			b.WriteString(strings.Join(task.Scope.ReadPaths, ", "))
+			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}
@@ -385,19 +378,13 @@ func BuildWorkerPrompt(task *Task, worktreePath string) string {
 	}
 
 	if task.BlockingReason != "" {
-		b.WriteString("## Previous Review Feedback\n\n")
-		b.WriteString("A previous attempt was reviewed and changes were requested.\n")
-		b.WriteString("Address the following feedback:\n\n")
+		b.WriteString("## Previous Feedback\n\n")
 		b.WriteString(task.BlockingReason)
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString("## Rules\n\n")
-	b.WriteString("1. Work ONLY within your worktree — do not modify the main branch directly.\n")
-	b.WriteString("2. Commit your changes with clear, descriptive commit messages.\n")
-	b.WriteString("3. Push your branch to the remote before signaling completion: `git push origin HEAD`.\n")
-	b.WriteString("4. Stay within the writable scope defined above.\n")
-	b.WriteString("5. Produce a brief summary of what you changed and why when done.\n")
+	b.WriteString(fmt.Sprintf("Working directory: %s\n", worktreePath))
+	b.WriteString("When done: commit your changes, push, and provide a brief summary.\n")
 
 	return b.String()
 }

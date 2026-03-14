@@ -129,7 +129,7 @@ func TestDispatchReadyTasks_Basic(t *testing.T) {
 	// We'll test the prompt builder and state transitions separately.
 	t.Run("prompt contains task details", func(t *testing.T) {
 		prompt := BuildWorkerPrompt(store.ready[0], "/worktrees/worker-t1")
-		if !strings.Contains(prompt, "Task 1") {
+		if !strings.Contains(prompt, "# Task: Task 1") {
 			t.Error("prompt missing task title")
 		}
 		if !strings.Contains(prompt, "Do thing 1") {
@@ -412,9 +412,7 @@ func TestBuildWorkerPrompt(t *testing.T) {
 		name     string
 		contains string
 	}{
-		{"task ID", "t1"},
-		{"title", "Add user authentication"},
-		{"kind", "code"},
+		{"title header", "# Task: Add user authentication"},
 		{"worktree", "/worktrees/worker-t1"},
 		{"objective", "JWT-based auth middleware"},
 		{"write scope", "pkg/auth"},
@@ -422,15 +420,18 @@ func TestBuildWorkerPrompt(t *testing.T) {
 		{"read scope", "pkg/config"},
 		{"acceptance criteria", "JWT tokens are validated"},
 		{"acceptance criteria 2", "Unauthorized requests return 401"},
-		{"rule about worktree", "Work ONLY within your worktree"},
-		{"rule about commits", "Commit your changes"},
-		{"rule about push", "Push your branch to the remote"},
+		{"completion instruction", "commit your changes, push"},
 	}
 
 	for _, c := range checks {
 		if !strings.Contains(prompt, c.contains) {
 			t.Errorf("prompt missing %s (%q)", c.name, c.contains)
 		}
+	}
+
+	// Should NOT have verbose rules section.
+	if strings.Contains(prompt, "## Rules") {
+		t.Error("prompt should not have verbose Rules section")
 	}
 }
 
@@ -583,17 +584,33 @@ func TestBuildWorkerPrompt_MinimalTask(t *testing.T) {
 	prompt := BuildWorkerPrompt(task, "/wt/t2")
 
 	// Should still have the basics.
-	if !strings.Contains(prompt, "Quick fix") {
+	if !strings.Contains(prompt, "# Task: Quick fix") {
 		t.Error("prompt missing title")
 	}
 	if !strings.Contains(prompt, "Fix the typo") {
 		t.Error("prompt missing objective")
 	}
-	// Should NOT have scope sections when empty.
-	if strings.Contains(prompt, "Writable Scope") {
-		t.Error("prompt should not have writable scope section for empty scope")
+	// Should NOT have scope section when empty.
+	if strings.Contains(prompt, "## Scope") {
+		t.Error("prompt should not have scope section for empty scope")
 	}
-	if strings.Contains(prompt, "Read Scope") {
-		t.Error("prompt should not have read scope section for empty scope")
+}
+
+func TestBuildWorkerPrompt_WithFeedback(t *testing.T) {
+	task := &Task{
+		ID:             "t3",
+		Title:          "Retry task",
+		Kind:           TaskKindCode,
+		Objective:      "Fix the bug.",
+		BlockingReason: "Tests still failing in auth_test.go",
+	}
+
+	prompt := BuildWorkerPrompt(task, "/wt/t3")
+
+	if !strings.Contains(prompt, "## Previous Feedback") {
+		t.Error("prompt missing previous feedback section")
+	}
+	if !strings.Contains(prompt, "Tests still failing in auth_test.go") {
+		t.Error("prompt missing blocking reason content")
 	}
 }
