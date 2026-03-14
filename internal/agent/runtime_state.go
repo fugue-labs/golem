@@ -76,7 +76,7 @@ func PrepareRuntime(ctx context.Context, cfg *config.Config, prompt string) (Run
 		return state, fmt.Errorf("creating model: %w", err)
 	}
 	openImageStatus := "off"
-	if modelutil.GetProfile(model).SupportsVision {
+	if modelutil.GetProfile(model).SupportsVision && !cfg.IsToolDisabled("open_image") {
 		openImageStatus = "on"
 	}
 
@@ -165,14 +165,22 @@ func baselineRuntimeState(cfg *config.Config) RuntimeState {
 			state.RouterModelName = strings.TrimSpace(cfg.Model)
 		}
 	}
-	if cfg != nil && cfg.DisableCodeMode {
+	if cfg != nil && (cfg.DisableCodeMode || cfg.IsToolDisabled("execute_code")) {
 		state.CodeModeStatus = "off"
 	} else {
 		state.CodeModeStatus = "pending"
 	}
-	state.OpenImageStatus = "pending"
+	if cfg != nil && cfg.IsToolDisabled("open_image") {
+		state.OpenImageStatus = "off"
+	} else {
+		state.OpenImageStatus = "pending"
+	}
 	state.WebSearchStatus = "off"
-	state.FetchURLStatus = "on"
+	if cfg != nil && cfg.EnableFetchURL {
+		state.FetchURLStatus = "on"
+	} else {
+		state.FetchURLStatus = "off"
+	}
 	state.AskUserStatus = "off"
 	if cfg != nil && cfg.TeamMode != "off" {
 		state.AskUserStatus = "pending"
