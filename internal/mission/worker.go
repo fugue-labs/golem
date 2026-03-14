@@ -94,6 +94,12 @@ func (wl *WorkerLauncher) provisionWorker(ctx context.Context, mission *Mission,
 		if err != nil {
 			return nil, fmt.Errorf("create worktree for %s: %w", task.ID, err)
 		}
+		// On retry, attempt to recover the previous work from the remote
+		// branch. This handles the edge case where the worktree was lost
+		// but the worker had pushed their changes before review.
+		if task.AttemptCount > 0 {
+			wl.worktrees.RecoverFromRemote(ctx, task.ID)
+		}
 	}
 
 	// Create run record.
@@ -128,7 +134,7 @@ func (wl *WorkerLauncher) provisionWorker(ctx context.Context, mission *Mission,
 		run.ErrorText = "failed to update task status"
 		endedAt := time.Now().UTC()
 		run.EndedAt = &endedAt
-		wl.store.UpdateRun(ctx, run) //nolint:errcheck
+		wl.store.UpdateRun(ctx, run)       //nolint:errcheck
 		wl.worktrees.Release(ctx, task.ID) //nolint:errcheck
 		return nil, fmt.Errorf("update task %s to running: %w", task.ID, err)
 	}
@@ -388,8 +394,9 @@ func BuildWorkerPrompt(task *Task, worktreePath string) string {
 	b.WriteString("## Rules\n\n")
 	b.WriteString("1. Work ONLY within your worktree — do not modify the main branch directly.\n")
 	b.WriteString("2. Commit your changes with clear, descriptive commit messages.\n")
-	b.WriteString("3. Stay within the writable scope defined above.\n")
-	b.WriteString("4. Produce a brief summary of what you changed and why when done.\n")
+	b.WriteString("3. Push your branch to the remote before signaling completion: `git push origin HEAD`.\n")
+	b.WriteString("4. Stay within the writable scope defined above.\n")
+	b.WriteString("5. Produce a brief summary of what you changed and why when done.\n")
 
 	return b.String()
 }
