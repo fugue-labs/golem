@@ -15,3 +15,5 @@ golem
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+.mission-worktrees
+docs/interesting-tauri-interface-we-should-consider-using.mp4

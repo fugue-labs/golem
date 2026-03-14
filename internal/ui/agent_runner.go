@@ -288,7 +288,7 @@ func (m *Model) runAgent(prompt string) tea.Cmd {
 
 // steeringMiddleware injects queued user messages before each model turn.
 func (m *Model) steeringMiddleware() core.AgentMiddleware {
-	return func(
+	return core.RequestOnlyMiddleware(func(
 		ctx context.Context,
 		messages []core.ModelMessage,
 		settings *core.ModelSettings,
@@ -309,7 +309,7 @@ func (m *Model) steeringMiddleware() core.AgentMiddleware {
 			}
 		}
 		return next(ctx, messages, settings, params)
-	}
+	})
 }
 
 // ─── Budget management ──────────────────────────────────────────────────────

@@ -287,17 +287,15 @@ func TestActiveTeamMembersAllStopped(t *testing.T) {
 
 func TestPurgeStaleTeamNilsWhenAllWorkersStopped(t *testing.T) {
 	tm := team.NewTeam(team.TeamConfig{Name: "test-team", Leader: "leader"})
-	tm.RegisterLeader("leader")
 
 	sess := &codetool.Session{Team: tm}
 	m := New(&config.Config{})
 
-	// Spawn a teammate that immediately completes (no model needed — just test purge logic).
-	// We can't easily spawn a real teammate without a model, so test the boundary case
-	// where only the leader exists — purgeStaleTeam should not nil (len <= 1).
+	// Members() starts empty in the new API — purgeStaleTeam should preserve
+	// the team when there are no non-leader members (len <= 1).
 	m.purgeStaleTeam(sess)
 	if sess.Team == nil {
-		t.Fatal("expected team to be preserved when only leader exists")
+		t.Fatal("expected team to be preserved when no teammates exist")
 	}
 }
 

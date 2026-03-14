@@ -44,7 +44,7 @@ func diffuseReadLoopMiddleware(threshold int) core.AgentMiddleware {
 	var mu sync.Mutex
 	consecutiveReadOnlyTurns := 0
 
-	return func(
+	return core.RequestOnlyMiddleware(func(
 		ctx context.Context,
 		messages []core.ModelMessage,
 		settings *core.ModelSettings,
@@ -101,7 +101,7 @@ func diffuseReadLoopMiddleware(threshold int) core.AgentMiddleware {
 		}
 
 		return next(ctx, messages, settings, params)
-	}
+	})
 }
 
 // injectGuidanceIntoLastRequest appends a user prompt part to the last

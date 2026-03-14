@@ -327,15 +327,8 @@ func (m *Model) subscribeTeamEvents() {
 		}
 		p.Send(teamEventMsg{text: text})
 	})
-	core.Subscribe(bus, func(e team.MessageSentEvent) {
-		text := fmt.Sprintf("%s → %s: %s", e.From, e.To, e.Summary)
-		p.Send(teamEventMsg{text: text})
-	})
-	core.Subscribe(bus, func(e team.TaskCompletedEvent) {
-		text := fmt.Sprintf("Task %s completed", e.TaskID)
-		if e.Owner != "" {
-			text += " by " + e.Owner
-		}
+	core.Subscribe(bus, func(e team.TeammateIdleEvent) {
+		text := fmt.Sprintf("Teammate %s idle", e.TeammateName)
 		p.Send(teamEventMsg{text: text})
 	})
 }

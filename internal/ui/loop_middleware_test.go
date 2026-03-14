@@ -21,22 +21,21 @@ func makeToolResponse(toolName string) core.ModelResponse {
 func noopNext(calls *int) func(context.Context, []core.ModelMessage, *core.ModelSettings, *core.ModelRequestParameters) (*core.ModelResponse, error) {
 	return func(_ context.Context, msgs []core.ModelMessage, _ *core.ModelSettings, _ *core.ModelRequestParameters) (*core.ModelResponse, error) {
 		*calls++
-		// Check if guidance was injected by looking for the warning text
-		// in the last ModelRequest's parts.
 		return &core.ModelResponse{}, nil
 	}
 }
 
+// callMW is a helper to call the request side of a middleware.
+func callMW(mw core.AgentMiddleware, messages []core.ModelMessage, next func(context.Context, []core.ModelMessage, *core.ModelSettings, *core.ModelRequestParameters) (*core.ModelResponse, error)) (*core.ModelResponse, error) {
+	return mw.Request(context.Background(), messages, &core.ModelSettings{}, &core.ModelRequestParameters{}, next)
+}
+
 func TestDiffuseReadLoop_TriggersAfterThreshold(t *testing.T) {
 	mw := diffuseReadLoopMiddleware(4)
-	ctx := context.Background()
-	settings := &core.ModelSettings{}
-	params := &core.ModelRequestParameters{}
 
 	var injected bool
 
 	next := func(_ context.Context, msgs []core.ModelMessage, _ *core.ModelSettings, _ *core.ModelRequestParameters) (*core.ModelResponse, error) {
-		// Check if the warning was injected into messages.
 		for _, msg := range msgs {
 			if req, ok := msg.(core.ModelRequest); ok {
 				for _, part := range req.Parts {
@@ -57,7 +56,7 @@ func TestDiffuseReadLoop_TriggersAfterThreshold(t *testing.T) {
 			core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "do work"}}},
 			makeToolResponse("view"),
 		}
-		_, err := mw(ctx, messages, settings, params, next)
+		_, err := callMW(mw, messages, next)
 		if err != nil {
 			t.Fatalf("middleware returned error: %v", err)
 		}
@@ -70,9 +69,6 @@ func TestDiffuseReadLoop_TriggersAfterThreshold(t *testing.T) {
 
 func TestDiffuseReadLoop_ResetByAction(t *testing.T) {
 	mw := diffuseReadLoopMiddleware(4)
-	ctx := context.Background()
-	settings := &core.ModelSettings{}
-	params := &core.ModelRequestParameters{}
 
 	var injected bool
 
@@ -97,7 +93,7 @@ func TestDiffuseReadLoop_ResetByAction(t *testing.T) {
 			core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "do work"}}},
 			makeToolResponse("view"),
 		}
-		mw(ctx, messages, settings, params, next)
+		callMW(mw, messages, next)
 	}
 
 	// Action resets the counter.
@@ -105,7 +101,7 @@ func TestDiffuseReadLoop_ResetByAction(t *testing.T) {
 		core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "do work"}}},
 		makeToolResponse("edit"),
 	}
-	mw(ctx, messages, settings, params, next)
+	callMW(mw, messages, next)
 
 	// 3 more reads — still below threshold of 4.
 	for i := 0; i < 3; i++ {
@@ -113,7 +109,7 @@ func TestDiffuseReadLoop_ResetByAction(t *testing.T) {
 			core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "do work"}}},
 			makeToolResponse("view"),
 		}
-		mw(ctx, messages, settings, params, next)
+		callMW(mw, messages, next)
 	}
 
 	if injected {
@@ -123,9 +119,6 @@ func TestDiffuseReadLoop_ResetByAction(t *testing.T) {
 
 func TestDiffuseReadLoop_GrepAndGlobCount(t *testing.T) {
 	mw := diffuseReadLoopMiddleware(3)
-	ctx := context.Background()
-	settings := &core.ModelSettings{}
-	params := &core.ModelRequestParameters{}
 
 	var injected bool
 
@@ -150,7 +143,7 @@ func TestDiffuseReadLoop_GrepAndGlobCount(t *testing.T) {
 			core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "do work"}}},
 			makeToolResponse(tool),
 		}
-		mw(ctx, messages, settings, params, next)
+		callMW(mw, messages, next)
 	}
 
 	if !injected {
@@ -160,9 +153,6 @@ func TestDiffuseReadLoop_GrepAndGlobCount(t *testing.T) {
 
 func TestDiffuseReadLoop_BashIsAction(t *testing.T) {
 	mw := diffuseReadLoopMiddleware(3)
-	ctx := context.Background()
-	settings := &core.ModelSettings{}
-	params := &core.ModelRequestParameters{}
 
 	var injected bool
 
@@ -187,21 +177,21 @@ func TestDiffuseReadLoop_BashIsAction(t *testing.T) {
 			core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "do work"}}},
 			makeToolResponse("view"),
 		}
-		mw(ctx, messages, settings, params, next)
+		callMW(mw, messages, next)
 	}
 
 	messages := []core.ModelMessage{
 		core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "do work"}}},
 		makeToolResponse("bash"),
 	}
-	mw(ctx, messages, settings, params, next)
+	callMW(mw, messages, next)
 
 	for i := 0; i < 2; i++ {
 		messages := []core.ModelMessage{
 			core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "do work"}}},
 			makeToolResponse("view"),
 		}
-		mw(ctx, messages, settings, params, next)
+		callMW(mw, messages, next)
 	}
 
 	if injected {

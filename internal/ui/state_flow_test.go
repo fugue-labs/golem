@@ -127,7 +127,7 @@ func TestRenderRuntimeSummaryMessageListsToolSurfaces(t *testing.T) {
 	m.runtime.RouterModelName = "router-resolved"
 
 	msg := m.renderRuntimeSummaryMessage()
-	for _, want := range []string{"Effective router model:", "**Tool surfaces**", "Guaranteed repo tools:", "Guaranteed workflow tools:", "Delegate: `off`", "Execute code: `on`", "Open image: `off`", "Fetch URL: `on`", "Ask user: `pending`", "Team mode: `auto` (effective: `off`)"} {
+	for _, want := range []string{"Effective router model:", "**Tool surfaces**", "Guaranteed repo tools:", "Guaranteed workflow tools:", "Delegate: `off`", "Execute code: `on`", "Open image: `off`", "Fetch URL: `off`", "Ask user: `pending`", "Team mode: `auto` (effective: `off`)"} {
 		if !strings.Contains(msg.Content, want) {
 			t.Fatalf("runtime summary missing %q\n%s", want, msg.Content)
 		}
@@ -164,7 +164,7 @@ func TestSteeringMiddlewareInjectsQueuedMessagesInOrder(t *testing.T) {
 	}
 
 	mw := m.steeringMiddleware()
-	_, err := mw(context.Background(), nil, nil, nil, next)
+	_, err := mw.Request(context.Background(), nil, nil, nil, next)
 	if err != nil {
 		t.Fatalf("middleware error: %v", err)
 	}
