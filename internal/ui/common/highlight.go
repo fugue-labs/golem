@@ -13,6 +13,12 @@ import (
 // SyntaxHighlight applies syntax highlighting to source code.
 // fileName is used to detect the language; falls back to content analysis.
 func SyntaxHighlight(source, fileName string) string {
+	source = strings.ReplaceAll(source, "\r\n", "\n")
+	source = strings.TrimRight(source, "\n")
+	if strings.TrimSpace(source) == "" {
+		return source
+	}
+
 	l := lexers.Match(fileName)
 	if l == nil {
 		l = lexers.Analyse(source)
@@ -22,7 +28,10 @@ func SyntaxHighlight(source, fileName string) string {
 	}
 	l = chroma.Coalesce(l)
 
-	f := formatters.Get("terminal16m")
+	f := formatters.Get("terminal256")
+	if f == nil {
+		f = formatters.Get("terminal16m")
+	}
 	if f == nil {
 		f = formatters.Fallback
 	}

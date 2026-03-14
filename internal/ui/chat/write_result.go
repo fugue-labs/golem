@@ -3,10 +3,10 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/fugue-labs/golem/internal/ui/common"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
 
@@ -19,31 +19,40 @@ func renderWriteResult(content string, toolCall *Message, sty *styles.Styles, wi
 		return renderPlainResult(content, sty, width)
 	}
 
-	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
-	available := max(0, width-8)
-	codeLines := strings.Split(args.Content, "\n")
-	maxLines := 8
-	truncated := len(codeLines) > maxLines
-	if truncated {
-		codeLines = codeLines[:maxLines]
+	path := formatDisplayPath(args.Path)
+	codeLines := strings.Split(strings.TrimRight(args.Content, "\n"), "\n")
+	if len(codeLines) == 1 && codeLines[0] == "" {
+		codeLines = nil
 	}
 
-	var rendered []string
-	// Summary on first line with ⎿ prefix.
 	summary := content
 	if summary == "" {
-		summary = fmt.Sprintf("Created %s (%d lines)", filepath.Base(args.Path), len(strings.Split(args.Content, "\n")))
+		summary = fmt.Sprintf("created %d lines", len(codeLines))
 	}
-	rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentLine.Render(summary))
 
-	for _, line := range codeLines {
-		line = ansi.Truncate(line, available, "...")
-		rendered = append(rendered, "    "+sty.Tool.DiffAdd.Render("+ "+line))
+	rendered := []string{renderResultHeader(sty, "write", joinNonEmpty(path, summary))}
+	if len(codeLines) == 0 {
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render("(empty file)"))
+		return strings.Join(rendered, "\n")
+	}
+
+	preview := codeLines
+	maxLines := 8
+	truncated := len(preview) > maxLines
+	if truncated {
+		preview = preview[:maxLines]
+	}
+
+	highlighted := strings.Split(common.SyntaxHighlight(strings.Join(preview, "\n"), path), "\n")
+	for i, line := range highlighted {
+		prefix := "+ "
+		if i >= len(preview) {
+			prefix = "  "
+		}
+		rendered = append(rendered, "    "+sty.Tool.DiffAdd.Render(prefix)+ansi.Truncate(line, max(0, width-10), "..."))
 	}
 	if truncated {
-		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(
-			fmt.Sprintf("... (%d more lines)", len(strings.Split(args.Content, "\n"))-maxLines),
-		))
+		rendered = append(rendered, "    "+sty.Tool.Truncation.Render(fmt.Sprintf("... (%d more lines)", len(codeLines)-maxLines)))
 	}
 	return strings.Join(rendered, "\n")
 }
