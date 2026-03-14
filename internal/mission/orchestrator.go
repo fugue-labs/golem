@@ -377,6 +377,7 @@ func (o *Orchestrator) spawnReviewer(ctx context.Context, spec *ReviewSpec) {
 	if err != nil {
 		agentCancel()
 		o.reviews.FailReview(ctx, spec, fmt.Sprintf("spawn failed: %v", err)) //nolint:errcheck
+		o.workers.ReleaseWorkerWorktree(ctx, spec.Run.MissionID, spec.Task.ID)
 		o.emit(OrchestratorEvent{
 			Type:   "review.spawn_failed",
 			TaskID: spec.Task.ID,
