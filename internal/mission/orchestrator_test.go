@@ -1005,6 +1005,60 @@ func TestOrchestratorRequestChangesPreservesWorktree(t *testing.T) {
 	t.Log("Worker retried after request_changes — worktree preserved")
 }
 
+func TestOrchestratorStopWithoutStart(t *testing.T) {
+	store := newMemoryStore()
+	spawner := &mockSpawner{}
+	events := make(chan OrchestratorEvent, 100)
+	orch := newTestOrchestrator(store, spawner, events)
+
+	// Stop without Start should not panic or deadlock.
+	done := make(chan struct{})
+	go func() {
+		orch.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Good — Stop returned without panic or deadlock.
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop() deadlocked when Start() was never called")
+	}
+}
+
+func TestOrchestratorConcurrentStartStop(t *testing.T) {
+	store := newMemoryStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	store.CreateMission(ctx, &Mission{
+		ID:        "m1",
+		Status:    MissionRunning,
+		Budget:    Budget{MaxConcurrentWorkers: 2},
+		CreatedAt: now,
+		UpdatedAt: now,
+		StartedAt: &now,
+	})
+
+	spawner := &mockSpawner{}
+	events := make(chan OrchestratorEvent, 100)
+
+	// Run Start/Stop concurrently many times to detect races under -race.
+	for i := 0; i < 50; i++ {
+		orch := newTestOrchestrator(store, spawner, events)
+
+		go orch.Start(context.Background())
+		go orch.Stop()
+
+		// Ensure it settles within a reasonable time.
+		select {
+		case <-orch.done:
+		case <-time.After(35 * time.Second):
+			t.Fatal("orchestrator did not settle after concurrent Start/Stop")
+		}
+	}
+}
+
 func TestOrchestratorRejectReleasesWorktree(t *testing.T) {
 	store := newMemoryStore()
 	ctx := context.Background()
