@@ -40,8 +40,9 @@ func (s *State) HasItems() bool { return s.Extracted || len(s.Items) > 0 }
 
 // Summary returns a width-aware hard/soft invariant summary for panel headers.
 func (s *State) Summary(width int) string {
-	hardTotal, hardPass, hardFail, hardUnresolved, softTotal, softPass, softFail := s.Counts()
-	if hardTotal == 0 && !s.Extracted {
+	hardPass, hardFail, hardUnresolved, softTotal, softPass, softFail := 0, 0, 0, 0, 0, 0
+	_, hardPass, hardFail, hardUnresolved, softTotal, softPass, softFail = s.Counts()
+	if len(s.Items) == 0 {
 		return "pending"
 	}
 	if width < 18 {
@@ -50,6 +51,9 @@ func (s *State) Summary(width int) string {
 	hardSummary := fmt.Sprintf("hard %d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved)
 	if width < 34 || softTotal == 0 {
 		return hardSummary
+	}
+	if width < 48 {
+		return hardSummary + fmt.Sprintf(" · soft %d✓/%d", softPass, softTotal)
 	}
 	return hardSummary + fmt.Sprintf(" · soft %d✓ %d✗", softPass, softFail)
 }

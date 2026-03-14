@@ -76,18 +76,20 @@ func (s *State) Summary(width int) string {
 	if total == 0 {
 		return "0 tasks"
 	}
-	if width < 16 {
+	if width < 12 {
 		return fmt.Sprintf("%d/%d", completed, total)
 	}
-	parts := []string{fmt.Sprintf("%d/%d done", completed, total)}
-	if width < 30 {
-		if inProgress > 0 {
-			parts = append(parts, fmt.Sprintf("%d active", inProgress))
-		}
-		return strings.Join(parts, " · ")
+	base := fmt.Sprintf("%d/%d done", completed, total)
+	if width < 22 {
+		return base
 	}
+
+	parts := []string{base}
 	if inProgress > 0 {
 		parts = append(parts, fmt.Sprintf("%d active", inProgress))
+	}
+	if width < 34 {
+		return strings.Join(parts, " · ")
 	}
 	if blocked > 0 {
 		parts = append(parts, fmt.Sprintf("%d blocked", blocked))

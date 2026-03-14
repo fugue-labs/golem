@@ -76,10 +76,10 @@ func (s *State) Summary(width int) string {
 	if total == 0 {
 		return "0 checks"
 	}
-	if width < 18 {
+	if width < 16 {
 		return fmt.Sprintf("%d✓ %d✗", pass, fail)
 	}
-	if width < 30 {
+	if width < 28 {
 		return fmt.Sprintf("%d✓ %d✗ %d◐ %d*", pass, fail, inProgress, stale)
 	}
 	parts := []string{fmt.Sprintf("%d pass", pass), fmt.Sprintf("%d fail", fail)}

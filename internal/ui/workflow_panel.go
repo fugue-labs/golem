@@ -134,14 +134,9 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	sep := m.sty.Panel.Separator.Render(strings.Repeat(styles.Separator, contentWidth))
 
 	headerLeft := m.sty.Panel.Title.Render("Workflow")
-	headerRightText := workflowPanelSummary(m)
+	headerRightText := workflowPanelSummaryWidth(m, max(1, contentWidth-lipgloss.Width(headerLeft)-1))
 	headerRight := ""
 	if headerRightText != "" {
-		// Truncate summary if it would overflow the content area.
-		maxRight := contentWidth - lipgloss.Width(headerLeft) - 1
-		if maxRight > 0 {
-			headerRightText = ansi.Truncate(headerRightText, maxRight, "…")
-		}
 		headerRight = m.sty.Panel.Progress.Render(headerRightText)
 	}
 	titleGap := contentWidth - lipgloss.Width(headerLeft) - lipgloss.Width(headerRight)
@@ -150,107 +145,45 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	}
 	titleLine := headerLeft + strings.Repeat(" ", titleGap) + headerRight
 
+	sections := []func(int, int) []string{}
+	if m.hasMissionState() {
+		sections = append(sections, m.renderMissionPanelLines)
+	}
+	if m.specState.IsActive() {
+		sections = append(sections, m.renderSpecPanelLines)
+	}
+	if m.planState.HasTasks() {
+		sections = append(sections, m.renderPlanPanelLines)
+	}
+	if m.invariantState.HasItems() {
+		sections = append(sections, m.renderInvariantPanelLines)
+	}
+	if m.verificationState.HasEntries() {
+		sections = append(sections, m.renderVerificationPanelLines)
+	}
+	if m.hasTeamMembers() {
+		sections = append(sections, m.renderTeamPanelLines)
+	}
+
 	var body []string
-	showMission := m.hasMissionState()
-	showSpec := m.specState.IsActive()
-	showPlan := m.planState.HasTasks()
-	showInv := m.invariantState.HasItems()
-	showVerify := m.verificationState.HasEntries()
-	showTeam := m.hasTeamMembers()
-	bodyBudget := max(1, height-2)
-
-	// Count how many sections we need to render.
-	sections := 0
-	if showMission {
-		sections++
-	}
-	if showSpec {
-		sections++
-	}
-	if showPlan {
-		sections++
-	}
-	if showInv {
-		sections++
-	}
-	if showVerify {
-		sections++
-	}
-	if showTeam {
-		sections++
-	}
-
-	if sections == 0 {
+	if len(sections) == 0 {
 		body = append(body, m.sty.Muted.Render("No workflow state yet."))
 	} else {
-		// Subtract separator lines between sections.
-		if sections > 1 {
-			bodyBudget = max(sections, height-2-(sections-1))
-		}
-		perSection := max(1, bodyBudget/sections)
-		remainder := bodyBudget - perSection*sections
-
-		if showMission {
-			budget := perSection
-			if remainder > 0 {
-				budget++
-				remainder--
-			}
-			body = append(body, m.renderMissionPanelLines(budget, contentWidth)...)
-		}
-		if showSpec {
-			if len(body) > 0 {
+		bodyBudget := max(1, height-2)
+		separatorCount := max(0, len(sections)-1)
+		lineBudget := max(len(sections), bodyBudget-separatorCount)
+		perSection := max(1, lineBudget/len(sections))
+		extra := lineBudget - perSection*len(sections)
+		for i, render := range sections {
+			if i > 0 {
 				body = append(body, sep)
 			}
 			budget := perSection
-			if remainder > 0 {
+			if extra > 0 {
 				budget++
-				remainder--
+				extra--
 			}
-			body = append(body, m.renderSpecPanelLines(budget, contentWidth)...)
-		}
-		if showTeam {
-			if len(body) > 0 {
-				body = append(body, sep)
-			}
-			budget := perSection
-			if remainder > 0 {
-				budget++
-				remainder--
-			}
-			body = append(body, m.renderTeamPanelLines(budget, contentWidth)...)
-		}
-		if showPlan {
-			if len(body) > 0 {
-				body = append(body, sep)
-			}
-			budget := perSection
-			if remainder > 0 {
-				budget++
-				remainder--
-			}
-			body = append(body, m.renderPlanPanelLines(budget, contentWidth)...)
-		}
-		if showInv {
-			if len(body) > 0 {
-				body = append(body, sep)
-			}
-			budget := perSection
-			if remainder > 0 {
-				budget++
-				remainder--
-			}
-			body = append(body, m.renderInvariantPanelLines(budget, contentWidth)...)
-		}
-		if showVerify {
-			if len(body) > 0 {
-				body = append(body, sep)
-			}
-			budget := perSection
-			if remainder > 0 {
-				budget++
-			}
-			body = append(body, m.renderVerificationPanelLines(budget, contentWidth)...)
+			body = append(body, render(budget, contentWidth)...)
 		}
 	}
 
@@ -272,13 +205,34 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	return strings.Join(allLines, "\n")
 }
 
-func workflowPanelSummary(m *Model) string {
+func workflowPanelSummaryWidth(m *Model, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	compact := width < 44
 	var parts []string
-	if missionSummary := m.missionPanelSummary(); missionSummary != "" {
-		parts = append(parts, missionSummary)
+	if missionSummary := m.missionPanelSummaryWidth(summaryWidth(width, compact, 12, 28)); missionSummary != "" {
+		parts = append(parts, "mission "+missionSummary)
 	}
 	if m.specState.IsActive() {
-		parts = append(parts, fmt.Sprintf("spec %s · %s", m.specState.PhaseLabel(), m.specState.GateSummary()))
+		summary := m.specState.PanelSummary(summaryWidth(width, compact, 16, 28))
+		if compact {
+			summary = m.specState.GateSummary()
+		}
+		parts = append(parts, "spec "+summary)
+	}
+	if m.planState.HasTasks() {
+		parts = append(parts, "plan "+m.planState.Summary(summaryWidth(width, compact, 12, 28)))
+	}
+	if m.invariantState.HasItems() {
+		if len(m.invariantState.Items) == 0 {
+			parts = append(parts, "Inv 0✓ 0✗ 0?")
+		} else {
+			parts = append(parts, "Inv "+m.invariantState.Summary(summaryWidth(width, compact, 16, 28)))
+		}
+	}
+	if m.verificationState.HasEntries() {
+		parts = append(parts, "verify "+m.verificationState.Summary(summaryWidth(width, compact, 14, 28)))
 	}
 	if m.hasTeamMembers() {
 		members := activeTeamMembers(m.runtime.Session.Team.Members())
@@ -290,16 +244,33 @@ func workflowPanelSummary(m *Model) string {
 		}
 		parts = append(parts, fmt.Sprintf("team %d/%d", running, len(members)))
 	}
-	if m.planState.HasTasks() {
-		parts = append(parts, "plan "+m.planState.Summary(28))
+	return ansi.Truncate(strings.Join(parts, " · "), width, "…")
+}
+
+func summaryWidth(total int, compact bool, narrow, wide int) int {
+	if compact {
+		return narrow
 	}
-	if m.invariantState.HasItems() {
-		parts = append(parts, "Inv "+m.invariantState.Summary(16))
+	return min(wide, max(narrow, total))
+}
+
+func (m *Model) panelSectionTitle(title string) string {
+	switch title {
+	case "Mission":
+		return "◎ " + title
+	case "Spec":
+		return styles.ModelIcon + " " + title
+	case "Plan":
+		return styles.ArrowRight + " " + title
+	case "Invariants":
+		return "◫ " + title
+	case "Verification":
+		return styles.CheckIcon + " " + title
+	case "Team":
+		return "◌ " + title
+	default:
+		return title
 	}
-	if m.verificationState.HasEntries() {
-		parts = append(parts, "verify "+m.verificationState.Summary(28))
-	}
-	return strings.Join(parts, " · ")
 }
 
 func (m *Model) renderPanelSectionHeader(title, summary string, width int) string {
@@ -326,7 +297,7 @@ func (m *Model) renderPanelDetail(label, value string, width int) string {
 }
 
 func (m *Model) renderPanelOverflow(label string, remaining int) string {
-	return m.sty.Muted.Render(fmt.Sprintf("… +%d %s", remaining, label))
+	return m.sty.Muted.Render(fmt.Sprintf("… +%d more %s", remaining, label))
 }
 
 func (m *Model) renderTeamPanelLines(limit, width int) []string {
@@ -349,7 +320,7 @@ func (m *Model) renderTeamPanelLines(limit, width int) []string {
 	if starting > 0 {
 		summary += fmt.Sprintf(" · %d starting", starting)
 	}
-	lines := []string{m.renderPanelSectionHeader("Team", summary, width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Team"), summary, width)}
 	if limit == 1 {
 		return lines
 	}
@@ -388,7 +359,7 @@ func (m *Model) renderPlanPanelLines(limit, width int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	lines := []string{m.renderPanelSectionHeader("Plan", m.planState.Summary(width/2), width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Plan"), m.planState.Summary(max(12, width-12)), width)}
 	if limit == 1 {
 		return lines
 	}
@@ -430,7 +401,7 @@ func (m *Model) renderInvariantPanelLines(limit, width int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	lines := []string{m.renderPanelSectionHeader("Invariants", m.invariantState.Summary(width/2), width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Invariants"), m.invariantState.Summary(max(16, width-16)), width)}
 	if limit == 1 {
 		return lines
 	}
@@ -479,7 +450,7 @@ func (m *Model) renderVerificationPanelLines(limit, width int) []string {
 	if limit <= 0 {
 		return nil
 	}
-	lines := []string{m.renderPanelSectionHeader("Verification", m.verificationState.Summary(width/2), width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Verification"), m.verificationState.Summary(max(14, width-14)), width)}
 	if limit == 1 {
 		return lines
 	}
@@ -525,12 +496,12 @@ func (m *Model) renderSpecPanelLines(limit, width int) []string {
 	if limit <= 0 || !m.specState.IsActive() {
 		return nil
 	}
-	lines := []string{m.renderPanelSectionHeader("Spec", m.specState.PanelSummary(max(12, width/2)), width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Spec"), m.specState.PanelSummary(max(12, width-12)), width)}
 	if limit == 1 {
 		return lines
 	}
 	if limit > 2 {
-		lines = append(lines, m.renderPanelDetail("file", m.specState.FileLabel(max(12, width/2)), width))
+		lines = append(lines, m.renderPanelDetail("file", m.specState.FileLabel(max(12, width-10)), width))
 	}
 	itemBudget := limit - len(lines)
 	maxItems := min(itemBudget, len(m.specState.Gates))

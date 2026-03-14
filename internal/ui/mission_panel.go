@@ -56,15 +56,26 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 	if summary.PendingApprovals > 0 {
 		statusSummary += fmt.Sprintf(" · %d approvals", summary.PendingApprovals)
 	}
-	lines := []string{m.renderPanelSectionHeader("Mission", statusSummary+" · "+m.missionPanelSummaryWidth(max(12, width/2)), width)}
+	lines := []string{m.renderPanelSectionHeader(m.panelSectionTitle("Mission"), statusSummary+" · "+m.missionPanelSummaryWidth(max(12, width-12)), width)}
 	if limit == 1 {
 		return lines
 	}
 
-	title := ansi.Truncate(ms.Title, max(1, width-2), "…")
-	lines = append(lines, m.renderPanelDetail("goal", title, width))
-	if len(lines) >= limit {
-		return lines[:limit]
+	if title := strings.TrimSpace(ms.Title); title != "" {
+		lines = append(lines, m.renderPanelDetail("title", title, width))
+		if len(lines) >= limit {
+			return lines[:limit]
+		}
+	}
+	goalText := strings.TrimSpace(ms.Goal)
+	if goalText == "" {
+		goalText = strings.TrimSpace(ms.Title)
+	}
+	if goalText != "" {
+		lines = append(lines, m.renderPanelDetail("goal", goalText, width))
+		if len(lines) >= limit {
+			return lines[:limit]
+		}
 	}
 
 	if tc.Total > 0 {
@@ -166,15 +177,21 @@ func (m *Model) missionPanelSummaryWidth(width int) string {
 
 	tc := summary.TaskCounts
 	done := tc.Done + tc.Integrated + tc.Accepted
-	if width < 16 {
+	if width < 12 {
 		return fmt.Sprintf("%d/%d", done, tc.Total)
 	}
 	base := fmt.Sprintf("%d/%d done", done, tc.Total)
-	if width < 28 {
-		if summary.ActiveRuns > 0 {
-			return fmt.Sprintf("%s · %d active", base, summary.ActiveRuns)
-		}
+	if width < 20 {
 		return base
+	}
+	if width < 30 {
+		parts := []string{base}
+		if tc.Ready > 0 {
+			parts = append(parts, fmt.Sprintf("%d ready", tc.Ready))
+		} else if summary.ActiveRuns > 0 {
+			parts = append(parts, fmt.Sprintf("%d active", summary.ActiveRuns))
+		}
+		return strings.Join(parts, " · ")
 	}
 	parts := []string{base}
 	if tc.Running > 0 {
