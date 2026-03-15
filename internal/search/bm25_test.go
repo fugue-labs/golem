@@ -1,7 +1,12 @@
 package search
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestTokenize(t *testing.T) {
@@ -100,5 +105,110 @@ func TestExtractSnippet(t *testing.T) {
 	// Snippet should contain the query term area.
 	if len(snippet) > 80 { // Allow some padding for ellipsis.
 		t.Errorf("snippet too long: %d chars", len(snippet))
+	}
+}
+
+func TestExtractSessionTextStructuredMessages(t *testing.T) {
+	messages := []map[string]any{
+		{
+			"kind": "request",
+			"data": map[string]any{
+				"parts": []map[string]any{{
+					"type": "user-prompt",
+					"data": map[string]any{"content": "Investigate flaky authentication test"},
+				}},
+				"timestamp": time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+		{
+			"kind": "response",
+			"data": map[string]any{
+				"parts": []map[string]any{{
+					"type": "text",
+					"data": map[string]any{"content": "The bug is in token refresh handling."},
+				}, {
+					"type": "tool-call",
+					"data": map[string]any{"tool_name": "grep", "args_json": `{"pattern":"token"}`},
+				}},
+				"timestamp": time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	}
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatalf("marshal messages: %v", err)
+	}
+
+	text := extractSessionText(&sessionData{Prompt: "Fix auth", Messages: raw})
+	for _, want := range []string{"Fix auth", "Investigate flaky authentication test", "The bug is in token refresh handling.", "grep", `{"pattern":"token"}`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("extractSessionText() missing %q in %q", want, text)
+		}
+	}
+}
+
+func TestSearchSessionsPrefersTranscriptSnippet(t *testing.T) {
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("Setenv HOME: %v", err)
+	}
+	defer func() { _ = os.Setenv("HOME", oldHome) }()
+
+	projectDir := t.TempDir()
+	sessionDir, err := sessionsBaseDir()
+	if err != nil {
+		t.Fatalf("sessionsBaseDir: %v", err)
+	}
+	projectHashDir := filepath.Join(sessionDir, strings.Repeat("a", 16))
+	if err := os.MkdirAll(projectHashDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	messages := []map[string]any{
+		{
+			"kind": "request",
+			"data": map[string]any{
+				"parts": []map[string]any{{
+					"type": "user-prompt",
+					"data": map[string]any{"content": "Search for authentication fix"},
+				}},
+				"timestamp": time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	}
+	transcript := []map[string]any{
+		{"kind": 0, "content": "search for authentication fix"},
+		{"kind": 1, "content": "Found the authentication fix in refresh token validation."},
+		{"kind": 2, "tool_name": "grep", "tool_args": "token refresh validation"},
+	}
+	session := map[string]any{
+		"messages":   messages,
+		"transcript": transcript,
+		"work_dir":   projectDir,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+		"prompt":     "Authentication bug",
+		"model":      "gpt-5.4",
+	}
+	raw, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("marshal session: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectHashDir, "2026-03-15T12-00-00.json"), raw, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	results, err := SearchSessions("authentication fix", "", 5)
+	if err != nil {
+		t.Fatalf("SearchSessions: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%d, want 1", len(results))
+	}
+	if !strings.Contains(results[0].Snippet, "Assistant: Found the authentication fix") {
+		t.Fatalf("snippet=%q, want transcript-aware assistant line", results[0].Snippet)
+	}
+	if !strings.Contains(results[0].Snippet, "User: search for authentication fix") {
+		t.Fatalf("snippet=%q, want neighboring transcript context", results[0].Snippet)
 	}
 }

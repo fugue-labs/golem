@@ -169,11 +169,11 @@ func (m *replayTUIModel) handleReplayCommand(text string) (*chat.Message, tea.Cm
 	arg := strings.TrimSpace(strings.TrimPrefix(text, "/replay"))
 
 	if arg == "list" {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found."}, nil
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions. Run a prompt first, then use `/replay` for the latest trace."}, nil
 	}
 
 	// For test purposes, we don't load from files — traces are injected via startReplayMsg.
-	return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions."}, nil
+	return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions. Run a prompt first, then use `/replay` for the latest trace or `/replay list` to inspect saved traces."}, nil
 }
 
 // startReplay initializes replay mode and begins feeding events.
@@ -186,7 +186,7 @@ func (m replayTUIModel) startReplay(trace *agent.ReplayTrace) (tea.Model, tea.Cm
 
 	msg := &chat.Message{
 		Kind: chat.KindSystem,
-		Content: fmt.Sprintf("Replaying session from %s (%s, %d events)",
+		Content: fmt.Sprintf("Replaying session from %s (%s, %d events). Press Esc to stop.",
 			trace.StartTime.Format("Jan 2 15:04"),
 			trace.Model,
 			len(trace.Events),

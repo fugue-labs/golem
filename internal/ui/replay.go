@@ -50,7 +50,7 @@ func (m *Model) handleReplayCommand(text string) (*chat.Message, tea.Cmd) {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to load trace: %v", err)}, nil
 	}
 	if trace == nil {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions."}, nil
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions. Run a prompt first, then use `/replay` for the latest trace or `/replay list` to inspect saved traces."}, nil
 	}
 
 	return m.startReplay(trace)
@@ -63,7 +63,7 @@ func (m *Model) listTraces() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to list traces: %v", err)}
 	}
 	if len(traces) == 0 {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found."}
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions. Run a prompt first, then use `/replay` for the latest trace."}
 	}
 
 	var b strings.Builder
@@ -90,7 +90,7 @@ func (m *Model) startReplay(trace *agent.ReplayTrace) (*chat.Message, tea.Cmd) {
 
 	msg := &chat.Message{
 		Kind: chat.KindSystem,
-		Content: fmt.Sprintf("Replaying session from %s (%s, %d events)",
+		Content: fmt.Sprintf("Replaying session from %s (%s, %d events). Press Esc to stop.",
 			trace.StartTime.Format("Jan 2 15:04"),
 			trace.Model,
 			len(trace.Events),

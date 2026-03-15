@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/fugue-labs/gollem/core"
 )
 
 // SessionResult represents a search hit with session metadata.
@@ -22,22 +24,38 @@ type SessionResult struct {
 
 // sessionData mirrors agent.SessionData for unmarshaling.
 type sessionData struct {
-	Messages  json.RawMessage `json:"messages"`
-	WorkDir   string          `json:"work_dir"`
-	Timestamp time.Time       `json:"timestamp"`
-	Prompt    string          `json:"prompt,omitempty"`
-	Model     string          `json:"model"`
+	Messages   json.RawMessage `json:"messages"`
+	Transcript json.RawMessage `json:"transcript,omitempty"`
+	WorkDir    string          `json:"work_dir"`
+	Timestamp  time.Time       `json:"timestamp"`
+	Prompt     string          `json:"prompt,omitempty"`
+	Model      string          `json:"model"`
 }
 
-// messageContent is a minimal struct for extracting text from messages.
+// messageContent is a minimal struct for extracting text from legacy messages.
 type messageContent struct {
 	Role    string `json:"role"`
 	Content any    `json:"content"`
 }
 
+type transcriptEntry struct {
+	Kind     int    `json:"kind"`
+	Content  string `json:"content,omitempty"`
+	ToolName string `json:"tool_name,omitempty"`
+	ToolArgs string `json:"tool_args,omitempty"`
+}
+
+type sessionMeta struct {
+	file      string
+	workDir   string
+	timestamp time.Time
+	prompt    string
+	session   *sessionData
+}
+
 // SearchSessions searches across all saved sessions for the given query.
 // If projectDir is non-empty, only sessions from that project are searched.
-// Returns up to maxResults results sorted by relevance.
+// Returns up to maxResults results sorted by relevance with richer transcript-aware snippets when available.
 func SearchSessions(query string, projectDir string, maxResults int) ([]SessionResult, error) {
 	sessionsRoot, err := sessionsBaseDir()
 	if err != nil {
@@ -45,9 +63,8 @@ func SearchSessions(query string, projectDir string, maxResults int) ([]SessionR
 	}
 
 	idx := NewIndex()
-	var metadata []sessionMeta
+	metadata := make(map[string]sessionMeta)
 
-	// Walk all project directories.
 	entries, err := os.ReadDir(sessionsRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -75,8 +92,6 @@ func SearchSessions(query string, projectDir string, maxResults int) ([]SessionR
 			if err != nil {
 				continue
 			}
-
-			// Filter by project if specified.
 			if projectDir != "" && sd.WorkDir != projectDir {
 				continue
 			}
@@ -86,35 +101,32 @@ func SearchSessions(query string, projectDir string, maxResults int) ([]SessionR
 				continue
 			}
 
-			docID := sessionFile
-			idx.Add(docID, text)
-			metadata = append(metadata, sessionMeta{
+			idx.Add(sessionFile, text)
+			metadata[sessionFile] = sessionMeta{
 				file:      sessionFile,
 				workDir:   sd.WorkDir,
 				timestamp: sd.Timestamp,
 				prompt:    sd.Prompt,
-			})
+				session:   sd,
+			}
 		}
 	}
 
 	results := idx.Search(query, maxResults)
-
-	var out []SessionResult
+	out := make([]SessionResult, 0, len(results))
 	for _, r := range results {
-		// Find metadata by matching doc ID to session file.
-		for _, meta := range metadata {
-			if meta.file == r.DocID {
-				out = append(out, SessionResult{
-					SessionFile: meta.file,
-					ProjectDir:  meta.workDir,
-					Timestamp:   meta.timestamp,
-					Prompt:      meta.prompt,
-					Score:       r.Score,
-					Snippet:     extractSnippet(r.Doc.Text, query, 200),
-				})
-				break
-			}
+		meta, ok := metadata[r.DocID]
+		if !ok {
+			continue
 		}
+		out = append(out, SessionResult{
+			SessionFile: meta.file,
+			ProjectDir:  meta.workDir,
+			Timestamp:   meta.timestamp,
+			Prompt:      meta.prompt,
+			Score:       r.Score,
+			Snippet:     extractSessionSnippet(meta.session, r.Doc.Text, query, 220),
+		})
 	}
 	return out, nil
 }
@@ -144,7 +156,6 @@ func ListProjects() ([]string, error) {
 		if err != nil {
 			continue
 		}
-		// Find the work_dir from the most recent session.
 		var jsonFiles []string
 		for _, sf := range sessions {
 			if !sf.IsDir() && strings.HasSuffix(sf.Name(), ".json") {
@@ -164,13 +175,6 @@ func ListProjects() ([]string, error) {
 		}
 	}
 	return projects, nil
-}
-
-type sessionMeta struct {
-	file      string
-	workDir   string
-	timestamp time.Time
-	prompt    string
 }
 
 func sessionsBaseDir() (string, error) {
@@ -194,42 +198,272 @@ func loadSessionData(path string) (*sessionData, error) {
 }
 
 // extractSessionText extracts searchable text from a session.
-// Includes the prompt and all user/assistant message content.
+// Includes the prompt and all user/assistant/tool text that can be recovered from saved state.
 func extractSessionText(sd *sessionData) string {
-	var b strings.Builder
+	var lines []string
+	appendSearchLine(&lines, sd.Prompt)
 
-	// Include the prompt.
-	if sd.Prompt != "" {
-		b.WriteString(sd.Prompt)
-		b.WriteString("\n")
+	if structured := extractStructuredMessageText(sd.Messages); structured != "" {
+		for _, line := range strings.Split(structured, "\n") {
+			appendSearchLine(&lines, line)
+		}
+	} else if legacy := extractLegacyMessageText(sd.Messages); legacy != "" {
+		for _, line := range strings.Split(legacy, "\n") {
+			appendSearchLine(&lines, line)
+		}
 	}
 
-	// Parse messages to extract text content.
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+func extractStructuredMessageText(raw json.RawMessage) string {
+	messages, err := core.UnmarshalMessages(raw)
+	if err != nil {
+		return ""
+	}
+
+	var lines []string
+	for _, msg := range messages {
+		switch m := msg.(type) {
+		case core.ModelRequest:
+			for _, part := range m.Parts {
+				switch p := part.(type) {
+				case core.UserPromptPart:
+					appendSearchLine(&lines, p.Content)
+				case core.RetryPromptPart:
+					appendSearchLine(&lines, p.Content)
+				case core.ToolReturnPart:
+					appendSearchLine(&lines, p.ToolName)
+					appendSearchLine(&lines, stringifySearchValue(p.Content))
+				}
+			}
+		case core.ModelResponse:
+			for _, part := range m.Parts {
+				switch p := part.(type) {
+				case core.TextPart:
+					appendSearchLine(&lines, p.Content)
+				case core.ThinkingPart:
+					appendSearchLine(&lines, p.Content)
+				case core.ToolCallPart:
+					appendSearchLine(&lines, p.ToolName)
+					appendSearchLine(&lines, p.ArgsJSON)
+				}
+			}
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func extractLegacyMessageText(raw json.RawMessage) string {
 	var messages []messageContent
-	if err := json.Unmarshal(sd.Messages, &messages); err != nil {
-		// Try as a different format — some sessions wrap content differently.
-		return b.String()
+	if err := json.Unmarshal(raw, &messages); err != nil {
+		return ""
 	}
 
+	var lines []string
 	for _, msg := range messages {
 		switch content := msg.Content.(type) {
 		case string:
-			b.WriteString(content)
-			b.WriteString("\n")
+			appendSearchLine(&lines, content)
 		case []any:
-			// Content blocks (e.g., [{type: "text", text: "..."}]).
 			for _, block := range content {
 				if m, ok := block.(map[string]any); ok {
 					if text, ok := m["text"].(string); ok {
-						b.WriteString(text)
-						b.WriteString("\n")
+						appendSearchLine(&lines, text)
 					}
 				}
 			}
 		}
 	}
 
-	return b.String()
+	return strings.Join(lines, "\n")
+}
+
+func stringifySearchValue(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return x
+	case json.RawMessage:
+		return normalizeSearchText(string(x))
+	case []byte:
+		return normalizeSearchText(string(x))
+	default:
+		raw, err := json.Marshal(x)
+		if err != nil {
+			return normalizeSearchText(fmt.Sprint(x))
+		}
+		return normalizeSearchText(string(raw))
+	}
+}
+
+func appendSearchLine(lines *[]string, text string) {
+	text = normalizeSearchText(text)
+	if text == "" {
+		return
+	}
+	*lines = append(*lines, text)
+}
+
+func normalizeSearchText(text string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+}
+
+func extractSessionSnippet(sd *sessionData, fallbackText, query string, maxLen int) string {
+	if sd != nil {
+		if snippet := extractTranscriptSnippet(sd.Transcript, query, maxLen); snippet != "" {
+			return snippet
+		}
+	}
+	return extractSnippet(fallbackText, query, maxLen)
+}
+
+func extractTranscriptSnippet(raw json.RawMessage, query string, maxLen int) string {
+	lines := transcriptDisplayLines(raw)
+	if len(lines) == 0 {
+		return ""
+	}
+	idx := findMatchingLine(lines, query)
+	if idx < 0 {
+		return ""
+	}
+
+	start := idx - 1
+	if start < 0 {
+		start = 0
+	}
+	end := idx + 2
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	selected := make([]string, 0, end-start)
+	remaining := maxLen
+	for _, line := range lines[start:end] {
+		if remaining <= 0 {
+			break
+		}
+		budget := remaining
+		if budget > 140 {
+			budget = 140
+		}
+		line = truncateRunes(line, budget)
+		if line == "" {
+			continue
+		}
+		selected = append(selected, line)
+		remaining -= len([]rune(line)) + 1
+	}
+	return strings.Join(selected, "\n")
+}
+
+func transcriptDisplayLines(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var entries []transcriptEntry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil
+	}
+
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if line := formatTranscriptLine(entry); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func formatTranscriptLine(entry transcriptEntry) string {
+	content := normalizeSearchText(entry.Content)
+	switch entry.Kind {
+	case 0:
+		if content == "" {
+			return ""
+		}
+		return "User: " + content
+	case 1:
+		if content == "" {
+			return ""
+		}
+		return "Assistant: " + content
+	case 2:
+		parts := make([]string, 0, 3)
+		if entry.ToolName != "" {
+			parts = append(parts, entry.ToolName)
+		}
+		if entry.ToolArgs != "" {
+			parts = append(parts, normalizeSearchText(entry.ToolArgs))
+		}
+		if content != "" {
+			parts = append(parts, content)
+		}
+		if len(parts) == 0 {
+			return ""
+		}
+		return "Tool: " + strings.Join(parts, " — ")
+	case 3:
+		if content == "" {
+			return ""
+		}
+		if entry.ToolName != "" {
+			return fmt.Sprintf("Tool result (%s): %s", entry.ToolName, content)
+		}
+		return "Tool result: " + content
+	case 4:
+		if content == "" {
+			return ""
+		}
+		return "Thinking: " + content
+	case 5:
+		if content == "" {
+			return ""
+		}
+		return "Error: " + content
+	case 6:
+		if content == "" {
+			return ""
+		}
+		return "System: " + content
+	default:
+		return content
+	}
+}
+
+func findMatchingLine(lines []string, query string) int {
+	terms := tokenize(query)
+	if len(terms) == 0 {
+		return -1
+	}
+	for i, line := range lines {
+		lower := strings.ToLower(line)
+		for _, term := range terms {
+			if strings.Contains(lower, term) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func truncateRunes(text string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return text
+	}
+	if maxLen == 1 {
+		return "…"
+	}
+	return string(runes[:maxLen-1]) + "…"
 }
 
 // extractSnippet returns a text snippet around the first occurrence of any query term.
@@ -246,14 +480,12 @@ func extractSnippet(text, query string, maxLen int) string {
 	}
 
 	if bestPos < 0 {
-		// No direct substring match; return the beginning.
 		if len(text) > maxLen {
 			return text[:maxLen] + "…"
 		}
 		return text
 	}
 
-	// Center the snippet around the match.
 	start := bestPos - maxLen/2
 	if start < 0 {
 		start = 0
@@ -264,7 +496,6 @@ func extractSnippet(text, query string, maxLen int) string {
 	}
 
 	snippet := text[start:end]
-	// Clean up: trim to word boundaries.
 	if start > 0 {
 		if idx := strings.IndexByte(snippet, ' '); idx >= 0 && idx < 30 {
 			snippet = snippet[idx+1:]
@@ -278,7 +509,6 @@ func extractSnippet(text, query string, maxLen int) string {
 		snippet += "…"
 	}
 
-	// Collapse whitespace for display.
 	snippet = strings.Join(strings.Fields(snippet), " ")
 	return snippet
 }

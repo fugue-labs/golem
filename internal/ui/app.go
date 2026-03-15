@@ -1674,8 +1674,20 @@ func (m *Model) resumeSession() *chat.Message {
 	}
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Resumed session from %s (%d messages, %d requests).", session.Timestamp.Format("Jan 2 15:04"), len(msgs), session.Usage.Requests),
+		Content: fmt.Sprintf("Resumed session from %s (%d messages, %d requests). Prompt: %q. Restored conversation history, transcript state, and saved workflow data.", session.Timestamp.Format("Jan 2 15:04"), len(msgs), session.Usage.Requests, summarizePromptPreview(session.Prompt)),
 	}
+}
+
+func summarizePromptPreview(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return "(no saved prompt)"
+	}
+	runes := []rune(prompt)
+	if len(runes) <= 80 {
+		return prompt
+	}
+	return string(runes[:79]) + "…"
 }
 
 func (m *Model) compactContext() tea.Cmd {

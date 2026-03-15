@@ -8,10 +8,10 @@
 - `/verify` — show the latest verification summary
 - `/compact` — compress conversation context
 - `/cost` — show session cost breakdown
-- `/replay [file|list]` — replay a recorded session trace
+- `/replay [file|list]` — replay the latest trace or inspect saved traces
 - `/budget` — show budget status and limits
-- `/resume` — restore the last saved session
-- `/search <query>` — search across all saved sessions
+- `/resume` — restore the last saved session for this project
+- `/search <query>` — search across all saved sessions with readable context
 - `/model [name]` — show or switch the active model
 - `/diff` — show git diff of uncommitted changes
 - `/undo [path]` — revert one unstaged git-tracked file change

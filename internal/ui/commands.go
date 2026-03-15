@@ -32,10 +32,10 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/verify` — show the latest verification summary\n")
 	b.WriteString("- `/compact` — compress conversation context\n")
 	b.WriteString("- `/cost` — show session cost breakdown\n")
-	b.WriteString("- `/replay [file|list]` — replay a recorded session trace\n")
+	b.WriteString("- `/replay [file|list]` — replay the latest trace or inspect saved traces\n")
 	b.WriteString("- `/budget` — show budget status and limits\n")
-	b.WriteString("- `/resume` — restore the last saved session\n")
-	b.WriteString("- `/search <query>` — search across all saved sessions\n")
+	b.WriteString("- `/resume` — restore the last saved session for this project\n")
+	b.WriteString("- `/search <query>` — search across all saved sessions with readable context\n")
 	b.WriteString("- `/model [name]` — show or switch the active model\n")
 	b.WriteString("- `/diff` — show git diff of uncommitted changes\n")
 	b.WriteString("- `/undo [path]` — revert one unstaged git-tracked file change\n")
@@ -575,7 +575,7 @@ func (m *Model) handleSearchCommand(text string) *chat.Message {
 	if query == "" {
 		return &chat.Message{
 			Kind:    chat.KindAssistant,
-			Content: "Usage: `/search <query>` — search across all saved sessions.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`",
+			Content: "Usage: `/search <query>` — search across all saved sessions with readable context.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`\n\nResults include the saved prompt, project, and a transcript snippet when available.",
 		}
 	}
 
@@ -601,6 +601,8 @@ func (m *Model) handleSearchCommand(text string) *chat.Message {
 				prompt = prompt[:120] + "…"
 			}
 			fmt.Fprintf(&sb, "%s\n", prompt)
+		} else {
+			fmt.Fprintf(&sb, "Session from %s\n", r.Timestamp.Format("Jan 2, 2006 15:04"))
 		}
 		fmt.Fprintf(&sb, "   %s", r.Timestamp.Format("Jan 2, 2006 15:04"))
 		if r.ProjectDir != "" {
