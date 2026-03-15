@@ -462,6 +462,43 @@ func (m *Model) windowTitle() string {
 	return title
 }
 
+func (m *Model) renderHeaderHelpHint(width int) string {
+	if m.missionObj == nil {
+		return m.renderDashboardHelpLine(width, "/mission new in shell")
+	}
+	return m.renderDashboardHelpLine(width, "/mission status in shell")
+}
+
+func (m *Model) renderDashboardHelpLine(width int, shellHint string) string {
+	segments := []string{shellHint, "Tab switch panes", "Shift+Tab reverse", "1-4 jump", "j/k scroll", "r refresh", "q quit"}
+	return renderDashboardHelpSurfaceLine(width, dashboardHelpTitle(), segments, func(text string) string {
+		return m.sty.Panel.EmptyBody.Render(text)
+	})
+}
+
+func dashboardHelpTitle() string {
+	return "Help"
+}
+
+func renderDashboardHelpSurfaceLine(width int, title string, segments []string, style func(string) string) string {
+	if len(segments) == 0 {
+		return ""
+	}
+	if width <= 0 {
+		width = 1
+	}
+	content := strings.TrimSpace(title)
+	if content == "" {
+		content = "Help"
+	}
+	content += " · " + strings.Join(segments, " · ")
+	content = "  " + ansi.Truncate(content, max(1, width-2), "…")
+	if style != nil {
+		return style(content)
+	}
+	return content
+}
+
 // renderHeader renders the mission header.
 func (m *Model) renderHeader() []string {
 	if m.missionObj == nil {
@@ -471,7 +508,7 @@ func (m *Model) renderHeader() []string {
 			m.sty.Panel.EmptyTitle.Render("No active mission"),
 			m.sty.Panel.EmptyBody.Render("Create one with /mission new or run golem mission new."),
 			m.sty.Panel.EmptyBody.Render("The dashboard will attach as soon as durable mission state exists."),
-			m.sty.Panel.EmptyBody.Render(ansi.Truncate("Help · /mission new in shell · Tab switch panes · 1-4 jump · j/k scroll · r refresh · q quit", max(1, m.width), "…")),
+			m.renderHeaderHelpHint(max(1, m.width)),
 		}
 	}
 
@@ -549,7 +586,7 @@ func (m *Model) renderHeader() []string {
 	goalLabel := m.sty.Panel.MetricKey.Render("Goal")
 	goalText := ansi.Truncate(ms.Goal, max(1, m.width-lipgloss.Width(goalLabel)-1), "…")
 	lines = append(lines, goalLabel+" "+m.sty.HalfMuted.Render(goalText))
-	lines = append(lines, m.sty.Panel.EmptyBody.Render(ansi.Truncate("Help · /mission status in shell · Tab switch panes · 1-4 jump · j/k scroll · r refresh · q quit", max(1, m.width), "…")))
+	lines = append(lines, m.renderHeaderHelpHint(max(1, m.width)))
 	return lines
 }
 
@@ -877,7 +914,7 @@ func (m *Model) renderFooter() string {
 	keys := []string{
 		"q:quit",
 		"r:refresh",
-		"tab:switch pane",
+		"tab/shift+tab:panes",
 		"j/k:scroll",
 		"1-4:jump",
 	}
@@ -903,12 +940,12 @@ func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
 	indicator := "○"
 	headStyle := m.sty.Panel.HeaderInactive
 	metaStyle := m.sty.Panel.HeaderMeta
-	meta := "Tab focus • 1-4 jump"
+	meta := "Tab/Shift+Tab focus • 1-4 jump"
 	if focused {
 		indicator = "▸"
 		headStyle = m.sty.Panel.HeaderActive
 		metaStyle = m.sty.Panel.HeaderMeta.Bold(true)
-		meta = "ACTIVE • j/k scroll • Tab next"
+		meta = "ACTIVE • j/k scroll • Tab/Shift+Tab panes"
 	}
 	label := fmt.Sprintf("%s %s %s", indicator, paneShortcut(title), title)
 	line := headStyle.Render(label) + " " + metaStyle.Render(meta)

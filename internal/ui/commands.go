@@ -52,7 +52,7 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("**Discoverability**\n\n")
 	b.WriteString("- Input help stays visible while you work so the shell keeps teaching next actions\n")
 	b.WriteString("- Try `/help`, `/search <query>`, or `/doctor` from the main shell\n")
-	b.WriteString("- Open Mission Control with `golem dashboard` and use `Tab`, `1-4`, and `j/k` to navigate panes\n\n")
+	b.WriteString("- Open Mission Control with `golem dashboard` and use `Tab`, `Shift+Tab`, `1-4`, and `j/k` to navigate panes\n\n")
 	b.WriteString("**Keys**\n\n")
 	b.WriteString("- `Enter` — send\n")
 	b.WriteString("- `Shift+Enter` — insert newline\n")

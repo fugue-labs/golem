@@ -1085,7 +1085,7 @@ func TestTeatestFooterKeybindings(t *testing.T) {
 
 	// Test footer content directly — the full View() may truncate it depending on height.
 	footer := stripANSI(m.renderFooter())
-	for _, hint := range []string{"q:quit", "r:refresh", "tab:switch pane", "j/k:scroll"} {
+	for _, hint := range []string{"q:quit", "r:refresh", "tab/shift+tab:panes", "j/k:scroll"} {
 		if !strings.Contains(footer, hint) {
 			t.Errorf("expected key hint %q in footer, got %q", hint, footer)
 		}

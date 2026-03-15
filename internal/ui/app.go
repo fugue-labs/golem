@@ -1885,15 +1885,39 @@ func (m *Model) renderInput() string {
 }
 
 func (m *Model) renderContextualHelpLine(width int) string {
+	return m.renderHelpSurfaceLine(width, ContextualHelpTitle(), m.contextualHelpSegments())
+}
+
+func ContextualHelpTitle() string {
+	return "Help"
+}
+
+func (m *Model) renderHelpSurfaceLine(width int, title string, segments []string) string {
 	if !m.shouldRenderContextualHelpLine() {
 		return ""
 	}
-	segments := m.contextualHelpSegments()
+	return RenderHelpSurfaceLine(width, title, segments, func(text string) string {
+		return m.wrapShellLine(m.sty.Muted.Render(text), width)
+	})
+}
+
+func RenderHelpSurfaceLine(width int, title string, segments []string, style func(string) string) string {
 	if len(segments) == 0 {
 		return ""
 	}
-	content := "  Help · " + strings.Join(segments, " · ")
-	return m.wrapShellLine(m.sty.Muted.Render(truncateText(content, max(1, width))), width)
+	if width <= 0 {
+		width = 1
+	}
+	content := strings.TrimSpace(title)
+	if content == "" {
+		content = "Help"
+	}
+	content += " · " + strings.Join(segments, " · ")
+	content = "  " + truncateText(content, width)
+	if style != nil {
+		return style(content)
+	}
+	return content
 }
 
 func (m *Model) shouldRenderContextualHelpLine() bool {

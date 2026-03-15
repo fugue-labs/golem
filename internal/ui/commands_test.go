@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -49,10 +51,12 @@ func TestCommandHelp(t *testing.T) {
 	if content == "" {
 		t.Fatal("expected non-empty help output")
 	}
-	for _, want := range []string{"/help", "/clear", "/plan", "/search <query>", "golem dashboard", "Enter", "Esc", "Tab"} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("help output missing %q", want)
-		}
+	want, err := os.ReadFile(filepath.Join("testdata", "help.golden.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if strings.TrimRight(content, "\n") != strings.TrimRight(string(want), "\n") {
+		t.Fatalf("help output mismatch\n--- got ---\n%s\n--- want ---\n%s", content, string(want))
 	}
 }
 
