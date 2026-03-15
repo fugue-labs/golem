@@ -2,7 +2,11 @@
 
 Golem is a terminal-based coding agent with deep project awareness and a rich interactive experience. This document covers all user-facing features.
 
-## Current TUI experience
+## TUI superiority rubric and preserved UX contract
+
+Use this section as the shared scorecard for shell-oriented implementation work. It is derived from the current docs, UI code, and e2e-observed behavior so future improvements can reference one contract instead of re-deriving goals from scattered sources.
+
+### Current TUI experience
 
 The current interface is organized around five user-visible regions that any future polish should respect:
 
@@ -12,7 +16,17 @@ The current interface is organized around five user-visible regions that any fut
 - **Dashboard** — a separate `golem dashboard` Mission Control surface for tasks, workers, evidence, and events.
 - **Discoverability affordances** — `/help`, slash-command tab completion, launch-time tips, placeholder guidance, and status-bar key hints.
 
-## Highest-impact TUI improvements to pursue first
+### Superiority rubric by surface
+
+| Surface | What success means | Score 1 | Score 3 | Score 5 |
+|---|---|---|---|---|
+| Launch frame | The first frame makes identity, orientation, and next action obvious. | Looks unstable or under-explained. | `GOLEM`, input affordance, and basic shell regions are visible. | The shell feels immediately intentional, legible, and ready for action. |
+| Transcript readability | User, assistant, tool, system, and error turns are easy to scan over time. | Turns blur together. | Main roles are distinguishable but still dense. | Role separation, streaming state, and summaries are obvious at a glance. |
+| Workflow visibility | Active mission/workflow state is prioritized over raw detail. | State exists but is hard to rank. | Current work is visible with some effort. | Active work, blockers, next action, and proof surfaces are immediately clear. |
+| Dashboard readability | Mission Control reads clearly before the operator starts navigating. | Panes feel cramped or hard to parse. | Pane purpose and focus are understandable after brief inspection. | Pane headers, summaries, empty states, and focus affordances are obvious immediately. |
+| Discoverability | Help, slash commands, usage text, and key hints are easy to find from launch onward. | Requires prior product knowledge. | `/help` and some hints are visible. | The shell continuously teaches next actions without becoming noisy. |
+
+### How to prioritize improvements
 
 1. **Clarify shell hierarchy first**
    - Make the header, transcript, workflow panel, and status bar read as one cohesive layout.
@@ -29,15 +43,25 @@ The current interface is organized around five user-visible regions that any fut
 5. **Distribute discoverability across the shell**
    - Keep `/help` as the canonical command index, but reinforce it with stronger empty-state cues, slash affordances, and status hints.
 
-## TUI design constraints from e2e coverage
+### Preserved e2e UX contract
 
-These constraints are currently verified by end-to-end tests and should be treated as non-negotiable when improving the interface:
+These behaviors are verified by end-to-end tests and must remain stable through visual polish:
 
-- **Stable launch behavior** — the app must render reliably with a visible `GOLEM` status bar and visible prompt/input affordance.
-- **Help and status discoverability must remain intact** — `/help` must continue exposing key commands and keybindings, and the shell must continue making controls easy to find.
-- **Search usage copy must remain stable** — `/search` without arguments must continue showing `/search <query>` and clear examples for searching saved sessions.
-- **Command resilience must remain obvious** — `/model`, `/doctor`, `/clear`, unknown slash commands, cancellation, scrolling, tab completion, and input history must remain visually understandable and responsive.
-- **Dashboard launch must remain stable** — `golem dashboard` must continue to open into either Mission Control or a valid empty/error state without losing navigation affordances.
+- **Visible `GOLEM` launch anchor** — the shell must render with a visible `GOLEM` status bar and visible prompt/input affordance (`❯` or `Ask anything… /help for commands`).
+- **`/help` discoverability** — `/help` must continue surfacing `/help`, `/clear`, `/plan`, `/model`, `/cost`, `/replay`, `/search`, `/rewind`, `/mission`, `/quit`, `/spec`, and `/doctor`, plus the key hints `Enter`, `Esc`, and `Tab`.
+- **`/search` usage copy** — `/search` without arguments must continue showing `/search <query>`, `search across all saved sessions`, and `Examples`.
+- **Dashboard launch stability** — `golem dashboard` must continue to land in either `Mission Control` or a valid no-mission/error state while preserving pane navigation.
+- **Cancellation, scroll, and history behavior** — `Esc` cancellation, `PgUp/PgDn` transcript scrolling, and `↑/↓` input history recall must remain stable and readable.
+- **Other shell resilience** — unknown slash commands must still fail obviously; `/clear`, `/model`, `/doctor`, tab completion, and slash-command sequencing must remain intact.
+
+### Task template for future TUI work
+
+Implementation tasks should reference:
+
+1. the target **surface** from the rubric,
+2. the current and desired **score** for that surface,
+3. the preserved **e2e UX contract** bullets that cannot regress, and
+4. any additional mission/dashboard context from `docs/tui-comparison-prompt.md`.
 
 ## Commands
 
@@ -51,14 +75,22 @@ These constraints are currently verified by end-to-end tests and should be treat
 | `/verify` | Show the latest verification summary |
 | `/compact` | Compress conversation context to free up space |
 | `/cost` | Show detailed session cost breakdown |
+| `/replay [file\|list]` | Replay a recorded session trace |
+| `/budget` | Show budget status and limits |
 | `/resume` | Restore the last saved session |
+| `/search <query>` | Search across all saved sessions |
 | `/model [name]` | Show or switch the active model |
 | `/diff` | Show git diff of uncommitted changes |
 | `/undo [path]` | Revert unstaged changes (all files, or a specific path) |
+| `/mission [new\|status\|tasks\|plan\|approve\|start\|pause\|cancel\|list]` | Mission orchestration commands |
+| `/rewind [N]` | Rewind to a saved checkpoint or list checkpoints |
 | `/doctor` | Diagnose setup issues |
 | `/config` | Show effective configuration and environment variables |
+| `/team` | Show team member status |
+| `/context` | Show context window usage |
 | `/skills` | List detected skills |
 | `/skill <name>` | Toggle a skill on or off |
+| `/spec [file]` | Start or show spec-driven development |
 | `/quit` or `/exit` | Quit the app |
 
 ## Keybindings

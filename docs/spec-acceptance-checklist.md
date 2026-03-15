@@ -2,6 +2,31 @@
 
 This checklist audits the current implementation against `docs/implementation-spec.md` §20.
 
+## TUI rubric and preserved-UX acceptance addendum
+
+Use this addendum when evaluating shell-facing work so reviewers can verify both UX ambition and regression safety from one place.
+
+### Required rubric coverage
+
+Documentation and implementation tasks should explicitly score or discuss these five surfaces:
+
+1. **Launch frame** — first-frame clarity, visible identity, and immediate input orientation.
+2. **Transcript readability** — separation between user, assistant, tool, system, and error states.
+3. **Workflow visibility** — ability to identify active work, blockers, next action, and proof state quickly.
+4. **Dashboard readability** — Mission Control scanability before interaction and during pane navigation.
+5. **Discoverability** — persistence of help, slash-command cues, usage text, and key hints.
+
+### Preserved e2e UX contracts
+
+Shell-facing changes should be rejected unless they preserve these verified behaviors or intentionally update tests and docs together:
+
+- visible `GOLEM` at launch plus a visible prompt or `Ask anything… /help for commands`,
+- `/help` discoverability for key commands and key hints,
+- `/search <query>` usage text including `search across all saved sessions` and `Examples`,
+- `golem dashboard` launch stability into Mission Control or a valid empty/error state,
+- stable cancellation, scroll, and input-history behavior (`Esc`, `PgUp/PgDn`, `↑/↓`), and
+- stable `/clear`, `/model`, `/doctor`, unknown-command, and tab-completion behavior.
+
 ## Acceptance Criteria
 
 1. **Partial** — A developer can point Golem at a repository and complete common coding tasks.
