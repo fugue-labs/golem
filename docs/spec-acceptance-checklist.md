@@ -44,7 +44,7 @@ Documentation and implementation should agree on the currently shipped mission c
 
 2. **Approval/start semantics**
    - `/mission plan` creates the durable mission-plan approval gate.
-   - `/mission approve` resolves that gate durably through `ApproveMission` and immediately attempts start.
+   - `/mission approve` resolves that gate durably through `ApproveMission` and immediately attempts start; if another approval still blocks execution, the operator should see approved-but-not-started guidance instead of a silent failure.
    - `/mission start` cannot bypass a pending plan approval.
    - `/mission start` may begin execution from `awaiting_approval` only after the plan gate is approved and no other approvals remain pending.
    - Resume semantics are `/mission start` from `paused`.

@@ -1534,7 +1534,7 @@ The implementation must make approval policy explicit enough that a coding agent
 
 | Decision surface | Default | Rationale |
 |---|---|---|
-| initial plan | approval required unless auto-start policy enabled | operator should confirm mission framing |
+| initial plan | approval required in the shipped TUI flow | operator should confirm mission framing before execution starts |
 | local replan | auto-approve if policy allows | keeps operator out of low-risk bookkeeping |
 | structural replan | approval required | graph meaning changes materially |
 | scope escalation to `repo_wide` | approval required | blast radius increases sharply |
@@ -2607,7 +2607,7 @@ A live smoke run is incomplete if evidence retention fails.
 
 The feature is accepted only when all of the following are true:
 
-1. A user can create, plan, start, pause, resume, and cancel a mission.
+1. A user can create, plan, approve, start, pause, resume via `/mission start`, and cancel a mission.
 2. A mission can run multiple workers concurrently toward a shared goal.
 3. Writable scope conflicts are prevented or explicitly policy-approved.
 4. Every accepted task has a task spec, run summary, diff or no-op proof, verification evidence, and review result.
@@ -2771,12 +2771,5 @@ The implementation must not:
 3. If a design choice makes the system feel more distributed than necessary, more magical than auditable, or more complicated than explainable, that design choice is wrong.
 4. If a decision belongs in the reusable orchestration core, put it in Gollem.
 5. If a decision belongs to product UX or presentation, keep it in Golem.
-
-The correct v1 mission system should feel like a natural extension of Golem’s existing disciplined coding workflow, not like a separate platform stapled onto it.
-, put it in Gollem.
-5. If a decision belongs to product UX or presentation, keep it in Golem.
-
-The correct v1 mission system should feel like a natural extension of Golem’s existing disciplined coding workflow, not like a separate platform stapled onto it.
-longs to product UX or presentation, keep it in Golem.
 
 The correct v1 mission system should feel like a natural extension of Golem’s existing disciplined coding workflow, not like a separate platform stapled onto it.

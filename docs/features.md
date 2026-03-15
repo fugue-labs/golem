@@ -75,7 +75,7 @@ Mission orchestration is currently exposed through two operator-facing surfaces.
    - `/mission tasks` lists the current task DAG with task IDs, statuses, titles, objectives, and dependency edges.
    - `/mission plan` invokes the planner, moves the mission to `planning`, and later applies the DAG into durable store state.
    - Applying the plan creates durable tasks, dependencies, and a durable mission-plan approval row, then moves the mission to `awaiting_approval`.
-   - `/mission approve` resolves the durable mission-plan approval via `ApproveMission` and immediately attempts to start execution.
+   - `/mission approve` resolves the durable mission-plan approval via `ApproveMission` and immediately attempts to start execution; if other approvals still block execution, the operator gets a clear approved-but-not-started message.
    - `/mission start` starts a `paused` mission or starts an `awaiting_approval` mission only when the plan approval is already approved and no other approvals remain.
    - `/mission pause` pauses a running mission after stopping the in-process orchestrator, so no new tasks are leased while the mission remains paused.
    - `/mission cancel` stops the in-process orchestrator, marks the mission cancelled, and clears the current active mission from the chat session.
@@ -98,7 +98,7 @@ The current shipped mission contract is:
 - Repository precondition validation is **not** currently enforced by `CreateMission`; docs should treat stricter repo validation as future work unless that code ships.
 - `/mission plan` is the only normal path from `draft` to a task DAG.
 - Applying a plan creates durable tasks, dependencies, and a durable **mission-plan approval** record, then moves the mission to **`awaiting_approval`**.
-- `/mission approve` resolves that durable gate and immediately attempts to start the mission.
+- `/mission approve` resolves that durable gate and immediately attempts to start the mission; if start is still blocked by another pending approval, the UI reports that the plan is approved but execution is still gated.
 - `/mission start` does **not** bypass approval. It only starts execution when:
   - the mission is `paused`, or
   - the mission is `awaiting_approval` and the durable mission-plan approval is already `approved` and there are no remaining pending approvals.
