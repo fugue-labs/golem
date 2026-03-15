@@ -227,8 +227,13 @@ func (rl *ReviewLauncher) handlePass(ctx context.Context, spec *ReviewSpec, resu
 }
 
 func (rl *ReviewLauncher) handleReject(ctx context.Context, spec *ReviewSpec, result *ReviewResult, resultJSON json.RawMessage, now time.Time) error {
-	// Put task back to ready for retry.
+	// Put task back to ready with feedback so the worker can address
+	// the reviewer's concerns without starting from scratch.
 	spec.Task.Status = TaskReady
+	spec.Task.BlockingReason = result.Summary
+	if result.Suggestion != "" {
+		spec.Task.BlockingReason = result.Suggestion
+	}
 	spec.Task.UpdatedAt = now
 	if err := rl.store.UpdateTask(ctx, spec.Task); err != nil {
 		return fmt.Errorf("reject task %s: %w", spec.Task.ID, err)
@@ -287,8 +292,14 @@ func (rl *ReviewLauncher) handleRequestChanges(ctx context.Context, spec *Review
 	return nil
 }
 
+// maxReviewFailures is the number of consecutive review failures before
+// auto-accepting a task. This prevents infinite retry loops when the
+// reviewer agent has a persistent infrastructure error.
+const maxReviewFailures = 3
+
 // FailReview handles reviewer crash/timeout. Keeps task in TaskAwaitingReview
-// so a new review can be attempted.
+// so a new review can be attempted, unless too many consecutive failures have
+// occurred — in which case the task is auto-accepted.
 func (rl *ReviewLauncher) FailReview(ctx context.Context, spec *ReviewSpec, errText string) error {
 	now := time.Now().UTC()
 	spec.Run.Status = RunFailed
@@ -302,8 +313,46 @@ func (rl *ReviewLauncher) FailReview(ctx context.Context, spec *ReviewSpec, errT
 		"error": errText,
 	})
 
+	// Count consecutive review failures for this task.
+	failures := rl.countConsecutiveReviewFailures(ctx, spec.Task.ID)
+	if failures >= maxReviewFailures {
+		// Auto-accept: the worker completed successfully, but the reviewer
+		// keeps failing (infra issue). Better to let the work through.
+		spec.Task.Status = TaskAccepted
+		spec.Task.UpdatedAt = now
+		if err := rl.store.UpdateTask(ctx, spec.Task); err != nil {
+			return fmt.Errorf("auto-accept task %s after review failures: %w", spec.Task.ID, err)
+		}
+		rl.logEvent(ctx, spec.Run.MissionID, spec.Task.ID, spec.Run.ID, "review.auto_accepted", map[string]string{
+			"reason":   fmt.Sprintf("%d consecutive review failures", failures),
+			"last_err": errText,
+		})
+		return nil
+	}
+
 	// Task stays in TaskAwaitingReview for re-review.
 	return nil
+}
+
+// countConsecutiveReviewFailures counts how many of the most recent review
+// runs for a task have failed consecutively.
+func (rl *ReviewLauncher) countConsecutiveReviewFailures(ctx context.Context, taskID string) int {
+	runs, err := rl.store.GetRunsForTask(ctx, taskID)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for i := len(runs) - 1; i >= 0; i-- {
+		if runs[i].Mode != RunModeReview {
+			continue
+		}
+		if runs[i].Status == RunFailed {
+			count++
+		} else {
+			break // non-failure breaks the streak
+		}
+	}
+	return count
 }
 
 // logEvent appends a structured event to the mission event log.

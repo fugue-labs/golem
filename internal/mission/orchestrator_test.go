@@ -291,9 +291,16 @@ func (d *storeReviewDispatcher) CompleteReview(ctx context.Context, spec *Review
 		spec.Task.Status = TaskAccepted
 	case ReviewReject:
 		spec.Task.Status = TaskReady
+		spec.Task.BlockingReason = result.Summary
+		if result.Suggestion != "" {
+			spec.Task.BlockingReason = result.Suggestion
+		}
 	case ReviewRequestChanges:
 		spec.Task.Status = TaskReady
 		spec.Task.BlockingReason = result.Suggestion
+		if spec.Task.BlockingReason == "" {
+			spec.Task.BlockingReason = result.Summary
+		}
 	}
 	spec.Task.UpdatedAt = now
 	return d.store.UpdateTask(ctx, spec.Task)
@@ -1213,7 +1220,7 @@ func TestOrchestratorConcurrentStartStop(t *testing.T) {
 	}
 }
 
-func TestOrchestratorRejectReleasesWorktree(t *testing.T) {
+func TestOrchestratorRejectKeepsWorktreeAndFeedback(t *testing.T) {
 	store := newMemoryStore()
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -1265,11 +1272,19 @@ func TestOrchestratorRejectReleasesWorktree(t *testing.T) {
 	spawner.getReviewHandle(0).complete(rejectJSON, nil)
 	waitForEvent(t, events, "review.reject", 2*time.Second)
 
-	// Worktree SHOULD be released on reject.
-	waitFor(t, 2*time.Second, "worktree released", func() bool {
-		return wd.worktreeReleasedFor("t1")
+	// Worktree should NOT be released on reject — worker keeps it to iterate.
+	// Instead, verify the task is back to ready with feedback.
+	waitFor(t, 2*time.Second, "task back to ready", func() bool {
+		task, _ := store.GetTask(ctx, "t1")
+		return task != nil && task.Status == TaskReady
 	})
-	t.Log("Worktree correctly released on reject")
+	task, _ := store.GetTask(ctx, "t1")
+	if task.BlockingReason == "" {
+		t.Error("expected reviewer feedback in BlockingReason")
+	}
+	if wd.worktreeReleasedFor("t1") {
+		t.Error("worktree should be preserved on reject so worker can iterate")
+	}
 }
 
 func TestOrchestratorHeartbeatNoRaceOnCompletion(t *testing.T) {

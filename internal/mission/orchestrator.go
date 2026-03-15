@@ -536,11 +536,9 @@ func (o *Orchestrator) runReviewer(ctx context.Context, cancel context.CancelFun
 
 	// Release worktree based on verdict:
 	// - pass: integrator uses the branch, release happens in integrateAccepted
-	// - reject: worker starts from scratch, release worktree
-	// - request_changes: worker keeps existing worktree to iterate on feedback
-	if result.Verdict == ReviewReject {
-		o.workers.ReleaseWorkerWorktree(o.ctx, spec.Run.MissionID, spec.Task.ID)
-	}
+	// - reject / request_changes: worker keeps existing worktree to iterate
+	//   on feedback. Work is never discarded — the worker picks up from
+	//   where they left off and addresses the reviewer's concerns.
 }
 
 // ---------------------------------------------------------------------------
@@ -554,9 +552,18 @@ func (o *Orchestrator) integrateAccepted(ctx context.Context) {
 		return
 	}
 	for _, r := range results {
-		// Always release the worker worktree after integration attempt,
-		// regardless of success or failure. Failing to release on error
-		// causes worktree leaks (orphaned worktrees never cleaned up).
+		if len(r.ConflictFiles) > 0 {
+			// Merge conflict — task has been re-queued as TaskReady.
+			// Keep the worktree so the conflict-resolution worker can use it.
+			o.emit(OrchestratorEvent{
+				Type:    "integration.conflict",
+				TaskID:  r.TaskID,
+				Message: fmt.Sprintf("merge conflict, re-queued for resolution: %s", r.ErrorText),
+			})
+			continue
+		}
+
+		// Release the worktree after successful integration or non-conflict failure.
 		o.workers.ReleaseWorkerWorktree(ctx, o.cfg.MissionID, r.TaskID)
 
 		if r.Success {

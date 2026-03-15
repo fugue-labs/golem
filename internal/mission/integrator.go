@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -60,21 +61,29 @@ func (ie *IntegrationEngine) IntegrateTask(ctx context.Context, missionID, taskI
 	mergedCommit, conflicts, err := ie.gitMerge(ctx, targetBranch, workerBranch, task.Title)
 	if err != nil {
 		if len(conflicts) > 0 {
-			// Merge conflict — block the task.
+			// Merge conflict — prepare the worker's worktree for conflict
+			// resolution and re-queue the task so a worker can fix it.
+			ie.prepareConflictResolution(ctx, taskID, targetBranch)
+
 			now := time.Now().UTC()
-			task.Status = TaskBlocked
-			task.BlockingReason = fmt.Sprintf("merge conflict in: %s", strings.Join(conflicts, ", "))
+			task.Status = TaskReady
+			task.BlockingReason = fmt.Sprintf(
+				"MERGE CONFLICT: Your branch conflicts with %s. "+
+					"Conflicting files: %s\n\n"+
+					"The target branch has been merged into your worktree with conflict markers. "+
+					"Resolve ALL conflicts (look for <<<<<<< markers), then commit and push.",
+				targetBranch, strings.Join(conflicts, ", "))
 			task.UpdatedAt = now
 			ie.store.UpdateTask(ctx, task) //nolint:errcheck
 
-			ie.logEvent(ctx, missionID, taskID, "", "integration.conflict", map[string]string{
+			ie.logEvent(ctx, missionID, taskID, "", "integration.conflict.requeued", map[string]string{
 				"files": strings.Join(conflicts, ","),
 			})
 
 			return &IntegrationResult{
 				TaskID:        taskID,
 				ConflictFiles: conflicts,
-				ErrorText:     task.BlockingReason,
+				ErrorText:     fmt.Sprintf("merge conflict in: %s", strings.Join(conflicts, ", ")),
 			}, nil
 		}
 		return nil, fmt.Errorf("integrate task %s: %w", taskID, err)
@@ -163,6 +172,21 @@ func (ie *IntegrationEngine) CompleteMission(ctx context.Context, missionID stri
 
 	ie.logEvent(ctx, missionID, "", "", "mission.completed", nil)
 	return nil
+}
+
+// prepareConflictResolution merges the target branch into the worker's worktree
+// branch, leaving conflict markers for the worker to resolve. After the worker
+// resolves and commits, the next integration attempt will succeed because the
+// worker branch will include all of the target branch's changes.
+func (ie *IntegrationEngine) prepareConflictResolution(ctx context.Context, taskID, targetBranch string) {
+	wtPath := filepath.Join(ie.repoRoot, ".mission-worktrees", "worker-"+taskID)
+
+	// Merge the target branch INTO the worker branch (in the worktree).
+	// This will fail with conflicts — that's intentional. The conflict
+	// markers will be left in the working tree for the worker to resolve.
+	merge := exec.CommandContext(ctx, "git", "merge", "--no-commit", targetBranch)
+	merge.Dir = wtPath
+	merge.CombinedOutput() //nolint:errcheck // expected to fail with conflicts
 }
 
 // checkDependencies verifies all dependencies of a task are integrated or done.
