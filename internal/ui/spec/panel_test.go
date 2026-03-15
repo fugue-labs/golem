@@ -17,6 +17,14 @@ func updatePanel(p Panel, msg tea.Msg) Panel {
 	return m.(Panel)
 }
 
+func gateNames(gates []Gate) []string {
+	names := make([]string, len(gates))
+	for i, g := range gates {
+		names[i] = g.Name
+	}
+	return names
+}
+
 func TestPanelRenderEmpty(t *testing.T) {
 	p := NewPanel()
 	view := panelView(p)
@@ -42,23 +50,21 @@ func TestPanelRenderGateIcons(t *testing.T) {
 	p = updatePanel(p, LoadSpecMsg{FilePath: "spec.md"})
 
 	view := panelView(p)
-	if strings.Count(view, "○") != 3 {
-		t.Errorf("expected 3 pending gate icons, got view: %q", view)
+	if strings.Count(view, "○") != 1 {
+		t.Errorf("expected 1 pending gate icon while waiting on first approval, got view: %q", view)
 	}
 	if !strings.Contains(view, "Gate: Spec Approval") {
 		t.Fatalf("expected focused gate label, got: %q", view)
 	}
 
 	p = updatePanel(p, AdvanceGateMsg{Name: "Spec Approval"})
+	p = updatePanel(p, SetPhaseMsg{Phase: PhaseApproved})
 	view = panelView(p)
 	if !strings.Contains(view, "✓") {
 		t.Error("expected check icon after advancing gate")
 	}
-	if strings.Count(view, "○") != 2 {
-		t.Errorf("expected 2 remaining pending icons, got view: %q", view)
-	}
-	if !strings.Contains(view, "Gate: Task Decomposition") {
-		t.Fatalf("expected next focused gate label, got: %q", view)
+	if strings.Contains(view, "Gate: Task Decomposition") {
+		t.Fatalf("task decomposition gate should stay secondary until the workflow is waiting on it, got: %q", view)
 	}
 }
 
@@ -106,11 +112,34 @@ func TestPanelLoadSpecDisplaysGateNames(t *testing.T) {
 	p = updatePanel(p, LoadSpecMsg{FilePath: "spec.md"})
 	view := panelView(p)
 
-	gates := []string{"Spec Approval", "Task Decomposition", "Final Diff Review"}
-	for _, name := range gates {
-		if !strings.Contains(view, name) {
-			t.Errorf("expected gate %q in view, got: %q", name, view)
+	if !strings.Contains(view, "Spec Approval") {
+		t.Fatalf("expected active gate in view, got: %q", view)
+	}
+	for _, name := range []string{"Task Decomposition", "Final Diff Review"} {
+		if !strings.Contains(strings.Join(gateNames(p.State().Gates), "\n"), name) {
+			t.Errorf("expected gate %q in state, got: %v", name, gateNames(p.State().Gates))
 		}
+	}
+}
+
+func TestPanelVisibleGatesArePhaseAware(t *testing.T) {
+	s := New("spec.md")
+	if got := len(s.VisibleGates()); got != 1 {
+		t.Fatalf("draft visible gates=%d, want 1", got)
+	}
+
+	s.AdvanceGate("Spec Approval")
+	s.SetPhase(PhaseImplementing)
+	s.SetTaskProgress(2, 5)
+	visible := s.VisibleGates()
+	if len(visible) != 1 || visible[0].Name != "Spec Approval" {
+		t.Fatalf("implementing visible gates=%v, want only passed approvals", visible)
+	}
+
+	s.SetPhase(PhaseReviewing)
+	visible = s.VisibleGates()
+	if len(visible) != 2 || visible[1].Name != "Final Diff Review" {
+		t.Fatalf("reviewing visible gates=%v, want final diff review surfaced", visible)
 	}
 }
 
@@ -142,45 +171,63 @@ func TestPanelWorkflowProgression(t *testing.T) {
 	p = updatePanel(p, AdvanceGateMsg{Name: "Spec Approval"})
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseApproved})
 	view := panelView(p)
-	for _, want := range []string{"Spec approved", "1/3 gates", "Next: approve Task Decomposition"} {
+	for _, want := range []string{"Spec approved", "1/3 gates", "Next: decompose approved spec into tasks"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected %q after approval, got: %q", want, view)
 		}
 	}
 
-	p = updatePanel(p, AdvanceGateMsg{Name: "Task Decomposition"})
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseDecomposed})
 	p = updatePanel(p, SetProgressMsg{Completed: 0, Total: 5})
 	view = panelView(p)
-	for _, want := range []string{"Tasks extracted", "Tasks: 0/5", "Next: approve Final Diff Review"} {
+	for _, want := range []string{"Tasks extracted", "Tasks: 0/5", "Next: approve Task Decomposition"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected %q after decomposition, got: %q", want, view)
+		}
+	}
+
+	p = updatePanel(p, AdvanceGateMsg{Name: "Task Decomposition"})
+	p = updatePanel(p, SetPhaseMsg{Phase: PhaseAccepted})
+	view = panelView(p)
+	for _, want := range []string{"Plan accepted", "2/3 gates", "Next: start implementation"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q after acceptance, got: %q", want, view)
 		}
 	}
 
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseImplementing})
 	p = updatePanel(p, SetProgressMsg{Completed: 3, Total: 5})
 	view = panelView(p)
-	for _, want := range []string{"Implementing", "Tasks: 3/5", "Next: approve Final Diff Review"} {
+	for _, want := range []string{"Implementing", "Tasks: 3/5", "Next: finish implementation (2 remaining)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected %q during implementation, got: %q", want, view)
 		}
 	}
+	if strings.Contains(view, "Final Diff Review") {
+		t.Fatalf("implementation phase should not foreground final review yet, got: %q", view)
+	}
 
-	p = updatePanel(p, AdvanceGateMsg{Name: "Final Diff Review"})
-	p = updatePanel(p, SetPhaseMsg{Phase: PhaseReviewing})
 	p = updatePanel(p, SetProgressMsg{Completed: 5, Total: 5})
 	view = panelView(p)
-	for _, want := range []string{"Final review", "3/3 gates", "Tasks: 5/5", "Next: keep spec and implementation aligned"} {
+	if !strings.Contains(view, "Next: start Final Diff Review") {
+		t.Fatalf("expected final review handoff after implementation, got: %q", view)
+	}
+
+	p = updatePanel(p, SetPhaseMsg{Phase: PhaseReviewing})
+	view = panelView(p)
+	for _, want := range []string{"Final review", "2/3 gates", "Tasks: 5/5", "Next: approve Final Diff Review"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected %q in review phase, got: %q", want, view)
 		}
 	}
 
+	p = updatePanel(p, AdvanceGateMsg{Name: "Final Diff Review"})
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseComplete})
 	view = panelView(p)
-	if !strings.Contains(view, "Complete") {
-		t.Errorf("expected 'Complete', got: %q", view)
+	for _, want := range []string{"Complete", "3/3 gates", "Next: keep spec and implementation aligned"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q after completion, got: %q", want, view)
+		}
 	}
 }
 

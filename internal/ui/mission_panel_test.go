@@ -194,9 +194,10 @@ func TestMissionPanelRendersTaskGraph(t *testing.T) {
 		t.Fatalf("missing running status\n%s", rendered)
 	}
 
-	// Task summary counts.
-	if !strings.Contains(rendered, "Tasks") {
-		t.Fatalf("missing tasks line\n%s", rendered)
+	for _, want := range []string{"In progress: Write tests", "Next: Update docs", "Tasks"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing active mission focus %q\n%s", want, rendered)
+		}
 	}
 
 	// Individual task lines.
@@ -208,6 +209,27 @@ func TestMissionPanelRendersTaskGraph(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "Update docs") {
 		t.Fatalf("missing task: Update docs\n%s", rendered)
+	}
+}
+
+func TestMissionPanelSurfacesBlockedTaskBeforeMissionMetadata(t *testing.T) {
+	m, ctrl := testMissionModel(t)
+
+	tasks := []mission.Task{
+		{ID: "t_blocked", Title: "Unblock dependency", Kind: mission.TaskKindCode, Status: mission.TaskBlocked, Priority: 2, RiskLevel: mission.RiskLow, BlockingReason: "waiting on API schema"},
+		{ID: "t_ready", Title: "Implement endpoint", Kind: mission.TaskKindCode, Status: mission.TaskReady, Priority: 1, RiskLevel: mission.RiskLow},
+	}
+	missionID := seedMission(t, ctrl, mission.MissionRunning, tasks)
+	m.activeMissionID = missionID
+
+	rendered := stripANSI(strings.Join(m.renderMissionPanelLines(6, 60), "\n"))
+	blockedIdx := strings.Index(rendered, "Blocked: Unblock dependency")
+	progressIdx := strings.Index(rendered, "Tasks")
+	if blockedIdx == -1 || progressIdx == -1 {
+		t.Fatalf("expected blocked focus and task counts\n%s", rendered)
+	}
+	if blockedIdx > progressIdx {
+		t.Fatalf("expected blocked focus before secondary mission metadata\n%s", rendered)
 	}
 }
 

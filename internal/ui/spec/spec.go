@@ -90,23 +90,69 @@ func (s *State) GateSummary() string {
 	return fmt.Sprintf("%d/%d gates", passed, total)
 }
 
-// FocusGateName returns the next gate that needs attention.
-func (s *State) FocusGateName() string {
+func (s *State) pendingGate(name string) string {
 	for _, g := range s.Gates {
-		if g.Status != "passed" {
+		if strings.EqualFold(g.Name, name) && g.Status != "passed" {
 			return g.Name
 		}
 	}
 	return ""
 }
 
+// WaitingGateName returns the approval gate that is actively blocking the phase.
+func (s *State) WaitingGateName() string {
+	switch s.Phase {
+	case PhaseDraft:
+		return s.pendingGate("Spec Approval")
+	case PhaseDecomposed:
+		return s.pendingGate("Task Decomposition")
+	case PhaseReviewing:
+		return s.pendingGate("Final Diff Review")
+	default:
+		return ""
+	}
+}
+
+// FocusGateName returns the gate currently worth highlighting in the rail.
+func (s *State) FocusGateName() string {
+	return s.WaitingGateName()
+}
+
+// VisibleGates returns the gates that should be shown for the current phase.
+func (s *State) VisibleGates() []Gate {
+	if len(s.Gates) == 0 {
+		return nil
+	}
+	if s.Phase == PhaseComplete {
+		visible := make([]Gate, len(s.Gates))
+		copy(visible, s.Gates)
+		return visible
+	}
+	waiting := s.WaitingGateName()
+	visible := make([]Gate, 0, len(s.Gates))
+	for _, g := range s.Gates {
+		if g.Status == "passed" || (waiting != "" && strings.EqualFold(g.Name, waiting)) {
+			visible = append(visible, g)
+		}
+	}
+	return visible
+}
+
 // Headline returns a concise workflow summary emphasizing the current bottleneck.
 func (s *State) Headline() string {
 	phase := s.PhaseLabel()
-	if gate := s.FocusGateName(); gate != "" {
+	if gate := s.WaitingGateName(); gate != "" {
 		return fmt.Sprintf("%s · awaiting %s", phase, gate)
 	}
 	completed, total := s.Progress()
+	switch s.Phase {
+	case PhaseApproved:
+		return phase + " · decomposing tasks"
+	case PhaseAccepted, PhaseImplementing, PhaseReviewing, PhaseComplete:
+		if total > 0 {
+			return fmt.Sprintf("%s · tasks %d/%d", phase, completed, total)
+		}
+	}
 	if total > 0 {
 		return fmt.Sprintf("%s · tasks %d/%d", phase, completed, total)
 	}
@@ -115,17 +161,31 @@ func (s *State) Headline() string {
 
 // NextAction returns the most useful operator-facing next step.
 func (s *State) NextAction() string {
-	if gate := s.FocusGateName(); gate != "" {
+	if gate := s.WaitingGateName(); gate != "" {
 		return "Next: approve " + gate
 	}
 	completed, total := s.Progress()
-	if total > 0 && completed < total {
-		return fmt.Sprintf("Next: finish implementation (%d remaining)", total-completed)
-	}
-	if s.IsActive() {
+	switch s.Phase {
+	case PhaseApproved:
+		return "Next: decompose approved spec into tasks"
+	case PhaseAccepted:
+		return "Next: start implementation"
+	case PhaseImplementing:
+		if total > 0 && completed < total {
+			return fmt.Sprintf("Next: finish implementation (%d remaining)", total-completed)
+		}
+		if total > 0 {
+			return "Next: start Final Diff Review"
+		}
+		return "Next: continue implementation"
+	case PhaseReviewing, PhaseComplete:
 		return "Next: keep spec and implementation aligned"
+	default:
+		if s.IsActive() {
+			return "Next: keep spec and implementation aligned"
+		}
+		return ""
 	}
-	return ""
 }
 
 // FileLabel returns a compact file label for the rail.

@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -151,40 +153,81 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	titleLine := headerLeft + strings.Repeat(" ", titleGap) + headerRight
 
 	type sectionSpec struct {
-		target int
-		render func(limit int) []string
+		priority int
+		target   int
+		render   func(limit int) []string
 	}
 
 	sections := make([]sectionSpec, 0, 6)
 	if m.hasMissionState() {
-		sections = append(sections, sectionSpec{target: 6, render: func(limit int) []string {
+		priority := 0
+		if summary := m.missionPanelSummary(); strings.Contains(summary, "blocked") || strings.Contains(summary, "approval") {
+			priority = -2
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 6, render: func(limit int) []string {
 			return m.renderMissionPanelLines(limit, contentWidth)
 		}})
 	}
 	if m.specState.IsActive() {
-		sections = append(sections, sectionSpec{target: 5, render: func(limit int) []string {
+		priority := 1
+		if m.specState.WaitingGateName() != "" {
+			priority = -1
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
 			return m.renderSpecPanelLines(limit, contentWidth)
 		}})
 	}
 	if m.planState.HasTasks() {
-		sections = append(sections, sectionSpec{target: 5, render: func(limit int) []string {
+		priority := 2
+		if focus := m.planState.Focus(); focus != nil {
+			switch focus.Status {
+			case "blocked":
+				priority = -1
+			case "in_progress":
+				priority = 0
+			}
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
 			return m.renderPlanPanelLines(limit, contentWidth)
 		}})
 	}
 	if m.verificationState.HasEntries() {
-		sections = append(sections, sectionSpec{target: 5, render: func(limit int) []string {
+		priority := 3
+		if focus := m.verificationState.Focus(); focus != nil {
+			switch {
+			case focus.Status == "fail":
+				priority = -1
+			case focus.Status == "in_progress", focus.Freshness == "stale":
+				priority = 1
+			}
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
 			return m.renderVerificationPanelLines(limit, contentWidth)
 		}})
 	}
 	if m.invariantState.HasItems() {
-		sections = append(sections, sectionSpec{target: 4, render: func(limit int) []string {
+		priority := 4
+		if focus := m.invariantState.Focus(); focus != nil {
+			switch focus.Status {
+			case "fail":
+				priority = 0
+			case "in_progress":
+				priority = 2
+			}
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 4, render: func(limit int) []string {
 			return m.renderInvariantPanelLines(limit, contentWidth)
 		}})
 	}
 	if m.hasTeamMembers() {
-		sections = append(sections, sectionSpec{target: 3, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: 5, target: 3, render: func(limit int) []string {
 			return m.renderTeamPanelLines(limit, contentWidth)
 		}})
+	}
+	if len(sections) > 1 {
+		slices.SortStableFunc(sections, func(a, b sectionSpec) int {
+			return cmp.Compare(a.priority, b.priority)
+		})
 	}
 
 	body := make([]string, 0, max(1, height-2))
@@ -611,18 +654,20 @@ func (m *Model) renderSpecPanelLines(limit, width int) []string {
 	if fileLine := strings.TrimSpace(m.specState.FileLabel()); fileLine != "" {
 		lines = append(lines, m.workflowBullet(m.sty.Panel.IconPending.Render(styles.HollowIcon), fileLine, width, false))
 	}
-	for i := range m.specState.Gates {
+	visible := m.specState.VisibleGates()
+	focus := m.specState.FocusGateName()
+	for i := range visible {
 		if len(lines) >= limit {
 			break
 		}
-		g := m.specState.Gates[i]
+		g := visible[i]
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
 		done := false
 		label := g.Name
 		if g.Status == "passed" {
 			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
 			done = true
-		} else if strings.EqualFold(m.specState.FocusGateName(), g.Name) {
+		} else if strings.EqualFold(focus, g.Name) {
 			label = "Gate: " + label
 			icon = m.sty.Panel.IconPending.Render(styles.PendingIcon)
 		}

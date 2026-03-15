@@ -70,15 +70,6 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 		return lines
 	}
 
-	title := ms.Title
-	if strings.TrimSpace(title) == "" {
-		title = ms.Goal
-	}
-	lines = append(lines, m.workflowBullet(m.sty.Panel.IconPending.Render(styles.HollowIcon), title, width, false))
-	if len(lines) >= limit {
-		return lines[:limit]
-	}
-
 	if focusTask != nil {
 		lines = append(lines, m.renderMissionSpotlight(ms.Status, focusTask, approvals, width))
 	}
@@ -97,6 +88,15 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 	if progress != "" {
 		lines = append(lines, m.workflowProgressLine(progress, width))
 	}
+	if len(lines) >= limit {
+		return lines[:limit]
+	}
+
+	title := ms.Title
+	if strings.TrimSpace(title) == "" {
+		title = ms.Goal
+	}
+	lines = append(lines, m.workflowBullet(m.sty.Panel.IconPending.Render(styles.HollowIcon), title, width, false))
 	if len(lines) >= limit {
 		return lines[:limit]
 	}

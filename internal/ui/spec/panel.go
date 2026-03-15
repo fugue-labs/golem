@@ -81,7 +81,7 @@ func (p Panel) View() tea.View {
 	}
 
 	focus := p.state.FocusGateName()
-	for _, g := range p.state.Gates {
+	for _, g := range p.state.VisibleGates() {
 		icon := "○"
 		label := g.Name
 		if g.Status == "passed" {

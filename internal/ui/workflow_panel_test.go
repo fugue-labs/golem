@@ -10,6 +10,7 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/chat"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
+	uispec "github.com/fugue-labs/golem/internal/ui/spec"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
 	"github.com/fugue-labs/gollem/core"
@@ -132,6 +133,44 @@ func TestWorkflowPanelRendersPlanAndInvariantSections(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("workflow panel missing %q\n%s", want, rendered)
 		}
+	}
+}
+
+func TestWorkflowPanelPrioritizesBlockedSpecBeforePlan(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.specState = uispec.New("design.md")
+	m.specState.SetPhase(uispec.PhaseDraft)
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "implement feature", Status: "in_progress"}}}
+
+	rendered := stripANSI(m.renderWorkflowPanel(10, 46))
+	specIdx := strings.Index(rendered, "Spec — Reviewing spec")
+	planIdx := strings.Index(rendered, "Plan ◐ active")
+	if specIdx == -1 || planIdx == -1 {
+		t.Fatalf("expected spec and plan sections\n%s", rendered)
+	}
+	if specIdx > planIdx {
+		t.Fatalf("expected spec approval bottleneck before plan work\n%s", rendered)
+	}
+}
+
+func TestWorkflowPanelKeepsSpecFocusedOnImplementationBeforeReview(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.specState = uispec.New("design.md")
+	m.specState.AdvanceGate("Spec Approval")
+	m.specState.AdvanceGate("Task Decomposition")
+	m.specState.SetPhase(uispec.PhaseImplementing)
+	m.specState.SetTaskProgress(3, 5)
+
+	rendered := stripANSI(strings.Join(m.renderSpecPanelLines(6, 46), "\n"))
+	for _, want := range []string{"Spec — Implementing · tasks 3/5", "Next: finish implementation (2 remaining)", "2/3 gates · Tasks 3/5"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("spec rail missing %q\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Final Diff Review") {
+		t.Fatalf("implementation rail should defer final diff review gate\n%s", rendered)
 	}
 }
 
