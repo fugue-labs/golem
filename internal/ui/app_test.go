@@ -218,6 +218,91 @@ func TestAgentDoneWrappedCancelNotShownAsError(t *testing.T) {
 	}
 }
 
+func TestViewConfiguresBubbleTeaMetadata(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: "/tmp/project"})
+	m.sty = styles.New(nil)
+	m.width = 100
+	m.height = 22
+
+	v := m.View()
+	if !v.AltScreen {
+		t.Fatal("expected alt screen metadata")
+	}
+	if v.WindowTitle != "GOLEM — project — ready" {
+		t.Fatalf("window title = %q", v.WindowTitle)
+	}
+	if !v.ReportFocus {
+		t.Fatal("expected focus reporting metadata")
+	}
+	if v.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("mouse mode = %v", v.MouseMode)
+	}
+}
+
+func TestViewFocusAndMouseWheelUpdateMetadataAndScroll(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: "/tmp/project"})
+	m.sty = styles.New(nil)
+	m.width = 100
+	m.height = 16
+	for i := 0; i < 8; i++ {
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("message %d", i+1)})
+	}
+
+	updated, _ := m.Update(tea.BlurMsg{})
+	m = updated.(*Model)
+	if m.terminalFocused {
+		t.Fatal("expected blur to clear focus state")
+	}
+	if got := m.renderStatusMeta(); got != "Terminal unfocused" {
+		t.Fatalf("status meta = %q", got)
+	}
+	if got := m.renderInputMeta(); got != "Input paused · refocus terminal to type" {
+		t.Fatalf("input meta = %q", got)
+	}
+	if title := m.View().WindowTitle; title != "GOLEM — project — ready" {
+		t.Fatalf("window title changed unexpectedly on blur: %q", title)
+	}
+
+	updated, _ = m.Update(tea.FocusMsg{})
+	m = updated.(*Model)
+	if !m.terminalFocused {
+		t.Fatal("expected focus msg to restore focus state")
+	}
+
+	updated, _ = m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	m = updated.(*Model)
+	if m.scroll != 1 {
+		t.Fatalf("scroll after wheel up = %d", m.scroll)
+	}
+	updated, _ = m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelDown}))
+	m = updated.(*Model)
+	if m.scroll != 0 {
+		t.Fatalf("scroll after wheel down = %d", m.scroll)
+	}
+}
+
+func TestViewMetadataStillAllowsSlashCommandCompletion(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: "/tmp/project"})
+	m.sty = styles.New(nil)
+	m.width = 100
+	m.height = 16
+	m.input.SetValue("/se")
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(*Model)
+	if got := m.input.Value(); got != "/search" {
+		t.Fatalf("tab completion = %q", got)
+	}
+
+	v := m.View()
+	if !v.AltScreen || !v.ReportFocus {
+		t.Fatalf("unexpected view metadata: alt=%v focus=%v", v.AltScreen, v.ReportFocus)
+	}
+	if v.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("mouse mode = %v", v.MouseMode)
+	}
+}
+
 func TestViewRendersDistinctShellRegions(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)

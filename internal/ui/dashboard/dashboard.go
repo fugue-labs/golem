@@ -51,10 +51,11 @@ type Model struct {
 	artifacts  []*mission.Artifact
 
 	// Focus and scrolling.
-	focusPane pane
-	scrollPos [paneCount]int
-	lastErr   error
-	quitting  bool
+	focusPane       pane
+	scrollPos       [paneCount]int
+	terminalFocused bool
+	lastErr         error
+	quitting        bool
 }
 
 // New creates a dashboard model for the given mission ID.
@@ -62,10 +63,11 @@ type Model struct {
 func New(missionID string) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Model{
-		ctx:       ctx,
-		cancel:    cancel,
-		missionID: missionID,
-		sty:       styles.New(nil),
+		ctx:             ctx,
+		cancel:          cancel,
+		missionID:       missionID,
+		sty:             styles.New(nil),
+		terminalFocused: true,
 	}
 }
 
@@ -83,6 +85,90 @@ type refreshDoneMsg struct {
 
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(tea.RequestBackgroundColor, m.initStore(), tickCmd())
+}
+
+func (m *Model) setFocus(active bool) {
+	m.terminalFocused = active
+}
+
+func (m *Model) setFocusPane(p pane) {
+	m.focusPane = p
+}
+
+func (m *Model) scrollFocusedPane(delta int) {
+	next := m.scrollPos[m.focusPane] + delta
+	if next < 0 {
+		next = 0
+	}
+	m.scrollPos[m.focusPane] = next
+}
+
+func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	mouse := msg.Mouse()
+	if m.width <= 0 || m.height <= 0 {
+		return nil
+	}
+	if wheel, ok := msg.(tea.MouseWheelMsg); ok {
+		switch wheel.Mouse().Button {
+		case tea.MouseWheelUp:
+			m.scrollFocusedPane(-1)
+		case tea.MouseWheelDown:
+			m.scrollFocusedPane(1)
+		}
+		return nil
+	}
+	if _, ok := msg.(tea.MouseClickMsg); !ok {
+		return nil
+	}
+	if p, ok := m.paneAt(mouse.X, mouse.Y); ok {
+		m.setFocusPane(p)
+	}
+	return nil
+}
+
+func (m *Model) paneAt(x, y int) (pane, bool) {
+	if x < 0 || y < 0 || m.width <= 0 || m.height <= 0 {
+		return paneTasks, false
+	}
+	headerLines := len(m.renderHeader())
+	bodyStartY := headerLines + 1
+	eventHeight := 2
+	if m.height >= 18 {
+		eventHeight = 3
+	}
+	bodyHeight := m.height - headerLines - 1 - eventHeight - 1
+	if bodyHeight < 4 {
+		bodyHeight = 4
+	}
+	eventStartY := bodyStartY + bodyHeight + 1
+	if y < bodyStartY {
+		return paneTasks, false
+	}
+	if y >= eventStartY && y < eventStartY+eventHeight {
+		return paneEvents, true
+	}
+	if y >= bodyStartY && y < bodyStartY+bodyHeight {
+		leftWidth := m.width * 3 / 5
+		rightWidth := m.width - leftWidth - 1
+		if rightWidth < 10 {
+			rightWidth = 10
+			leftWidth = m.width - rightWidth - 1
+		}
+		if leftWidth < 1 {
+			leftWidth = 1
+		}
+		if x < leftWidth {
+			taskHeight := bodyHeight * 3 / 5
+			if y < bodyStartY+taskHeight {
+				return paneTasks, true
+			}
+			return paneEvidence, true
+		}
+		if x > leftWidth {
+			return paneWorkers, true
+		}
+	}
+	return paneTasks, false
 }
 
 func (m *Model) initStore() tea.Cmd {
@@ -200,6 +286,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sty = styles.NewMode(msg.Color, &isDark)
 		return m, nil
 
+	case tea.FocusMsg:
+		m.setFocus(true)
+		return m, nil
+
+	case tea.BlurMsg:
+		m.setFocus(false)
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -230,32 +324,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			return m, func() tea.Msg { return m.doRefresh() }
 		case "tab":
-			m.focusPane = (m.focusPane + 1) % paneCount
+			m.setFocusPane((m.focusPane + 1) % paneCount)
 			return m, nil
 		case "shift+tab":
-			m.focusPane = (m.focusPane - 1 + paneCount) % paneCount
+			m.setFocusPane((m.focusPane - 1 + paneCount) % paneCount)
 			return m, nil
 		case "j", "down":
-			m.scrollPos[m.focusPane]++
+			m.scrollFocusedPane(1)
 			return m, nil
 		case "k", "up":
-			if m.scrollPos[m.focusPane] > 0 {
-				m.scrollPos[m.focusPane]--
-			}
+			m.scrollFocusedPane(-1)
 			return m, nil
 		case "1":
-			m.focusPane = paneTasks
+			m.setFocusPane(paneTasks)
 			return m, nil
 		case "2":
-			m.focusPane = paneWorkers
+			m.setFocusPane(paneWorkers)
 			return m, nil
 		case "3":
-			m.focusPane = paneEvidence
+			m.setFocusPane(paneEvidence)
 			return m, nil
 		case "4":
-			m.focusPane = paneEvents
+			m.setFocusPane(paneEvents)
 			return m, nil
 		}
+
+	case tea.MouseMsg:
+		return m, m.handleMouse(msg)
 	}
 
 	return m, nil
@@ -263,14 +358,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) View() tea.View {
 	if m.quitting {
-		return tea.NewView("")
+		v := tea.NewView("")
+		m.configureView(&v)
+		return v
 	}
 	if m.width == 0 || m.height == 0 {
-		return tea.NewView("Loading...")
+		v := tea.NewView("Loading...")
+		m.configureView(&v)
+		return v
 	}
 
 	if m.lastErr != nil && m.missionObj == nil && !isNoMissionError(m.lastErr) {
-		return tea.NewView(fmt.Sprintf("Dashboard error: %v\n\nPress q to quit.", m.lastErr))
+		v := tea.NewView(fmt.Sprintf("Dashboard error: %v\n\nPress q to quit.", m.lastErr))
+		m.configureView(&v)
+		return v
 	}
 
 	var lines []string
@@ -327,7 +428,38 @@ func (m *Model) View() tea.View {
 		lines = lines[:m.height]
 	}
 
-	return tea.NewView(strings.Join(lines, "\n"))
+	v := tea.NewView(strings.Join(lines, "\n"))
+	m.configureView(&v)
+	return v
+}
+
+func (m *Model) configureView(v *tea.View) {
+	if v == nil {
+		return
+	}
+	v.AltScreen = true
+	v.WindowTitle = m.windowTitle()
+	v.ReportFocus = true
+	v.MouseMode = tea.MouseModeCellMotion
+}
+
+func (m *Model) windowTitle() string {
+	title := "GOLEM Dashboard"
+	if m.missionObj != nil {
+		missionTitle := strings.TrimSpace(m.missionObj.Title)
+		if missionTitle == "" {
+			missionTitle = m.missionObj.ID
+		}
+		if missionTitle != "" {
+			title += " — " + missionTitle
+		}
+	} else if m.missionID != "" {
+		title += " — " + m.missionID
+	}
+	if !m.terminalFocused {
+		title += " — unfocused"
+	}
+	return title
 }
 
 // renderHeader renders the mission header.
