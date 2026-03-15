@@ -183,7 +183,7 @@ func (m *Model) paneAt(x, y int) (pane, bool) {
 		return paneTasks, false
 	}
 	layout := m.currentLayout()
-	if layout.tooSmall || layout.stateOnly {
+	if layout.tooSmall {
 		return paneTasks, false
 	}
 	if layout.narrow {
@@ -435,11 +435,6 @@ func (m *Model) View() tea.View {
 		content = m.renderStateScreen("Dashboard error", []string{
 			ansi.Truncate(m.lastErr.Error(), max(1, m.width-2), "…"),
 		}, []string{"Press r to retry the refresh.", "Press q to quit."})
-	case layout.stateOnly:
-		content = m.renderStateScreen("No active mission", []string{
-			"Create one with /mission new or run golem mission new.",
-			"Mission Control will attach as soon as durable mission state exists.",
-		}, []string{"Press r to check again.", "Use q to quit."})
 	case layout.narrow:
 		content = m.renderNarrowLayout(layout)
 	default:
@@ -505,7 +500,7 @@ type dashboardLayout struct {
 }
 
 func (layout dashboardLayout) visiblePanes() []pane {
-	if layout.tooSmall || layout.stateOnly {
+	if layout.tooSmall {
 		return nil
 	}
 	if layout.narrow {
@@ -516,6 +511,10 @@ func (layout dashboardLayout) visiblePanes() []pane {
 		return visible
 	}
 	visible := []pane{paneTasks, paneWorkers}
+	if layout.stateOnly {
+		visible = append(visible, paneEvidence, paneEvents)
+		return visible
+	}
 	if layout.evidenceEmbedded {
 		visible = append(visible, paneEvidence)
 	}
@@ -542,10 +541,9 @@ func (m *Model) currentLayout() dashboardLayout {
 	layout.headerLines = len(m.renderHeader())
 	layout.footerLines = dashboardFooterLines
 	layout.separatorLines = dashboardSeparatorLine
-	if m.missionObj == nil {
-		layout.stateOnly = true
-		return layout
-	}
+
+	layout.narrow = m.width < narrowDashboardWidth
+	layout.stateOnly = m.missionObj == nil
 
 	layout.availableBody = m.height - layout.headerLines - layout.footerLines
 	if layout.availableBody < 4 {
@@ -553,7 +551,6 @@ func (m *Model) currentLayout() dashboardLayout {
 		return layout
 	}
 
-	layout.narrow = m.width < narrowDashboardWidth
 	if layout.narrow {
 		layout.sections = m.narrowSections(layout.headerLines, layout.availableBody)
 		if len(layout.sections) == 0 {
@@ -1557,8 +1554,16 @@ func clampVisible(items []string, scroll *int, budget int) []string {
 		zero := 0
 		scroll = &zero
 	}
-	if *scroll > len(items) {
-		*scroll = len(items)
+	if budget <= 0 {
+		*scroll = 0
+		return nil
+	}
+	maxStart := max(0, len(items)-budget)
+	if *scroll < 0 {
+		*scroll = 0
+	}
+	if *scroll > maxStart {
+		*scroll = maxStart
 	}
 	visible := items[*scroll:]
 	if len(visible) > budget {

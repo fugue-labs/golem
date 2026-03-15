@@ -1124,3 +1124,23 @@ func TestTeatestNarrowFooterAndFocusOnlyReferenceVisibleLanes(t *testing.T) {
 		}
 	}
 }
+
+func TestTeatestNoMissionDashboardStillShowsFocusablePanes(t *testing.T) {
+	m, _ := setupTeatestModel(t, 120, 40)
+	view := stripANSI(viewString(m))
+	for _, want := range []string{"▸ [1] Tasks", "[2] Workers", "No active mission", "No active workers"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected no-mission dashboard to contain %q, got %q", want, view)
+		}
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(*Model)
+	if m.focusPane != paneWorkers {
+		t.Fatalf("tab should move focus to workers in no-mission dashboard, got %d", m.focusPane)
+	}
+	view = stripANSI(viewString(m))
+	if !strings.Contains(view, "▸ [2] Workers") {
+		t.Fatalf("expected workers header focus indicator after tab, got %q", view)
+	}
+}

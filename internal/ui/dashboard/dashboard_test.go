@@ -417,6 +417,28 @@ func TestRenderHeaderNoMissionShowsReadableIdleState(t *testing.T) {
 	}
 }
 
+func TestViewNoMissionKeepsPaneFocusAffordances(t *testing.T) {
+	m := New("")
+	m.width = 120
+	m.height = 30
+
+	plain := stripANSITest(viewString(m))
+	for _, want := range []string{"▸ [1] Tasks", "[2] Workers", "[4] Events", "No active mission"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected no-mission dashboard view to contain %q, got %q", want, truncStr(plain, 240))
+		}
+	}
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	plain = stripANSITest(viewString(m))
+	if m.focusPane != paneWorkers {
+		t.Fatalf("expected tab to focus workers in no-mission view, got %d", m.focusPane)
+	}
+	if !strings.Contains(plain, "▸ [2] Workers") {
+		t.Fatalf("expected workers pane to show focus marker after tab, got %q", truncStr(plain, 240))
+	}
+}
+
 func TestViewShowsLoadingAndSmallTerminalStates(t *testing.T) {
 	m := New("")
 	m.width = 0
