@@ -194,7 +194,7 @@ func (s *SQLiteStore) CreateMission(ctx context.Context, m *Mission) error {
 			created_at, updated_at, started_at, ended_at, last_replan_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.Title, m.Goal, m.RepoRoot, m.BaseCommit, m.BaseBranch, string(m.Status),
-		string(policyJSON), string(budgetJSON), string(criteriaJSON), m.IntegrationRef,
+		policyJSON, string(budgetJSON), string(criteriaJSON), m.IntegrationRef,
 		formatTime(m.CreatedAt), formatTime(m.UpdatedAt),
 		formatNullTime(m.StartedAt), formatNullTime(m.EndedAt), formatNullTime(m.LastReplanAt),
 	)
@@ -211,7 +211,11 @@ func (s *SQLiteStore) GetMission(ctx context.Context, id string) (*Mission, erro
 			created_at, updated_at, started_at, ended_at, last_replan_at
 		FROM missions WHERE id = ?`, id)
 
-	return scanMission(row)
+	mission, err := scanMission(row)
+	if err == sql.ErrNoRows {
+		return nil, notFoundError("mission", id)
+	}
+	return mission, err
 }
 
 func (s *SQLiteStore) UpdateMission(ctx context.Context, m *Mission) error {
@@ -222,18 +226,21 @@ func (s *SQLiteStore) UpdateMission(ctx context.Context, m *Mission) error {
 	budgetJSON, _ := json.Marshal(m.Budget)
 	criteriaJSON, _ := json.Marshal(m.SuccessCriteria)
 
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE missions SET title=?, goal=?, repo_root=?, base_commit=?, base_branch=?, status=?,
 			policy_json=?, budget_json=?, success_criteria_json=?, integration_ref=?,
 			updated_at=?, started_at=?, ended_at=?, last_replan_at=?
 		WHERE id=?`,
 		m.Title, m.Goal, m.RepoRoot, m.BaseCommit, m.BaseBranch, string(m.Status),
-		string(policyJSON), string(budgetJSON), string(criteriaJSON), m.IntegrationRef,
+		policyJSON, string(budgetJSON), string(criteriaJSON), m.IntegrationRef,
 		formatTime(m.UpdatedAt), formatNullTime(m.StartedAt), formatNullTime(m.EndedAt),
 		formatNullTime(m.LastReplanAt),
 		m.ID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result, "mission", m.ID)
 }
 
 func (s *SQLiteStore) ListMissions(ctx context.Context) ([]*Mission, error) {
@@ -244,7 +251,7 @@ func (s *SQLiteStore) ListMissions(ctx context.Context) ([]*Mission, error) {
 		`SELECT id, title, goal, repo_root, base_commit, base_branch, status,
 			policy_json, budget_json, success_criteria_json, integration_ref,
 			created_at, updated_at, started_at, ended_at, last_replan_at
-		FROM missions ORDER BY created_at DESC`)
+		FROM missions`)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +265,11 @@ func (s *SQLiteStore) ListMissions(ctx context.Context) ([]*Mission, error) {
 		}
 		missions = append(missions, m)
 	}
-	return missions, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortMissions(missions)
+	return missions, nil
 }
 
 // --- Task operations ---
@@ -278,7 +289,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, t *Task) error {
 			created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.MissionID, t.Title, string(t.Kind), t.Objective, string(t.Status), t.Priority,
-		string(scopeJSON), string(criteriaJSON), string(reviewJSON),
+		string(scopeJSON), string(criteriaJSON), reviewJSON,
 		t.EstimatedEffort, string(t.RiskLevel), t.AttemptCount, t.BlockingReason,
 		formatTime(t.CreatedAt), formatTime(t.UpdatedAt),
 	)
@@ -296,7 +307,11 @@ func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 			created_at, updated_at
 		FROM tasks WHERE id = ?`, id)
 
-	return scanTask(row)
+	task, err := scanTask(row)
+	if err == sql.ErrNoRows {
+		return nil, notFoundError("task", id)
+	}
+	return task, err
 }
 
 func (s *SQLiteStore) UpdateTask(ctx context.Context, t *Task) error {
@@ -307,19 +322,22 @@ func (s *SQLiteStore) UpdateTask(ctx context.Context, t *Task) error {
 	criteriaJSON, _ := json.Marshal(t.AcceptanceCriteria)
 	reviewJSON := marshalOrDefault(t.ReviewRequirements, "{}")
 
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE tasks SET title=?, kind=?, objective=?, status=?, priority=?,
 			scope_json=?, acceptance_criteria_json=?, review_requirements_json=?,
 			estimated_effort=?, risk_level=?, attempt_count=?, blocking_reason=?,
 			updated_at=?
 		WHERE id=?`,
 		t.Title, string(t.Kind), t.Objective, string(t.Status), t.Priority,
-		string(scopeJSON), string(criteriaJSON), string(reviewJSON),
+		string(scopeJSON), string(criteriaJSON), reviewJSON,
 		t.EstimatedEffort, string(t.RiskLevel), t.AttemptCount, t.BlockingReason,
 		formatTime(t.UpdatedAt),
 		t.ID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result, "task", t.ID)
 }
 
 func (s *SQLiteStore) ListTasks(ctx context.Context, missionID string) ([]*Task, error) {
@@ -331,7 +349,7 @@ func (s *SQLiteStore) ListTasks(ctx context.Context, missionID string) ([]*Task,
 			scope_json, acceptance_criteria_json, review_requirements_json,
 			estimated_effort, risk_level, attempt_count, blocking_reason,
 			created_at, updated_at
-		FROM tasks WHERE mission_id = ? ORDER BY priority DESC, created_at ASC`, missionID)
+		FROM tasks WHERE mission_id = ?`, missionID)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +363,11 @@ func (s *SQLiteStore) ListTasks(ctx context.Context, missionID string) ([]*Task,
 		}
 		tasks = append(tasks, t)
 	}
-	return tasks, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortTasks(tasks)
+	return tasks, nil
 }
 
 // --- Dependency operations ---
@@ -382,7 +404,11 @@ func (s *SQLiteStore) ListDependencies(ctx context.Context, missionID string) ([
 		}
 		deps = append(deps, d)
 	}
-	return deps, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortDependencies(deps)
+	return deps, nil
 }
 
 // --- Run operations ---
@@ -407,8 +433,7 @@ func (s *SQLiteStore) CreateRunExclusive(ctx context.Context, r *Run) (bool, err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// SQLite doesn't have FROM dual; use a subquery with VALUES instead.
-	res, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`INSERT INTO runs (id, mission_id, task_id, mode, status, lease_owner,
 			lease_expires_at, heartbeat_at, worktree_path, started_at, ended_at,
 			summary, error_text)
@@ -424,11 +449,11 @@ func (s *SQLiteStore) CreateRunExclusive(ctx context.Context, r *Run) (bool, err
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	return rowsAffected > 0, nil
 }
 
 func (s *SQLiteStore) GetRun(ctx context.Context, id string) (*Run, error) {
@@ -441,14 +466,18 @@ func (s *SQLiteStore) GetRun(ctx context.Context, id string) (*Run, error) {
 			summary, error_text
 		FROM runs WHERE id = ?`, id)
 
-	return scanRun(row)
+	run, err := scanRun(row)
+	if err == sql.ErrNoRows {
+		return nil, notFoundError("run", id)
+	}
+	return run, err
 }
 
 func (s *SQLiteStore) UpdateRun(ctx context.Context, r *Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE runs SET task_id=?, mode=?, status=?, lease_owner=?,
 			lease_expires_at=?, heartbeat_at=?, worktree_path=?,
 			started_at=?, ended_at=?, summary=?, error_text=?
@@ -458,7 +487,10 @@ func (s *SQLiteStore) UpdateRun(ctx context.Context, r *Run) error {
 		formatNullTime(r.StartedAt), formatNullTime(r.EndedAt), r.Summary, r.ErrorText,
 		r.ID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result, "run", r.ID)
 }
 
 func (s *SQLiteStore) ListRuns(ctx context.Context, missionID string) ([]*Run, error) {
@@ -469,7 +501,7 @@ func (s *SQLiteStore) ListRuns(ctx context.Context, missionID string) ([]*Run, e
 		`SELECT id, mission_id, task_id, mode, status, lease_owner,
 			lease_expires_at, heartbeat_at, worktree_path, started_at, ended_at,
 			summary, error_text
-		FROM runs WHERE mission_id = ? ORDER BY id ASC`, missionID)
+		FROM runs WHERE mission_id = ?`, missionID)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +515,11 @@ func (s *SQLiteStore) ListRuns(ctx context.Context, missionID string) ([]*Run, e
 		}
 		runs = append(runs, r)
 	}
-	return runs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortRuns(runs)
+	return runs, nil
 }
 
 // --- Event operations ---
@@ -493,25 +529,33 @@ func (s *SQLiteStore) AppendEvent(ctx context.Context, e *Event) error {
 	defer s.mu.Unlock()
 
 	payloadJSON := marshalOrDefault(e.PayloadJSON, "{}")
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`INSERT INTO events (mission_id, task_id, run_id, type, payload_json, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		e.MissionID, e.TaskID, e.RunID, e.Type, string(payloadJSON), formatTime(e.CreatedAt),
+		e.MissionID, e.TaskID, e.RunID, e.Type, payloadJSON, formatTime(e.CreatedAt),
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if id, err := result.LastInsertId(); err == nil {
+		e.ID = id
+	}
+	return nil
 }
 
 func (s *SQLiteStore) ListEvents(ctx context.Context, missionID string, limit int) ([]*Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	q := `SELECT id, mission_id, task_id, run_id, type, payload_json, created_at
+	query := `SELECT id, mission_id, task_id, run_id, type, payload_json, created_at
 		FROM events WHERE mission_id = ? ORDER BY id DESC`
+	args := []any{missionID}
 	if limit > 0 {
-		q += fmt.Sprintf(" LIMIT %d", limit)
+		query += ` LIMIT ?`
+		args = append(args, limit)
 	}
 
-	rows, err := s.db.QueryContext(ctx, q, missionID)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -520,8 +564,7 @@ func (s *SQLiteStore) ListEvents(ctx context.Context, missionID string, limit in
 	var events []*Event
 	for rows.Next() {
 		var e Event
-		var createdStr string
-		var payloadStr string
+		var createdStr, payloadStr string
 		if err := rows.Scan(&e.ID, &e.MissionID, &e.TaskID, &e.RunID, &e.Type, &payloadStr, &createdStr); err != nil {
 			return nil, err
 		}
@@ -529,7 +572,11 @@ func (s *SQLiteStore) ListEvents(ctx context.Context, missionID string, limit in
 		e.CreatedAt = parseTime(createdStr)
 		events = append(events, &e)
 	}
-	return events, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortEvents(events)
+	return events, nil
 }
 
 // --- Artifact operations ---
@@ -552,7 +599,7 @@ func (s *SQLiteStore) ListArtifacts(ctx context.Context, missionID string) ([]*A
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, mission_id, task_id, run_id, type, relative_path, sha256, created_at
-		FROM artifacts WHERE mission_id = ? ORDER BY id ASC`, missionID)
+		FROM artifacts WHERE mission_id = ?`, missionID)
 	if err != nil {
 		return nil, err
 	}
@@ -568,7 +615,11 @@ func (s *SQLiteStore) ListArtifacts(ctx context.Context, missionID string) ([]*A
 		a.CreatedAt = parseTime(createdStr)
 		artifacts = append(artifacts, &a)
 	}
-	return artifacts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortArtifacts(artifacts)
+	return artifacts, nil
 }
 
 // --- Approval operations ---
@@ -585,7 +636,7 @@ func (s *SQLiteStore) CreateApproval(ctx context.Context, a *Approval) error {
 			request_json, response_json, created_at, resolved_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.MissionID, a.TaskID, a.RunID, a.Kind, string(a.Status),
-		string(reqJSON), string(respJSON), formatTime(a.CreatedAt), formatNullTime(a.ResolvedAt),
+		reqJSON, respJSON, formatTime(a.CreatedAt), formatNullTime(a.ResolvedAt),
 	)
 	return err
 }
@@ -602,6 +653,9 @@ func (s *SQLiteStore) GetApproval(ctx context.Context, id string) (*Approval, er
 		FROM approvals WHERE id = ?`, id).
 		Scan(&a.ID, &a.MissionID, &a.TaskID, &a.RunID, &a.Kind, &a.Status,
 			&reqStr, &respStr, &createdStr, &resolvedStr)
+	if err == sql.ErrNoRows {
+		return nil, notFoundError("approval", id)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -620,11 +674,13 @@ func (s *SQLiteStore) UpdateApproval(ctx context.Context, a *Approval) error {
 	defer s.mu.Unlock()
 
 	respJSON := marshalOrDefault(a.ResponseJSON, "{}")
-
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE approvals SET status=?, response_json=?, resolved_at=? WHERE id=?`,
-		string(a.Status), string(respJSON), formatNullTime(a.ResolvedAt), a.ID)
-	return err
+		string(a.Status), respJSON, formatNullTime(a.ResolvedAt), a.ID)
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result, "approval", a.ID)
 }
 
 func (s *SQLiteStore) ListApprovals(ctx context.Context, missionID string) ([]*Approval, error) {
@@ -633,7 +689,7 @@ func (s *SQLiteStore) ListApprovals(ctx context.Context, missionID string) ([]*A
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, mission_id, task_id, run_id, kind, status, request_json, response_json, created_at, resolved_at
-		FROM approvals WHERE mission_id = ? ORDER BY id ASC`, missionID)
+		FROM approvals WHERE mission_id = ?`, missionID)
 	if err != nil {
 		return nil, err
 	}
@@ -657,106 +713,21 @@ func (s *SQLiteStore) ListApprovals(ctx context.Context, missionID string) ([]*A
 		}
 		approvals = append(approvals, &a)
 	}
-	return approvals, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortApprovals(approvals)
+	return approvals, nil
 }
 
 // --- Aggregate queries ---
 
 func (s *SQLiteStore) GetMissionSummary(ctx context.Context, missionID string) (*MissionSummary, error) {
-	m, err := s.GetMission(ctx, missionID)
-	if err != nil {
-		return nil, err
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var counts TaskCounts
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT status, COUNT(*) FROM tasks WHERE mission_id = ? GROUP BY status`, missionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var status string
-		var count int
-		if err := rows.Scan(&status, &count); err != nil {
-			return nil, err
-		}
-		counts.Total += count
-		switch TaskStatus(status) {
-		case TaskPending:
-			counts.Pending = count
-		case TaskReady:
-			counts.Ready = count
-		case TaskRunning:
-			counts.Running = count
-		case TaskAwaitingReview:
-			counts.AwaitingReview = count
-		case TaskAccepted:
-			counts.Accepted = count
-		case TaskIntegrated:
-			counts.Integrated = count
-		case TaskDone:
-			counts.Done = count
-		case TaskBlocked:
-			counts.Blocked = count
-		case TaskFailed:
-			counts.Failed = count
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	var activeRuns int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM runs WHERE mission_id = ? AND status IN ('queued', 'running')`,
-		missionID).Scan(&activeRuns); err != nil {
-		return nil, fmt.Errorf("count active runs: %w", err)
-	}
-
-	var pendingApprovals int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM approvals WHERE mission_id = ? AND status = 'pending'`,
-		missionID).Scan(&pendingApprovals); err != nil {
-		return nil, fmt.Errorf("count pending approvals: %w", err)
-	}
-
-	return &MissionSummary{
-		Mission:          m,
-		TaskCounts:       counts,
-		ActiveRuns:       activeRuns,
-		PendingApprovals: pendingApprovals,
-	}, nil
+	return BuildMissionSummary(ctx, s, missionID)
 }
 
 func (s *SQLiteStore) GetReadyTasks(ctx context.Context, missionID string) ([]*Task, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, mission_id, title, kind, objective, status, priority,
-			scope_json, acceptance_criteria_json, review_requirements_json,
-			estimated_effort, risk_level, attempt_count, blocking_reason,
-			created_at, updated_at
-		FROM tasks WHERE mission_id = ? AND status = 'ready'
-		ORDER BY priority DESC, created_at ASC`, missionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var tasks []*Task
-	for rows.Next() {
-		t, err := scanTaskRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, t)
-	}
-	return tasks, rows.Err()
+	return s.GetTasksByStatus(ctx, missionID, TaskReady)
 }
 
 func (s *SQLiteStore) GetTasksByStatus(ctx context.Context, missionID string, status TaskStatus) ([]*Task, error) {
@@ -768,8 +739,7 @@ func (s *SQLiteStore) GetTasksByStatus(ctx context.Context, missionID string, st
 			scope_json, acceptance_criteria_json, review_requirements_json,
 			estimated_effort, risk_level, attempt_count, blocking_reason,
 			created_at, updated_at
-		FROM tasks WHERE mission_id = ? AND status = ?
-		ORDER BY priority DESC, created_at ASC`, missionID, string(status))
+		FROM tasks WHERE mission_id = ? AND status = ?`, missionID, string(status))
 	if err != nil {
 		return nil, err
 	}
@@ -783,7 +753,11 @@ func (s *SQLiteStore) GetTasksByStatus(ctx context.Context, missionID string, st
 		}
 		tasks = append(tasks, t)
 	}
-	return tasks, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortTasks(tasks)
+	return tasks, nil
 }
 
 func (s *SQLiteStore) GetRunsForTask(ctx context.Context, taskID string) ([]*Run, error) {
@@ -794,7 +768,7 @@ func (s *SQLiteStore) GetRunsForTask(ctx context.Context, taskID string) ([]*Run
 		`SELECT id, mission_id, task_id, mode, status, lease_owner,
 			lease_expires_at, heartbeat_at, worktree_path, started_at, ended_at,
 			summary, error_text
-		FROM runs WHERE task_id = ? ORDER BY id ASC`, taskID)
+		FROM runs WHERE task_id = ?`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -808,5 +782,9 @@ func (s *SQLiteStore) GetRunsForTask(ctx context.Context, taskID string) ([]*Run
 		}
 		runs = append(runs, r)
 	}
-	return runs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortRuns(runs)
+	return runs, nil
 }
