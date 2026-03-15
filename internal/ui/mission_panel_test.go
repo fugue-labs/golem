@@ -88,6 +88,9 @@ func seedMission(t *testing.T, ctrl *mission.Controller, status mission.MissionS
 		}
 
 		if status == mission.MissionRunning || status == mission.MissionPaused || status == mission.MissionCancelled {
+			if err := ctrl.ApproveMission(ctx, created.ID); err != nil {
+				t.Fatal(err)
+			}
 			if err := ctrl.StartMission(ctx, created.ID); err != nil {
 				t.Fatal(err)
 			}
@@ -642,6 +645,9 @@ func TestMissionCancelCommand(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := ctrl.ApproveMission(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := ctrl.StartMission(ctx, created.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -675,6 +681,9 @@ func TestMissionPauseCommand(t *testing.T) {
 		Summary: "plan",
 		Tasks:   []mission.PlanTask{{ID: "t_p", Title: "Task", Kind: mission.TaskKindCode, Priority: 1, RiskLevel: mission.RiskLow}},
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctrl.ApproveMission(ctx, created.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := ctrl.StartMission(ctx, created.ID); err != nil {

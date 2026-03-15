@@ -13,15 +13,15 @@ import (
 // ---------------------------------------------------------------------------
 
 type memoryStore struct {
-	mu           sync.Mutex
-	missions     map[string]*Mission
-	tasks        map[string]*Task
-	deps         []TaskDependency
-	runs         map[string]*Run
-	events       []*Event
-	artifacts    []*Artifact
-	approvals    map[string]*Approval
-	nextEventID  int64
+	mu          sync.Mutex
+	missions    map[string]*Mission
+	tasks       map[string]*Task
+	deps        []TaskDependency
+	runs        map[string]*Run
+	events      []*Event
+	artifacts   []*Artifact
+	approvals   map[string]*Approval
+	nextEventID int64
 }
 
 func newMemoryStore() *memoryStore {
@@ -531,6 +531,10 @@ func TestMissionLifecycle(t *testing.T) {
 	// -----------------------------------------------------------------------
 	// 3. Start mission → running
 	// -----------------------------------------------------------------------
+	// Approve the durable mission-plan gate before starting.
+	if err := ctrl.ApproveMission(ctx, mission.ID); err != nil {
+		t.Fatalf("ApproveMission: %v", err)
+	}
 	if err := ctrl.StartMission(ctx, mission.ID); err != nil {
 		t.Fatalf("StartMission: %v", err)
 	}

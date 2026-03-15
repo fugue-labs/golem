@@ -419,6 +419,11 @@ func (m *Model) handleMissionStart() *chat.Message {
 			Kind:    chat.KindAssistant,
 			Content: fmt.Sprintf("Mission `%s` is still being **planned**. Wait for planning to complete, then run `/mission approve`.", ms.ID),
 		}
+	case mission.MissionAwaitingApproval:
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: fmt.Sprintf("Mission `%s` is waiting for plan approval. Run `/mission approve` to approve the plan and start execution.", ms.ID),
+		}
 	case mission.MissionRunning:
 		return &chat.Message{
 			Kind:    chat.KindAssistant,
@@ -426,7 +431,7 @@ func (m *Model) handleMissionStart() *chat.Message {
 		}
 	}
 
-	// For awaiting_approval or paused, proceed with start.
+	// For paused missions, proceed with start.
 	if err := ctrl.StartMission(ctx, m.activeMissionID); err != nil {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to start mission: %v", err)}
 	}

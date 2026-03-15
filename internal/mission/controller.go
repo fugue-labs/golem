@@ -246,23 +246,9 @@ func (c *Controller) StartMission(ctx context.Context, missionID string) error {
 			return fmt.Errorf("cannot start mission without a durable mission-plan gate")
 		}
 		if approval.Status == ApprovalPending {
-			now := time.Now().UTC()
-			approval.Status = ApprovalApproved
-			approval.ResolvedAt = &now
-			approval.ResponseJSON = marshalApprovalResponseJSON(map[string]any{
-				"decision":    "approved",
-				"approved_at": now.Format(time.RFC3339Nano),
-				"source":      "mission.start",
-			})
-			if err := c.store.UpdateApproval(ctx, approval); err != nil {
-				return fmt.Errorf("approve mission plan during start: %w", err)
-			}
-			c.store.AppendEvent(ctx, &Event{ //nolint:errcheck
-				MissionID: missionID,
-				Type:      "mission.approved",
-				CreatedAt: now,
-			})
-		} else if approval.Status != ApprovalApproved {
+			return fmt.Errorf("cannot start mission while mission plan approval is pending")
+		}
+		if approval.Status != ApprovalApproved {
 			return fmt.Errorf("cannot start mission with %s plan approval", approval.Status)
 		}
 		pendingApprovals, err := c.listPendingApprovals(ctx, missionID)
