@@ -286,7 +286,7 @@ Current behavior:
   - **Evidence**
   - **Events**
 - The evidence pane includes review results, pending approvals, failures, and artifacts.
-- The empty-state contract is explicit: if there is no durable mission state yet, the dashboard should say **Mission Control**, **No active mission**, and instruct the operator to create one with `/mission new`. Current dashboard copy may also mention a future `golem mission new` command, but docs should treat that CLI reference as aspirational until it exists.
+- The empty-state contract is explicit: if there is no durable mission state yet, the dashboard renders **Mission Control**, **No active mission**, and the current shipped guidance line **"Create one with /mission new or run golem mission new."** Treat the `golem mission new` clause as aspirational copy in the UI, not evidence of a shipped `golem mission ...` command family.
 
 ## 8. Scope Boundary
 
@@ -1320,12 +1320,12 @@ The documentation should include representative artifact examples so implementer
 
 ## 17.1 Mission creation
 
-1. User creates mission from CLI or TUI.
-2. Controller validates repository preconditions.
-3. Mission is created in `draft` state.
-4. Planning mode runs.
-5. Tasks and dependencies are persisted transactionally.
-6. Mission moves to `planning` then `awaiting_approval` or `running` depending on policy.
+1. User creates mission from the shipped TUI surface via `/mission new <goal>` (and the standalone dashboard can later attach to the durable result).
+2. Controller validates repository preconditions and persists the mission in `draft`.
+3. User invokes `/mission plan`, which moves the mission to `planning` while the planner run executes.
+4. If planning succeeds, the controller applies tasks and dependencies transactionally and creates the durable mission-plan approval record.
+5. Mission moves from `planning` to `awaiting_approval`.
+6. Execution does **not** auto-start under the shipped operator contract; the operator must approve the durable plan gate and then transition into active orchestration via `/mission approve` or `/mission start` after approval.
 
 ## 17.2 Execution loop
 
@@ -1342,6 +1342,15 @@ The documentation should include representative artifact examples so implementer
 11. Controller checks completion, blocking, or replanning conditions.
 
 ## 17.3 Pause and resume
+
+Current shipped pause/resume semantics are intentionally simple and TUI-driven:
+
+- `/mission pause` first stops the in-process orchestrator, then asks the controller to move a `running` mission to `paused`.
+- The operator-facing guarantee is **no new tasks will be leased** until the mission is resumed.
+- Resume uses `/mission start`; there is no separate shipped `/mission resume` mission command.
+- Starting from `paused` resumes the same mission by launching a fresh in-process orchestrator loop against durable mission state. It does not create a second independent scheduler.
+
+The softer distinctions below remain useful implementation vocabulary, but they describe future/refined behavior rather than an additional shipped operator surface.
 
 ### Soft pause
 - stop leasing new tasks

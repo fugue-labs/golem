@@ -54,7 +54,7 @@ Documentation and implementation should agree on the currently shipped mission c
    - Mission Control and `/mission status` must read durable mission state rather than rely on transcript-only memory.
    - `golem dashboard` must preserve its Mission Control empty state and its four-pane model: Tasks, Workers, Evidence, Events.
    - When no mission ID is supplied, the dashboard should prefer the highest-priority active mission (`running` > `blocked` > `paused` > `awaiting_approval` > `planning` > `draft`).
-   - Current shipped behavior should not claim a dedicated `golem mission new` CLI exists unless that CLI has actually shipped.
+   - Reviewers should accept the current shipped empty-state line `Create one with /mission new or run golem mission new.` as UI copy, but must document the `golem mission new` phrase as aspirational rather than a shipped command family.
    - Event examples must distinguish persisted mission-store names (for example `mission.created`, `plan.applied`, `review.passed`, `integration.conflict.requeued`) from transient orchestrator/TUI event-bus names (for example `worker.started`, `review.pass`, `review.request_changes`).
    - Documentation should keep unsupported reject/retry/replan/escalation actions clearly marked aspirational rather than describing them as shipped operator controls.
 

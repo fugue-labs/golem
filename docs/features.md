@@ -84,7 +84,7 @@ Mission orchestration is currently exposed through two operator-facing surfaces.
    - Renders four panes: **Tasks**, **Workers**, **Evidence**, and **Events**.
    - The header surfaces status, task progress, active workers, pending approvals, evidence count, elapsed time, repo, branch, and worker budget.
    - Empty-state behavior is explicit: the dashboard should show `Mission Control`, `No active mission`, and guidance to create one with `/mission new`.
-   - Current implementation copy may still mention `golem mission new`, but that broader CLI family should be treated as aspirational until it ships.
+   - The current shipped empty-state copy may still render the exact line `Create one with /mission new or run golem mission new.` Treat the `golem mission new` phrase as aspirational UI copy, not evidence of a shipped `golem mission ...` command family.
 
 ### Mission command semantics and approval model
 
@@ -121,9 +121,10 @@ Mission orchestration is local-first and persistence-backed:
 
 - durable mission state includes missions, tasks, dependencies, runs, approvals, events, and artifacts,
 - `golem dashboard` reads that durable store directly,
-- restarts are expected to preserve operator-visible mission truth,
+- restarts are expected to preserve operator-visible mission truth in status and dashboard surfaces,
+- the dashboard can attach to existing durable mission state after startup even if no active chat transcript exists,
 - persisted event examples include `mission.created`, `plan.applied`, `mission.approved`, `mission.started`, `mission.paused`, `mission.cancelled`, `worker.dispatched`, `worker.completed`, `worker.failed`, `review.dispatched`, `review.passed`, `review.rejected`, `review.changes_requested`, `integration.completed`, `integration.conflict.requeued`, `integration.error`, `recovery.completed`, `replan.applied`, and `task.unblocked`, and
-- transient orchestrator/TUI event-bus messages use a nearby but not identical naming set such as `worker.started`, `review.pass`, `review.reject`, `review.request_changes`, and `integration.failed`.
+- transient orchestrator/TUI event-bus messages use a nearby but not identical naming set such as `worker.started`, `review.started`, `review.pass`, `review.reject`, `review.request_changes`, `integration.completed`, `integration.conflict`, `integration.failed`, and `mission.completed`.
 
 Mission Control should still produce a valid empty state when no missions exist.
 
