@@ -6,6 +6,8 @@ Golem is a terminal-based coding agent with deep project awareness and a rich in
 
 Use this section as the shared scorecard for shell-oriented implementation work. It is derived from the current docs, UI code, and e2e-observed behavior so future improvements can reference one contract instead of re-deriving goals from scattered sources.
 
+The pre-implementation gap analysis for this contract lives in `docs/tui-best-practices-audit.md`. Treat that audit as advisory guidance for polish work; this section and the existing e2e expectations remain the non-regression source of truth.
+
 ### Current TUI experience
 
 The current interface is organized around five user-visible regions that any future polish should respect:
