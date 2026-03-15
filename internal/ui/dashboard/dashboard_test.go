@@ -416,6 +416,50 @@ func TestRenderHeaderNoMissionShowsReadableIdleState(t *testing.T) {
 	}
 }
 
+func TestViewShowsLoadingAndSmallTerminalStates(t *testing.T) {
+	m := New("")
+	m.width = 0
+	m.height = 0
+	if got := viewString(m); got != "Loading..." {
+		t.Fatalf("expected loading view, got %q", got)
+	}
+
+	m.width = 30
+	m.height = 10
+	plain := stripANSITest(viewString(m))
+	if !containsAny(plain, "Terminal too small", "needs at least") {
+		t.Fatalf("expected small terminal guidance, got %q", plain)
+	}
+}
+
+func TestRenderFooterReportsLayoutAndRefreshState(t *testing.T) {
+	m := New("")
+	m.width = 80
+	m.refreshing = true
+	plain := stripANSITest(m.renderFooter())
+	if !containsAny(plain, "Mission Control refreshing • narrow layout", "refreshing") {
+		t.Fatalf("expected refresh and layout status in footer, got %q", plain)
+	}
+}
+
+func TestPaneAtUnderNarrowLayoutMapsStackedSections(t *testing.T) {
+	m := New("")
+	m.width = 80
+	m.height = 30
+	m.missionObj = &mission.Mission{ID: "m1", Title: "Mission", Status: mission.MissionRunning, Goal: "goal"}
+	m.summary = &mission.MissionSummary{Mission: m.missionObj}
+	layout := m.computeLayout()
+	if !layout.narrow || len(layout.sections) < 4 {
+		t.Fatalf("expected narrow layout with stacked sections, got %+v", layout)
+	}
+	for _, section := range layout.sections {
+		got, ok := m.paneAt(5, section.startY)
+		if !ok || got != section.pane {
+			t.Fatalf("paneAt(%d,%d) = (%v,%v), want (%v,true)", 5, section.startY, got, ok, section.pane)
+		}
+	}
+}
+
 func stringsJoin(parts []string, sep string) string {
 	if len(parts) == 0 {
 		return ""

@@ -151,6 +151,9 @@ type Styles struct {
 		HeaderKey      lipgloss.Style
 		EmptyTitle     lipgloss.Style
 		EmptyBody      lipgloss.Style
+		StateTitle     lipgloss.Style
+		StateBody      lipgloss.Style
+		StateHint      lipgloss.Style
 		MetricKey      lipgloss.Style
 		MetricValue    lipgloss.Style
 	}
@@ -347,6 +350,9 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Panel.HeaderKey = lipgloss.NewStyle().Foreground(palette.blue).Bold(true)
 	s.Panel.EmptyTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
 	s.Panel.EmptyBody = lipgloss.NewStyle().Foreground(palette.fgHalf)
+	s.Panel.StateTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
+	s.Panel.StateBody = lipgloss.NewStyle().Foreground(palette.fgBase)
+	s.Panel.StateHint = lipgloss.NewStyle().Foreground(palette.fgHalf).Italic(true)
 	s.Panel.MetricKey = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Panel.MetricValue = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
 

@@ -401,19 +401,18 @@ func TestTeatestPanelResizeSmall(t *testing.T) {
 	applyTestPlan(t, ctrl, ms.ID)
 
 	refreshModel(t, m)
-	view := viewString(m)
+	view := stripANSI(viewString(m))
 
-	// Even at small size, should render without panic.
 	if view == "" {
 		t.Error("expected non-empty view at small terminal size")
 	}
-
-	// Should still contain key elements.
 	if !strings.Contains(view, "Mission Control") {
 		t.Error("expected 'Mission Control' in small view")
 	}
+	if !strings.Contains(view, "stacked lane") {
+		t.Error("expected stacked lane focus copy in narrow layout")
+	}
 
-	// View lines should not exceed terminal height.
 	lines := strings.Split(view, "\n")
 	if len(lines) > m.height {
 		t.Errorf("view has %d lines but terminal height is %d", len(lines), m.height)
@@ -463,31 +462,34 @@ func TestTeatestDynamicResize(t *testing.T) {
 	applyTestPlan(t, ctrl, ms.ID)
 	refreshModel(t, m)
 
-	// Start at 120x40.
-	view1 := viewString(m)
-	lines1 := strings.Split(view1, "\n")
+	footer1 := stripANSI(m.renderFooter())
+	if !strings.Contains(footer1, "wide layout") {
+		t.Fatalf("expected wide layout footer in large view, got %q", footer1)
+	}
 
-	// Resize to 80x24.
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	view2 := viewString(m)
+	view2 := stripANSI(viewString(m))
 	lines2 := strings.Split(view2, "\n")
-
 	if len(lines2) > 24 {
 		t.Errorf("after resize to 24 rows, got %d lines", len(lines2))
-	}
-	if len(lines1) == len(lines2) && m.width == 120 {
-		t.Error("resize should have changed model dimensions")
 	}
 	if m.width != 80 || m.height != 24 {
 		t.Errorf("expected 80x24 after resize, got %dx%d", m.width, m.height)
 	}
+	footer2 := stripANSI(m.renderFooter())
+	if !strings.Contains(footer2, "narrow layout") {
+		t.Fatalf("expected narrow layout footer after resize, got %q", footer2)
+	}
 
-	// Resize back to large.
 	m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
-	view3 := viewString(m)
+	view3 := stripANSI(viewString(m))
 	lines3 := strings.Split(view3, "\n")
 	if len(lines3) > 60 {
 		t.Errorf("after resize to 60 rows, got %d lines", len(lines3))
+	}
+	footer3 := stripANSI(m.renderFooter())
+	if !strings.Contains(footer3, "wide layout") {
+		t.Fatalf("expected wide layout footer after resizing back, got %q", footer3)
 	}
 }
 

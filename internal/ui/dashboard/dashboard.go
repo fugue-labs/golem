@@ -14,7 +14,12 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
 
-const refreshInterval = 2 * time.Second
+const (
+	refreshInterval      = 2 * time.Second
+	minDashboardWidth    = 40
+	minDashboardHeight   = 14
+	narrowDashboardWidth = 96
+)
 
 // pane identifies which pane has focus for scrolling.
 type pane int
@@ -54,6 +59,7 @@ type Model struct {
 	focusPane       pane
 	scrollPos       [paneCount]int
 	terminalFocused bool
+	refreshing      bool
 	lastErr         error
 	quitting        bool
 }
@@ -84,6 +90,7 @@ type refreshDoneMsg struct {
 }
 
 func (m *Model) Init() tea.Cmd {
+	m.refreshing = true
 	return tea.Batch(tea.RequestBackgroundColor, m.initStore(), tickCmd())
 }
 
@@ -130,43 +137,35 @@ func (m *Model) paneAt(x, y int) (pane, bool) {
 	if x < 0 || y < 0 || m.width <= 0 || m.height <= 0 {
 		return paneTasks, false
 	}
-	headerLines := len(m.renderHeader())
-	bodyStartY := headerLines + 1
-	eventHeight := 2
-	if m.height >= 18 {
-		eventHeight = 3
-	}
-	bodyHeight := m.height - headerLines - 1 - eventHeight - 1
-	if bodyHeight < 4 {
-		bodyHeight = 4
-	}
-	eventStartY := bodyStartY + bodyHeight + 1
-	if y < bodyStartY {
+	layout := m.currentLayout()
+	if layout.tooSmall || layout.stateOnly {
 		return paneTasks, false
 	}
-	if y >= eventStartY && y < eventStartY+eventHeight {
-		return paneEvents, true
+	if layout.narrow {
+		cursorY := layout.headerLines + 1
+		for _, section := range layout.sections {
+			if y >= cursorY && y < cursorY+section.height {
+				return section.pane, true
+			}
+			cursorY += section.height + 1
+		}
+		return paneTasks, false
 	}
-	if y >= bodyStartY && y < bodyStartY+bodyHeight {
-		leftWidth := m.width * 3 / 5
-		rightWidth := m.width - leftWidth - 1
-		if rightWidth < 10 {
-			rightWidth = 10
-			leftWidth = m.width - rightWidth - 1
-		}
-		if leftWidth < 1 {
-			leftWidth = 1
-		}
-		if x < leftWidth {
-			taskHeight := bodyHeight * 3 / 5
-			if y < bodyStartY+taskHeight {
+	bodyStartY := layout.headerLines + 1
+	if y >= bodyStartY && y < bodyStartY+layout.bodyHeight {
+		if x < layout.leftWidth {
+			if y < bodyStartY+layout.taskHeight {
 				return paneTasks, true
 			}
 			return paneEvidence, true
 		}
-		if x > leftWidth {
+		if x > layout.leftWidth {
 			return paneWorkers, true
 		}
+	}
+	eventStartY := bodyStartY + layout.bodyHeight + 1
+	if y >= eventStartY && y < eventStartY+layout.eventHeight {
+		return paneEvents, true
 	}
 	return paneTasks, false
 }
@@ -238,6 +237,7 @@ func (m *Model) doRefresh() tea.Msg {
 	if err != nil {
 		return refreshDoneMsg{err: err}
 	}
+	summary.FillDisplayDefaults()
 	m.summary = summary
 
 	tasks, err := m.ctrl.Store().ListTasks(ctx, m.missionID)
@@ -303,12 +303,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		m.refreshing = true
 		return m, tea.Batch(
 			func() tea.Msg { return m.doRefresh() },
 			tickCmd(),
 		)
 
 	case refreshDoneMsg:
+		m.refreshing = false
 		m.lastErr = msg.err
 		return m, nil
 
@@ -322,6 +324,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "r":
+			m.refreshing = true
 			return m, func() tea.Msg { return m.doRefresh() }
 		case "tab":
 			m.setFocusPane((m.focusPane + 1) % paneCount)
@@ -367,68 +370,39 @@ func (m *Model) View() tea.View {
 		m.configureView(&v)
 		return v
 	}
-
-	if m.lastErr != nil && m.missionObj == nil && !isNoMissionError(m.lastErr) {
-		v := tea.NewView(fmt.Sprintf("Dashboard error: %v\n\nPress q to quit.", m.lastErr))
-		m.configureView(&v)
-		return v
+	if m.sty == nil {
+		m.sty = styles.New(nil)
 	}
 
-	var lines []string
-	lines = append(lines, m.renderHeader()...)
-	lines = append(lines, m.renderSeparator())
-
-	eventHeight := 2
-	if m.height >= 18 {
-		eventHeight = 3
-	}
-	bodyHeight := m.height - len(lines) - 1 - eventHeight - 1 // separator + events + footer
-	if bodyHeight < 4 {
-		bodyHeight = 4
-	}
-
-	leftWidth := m.width * 3 / 5
-	rightWidth := m.width - leftWidth - 1
-	if rightWidth < 10 {
-		rightWidth = 10
-		leftWidth = m.width - rightWidth - 1
-	}
-	if leftWidth < 1 {
-		leftWidth = 1
-		rightWidth = max(1, m.width-leftWidth-1)
-	}
-
-	taskHeight := bodyHeight * 3 / 5
-	evidenceHeight := bodyHeight - taskHeight
-
-	leftLines := append(m.renderTaskPane(taskHeight, leftWidth), m.renderEvidencePane(evidenceHeight, leftWidth)...)
-	rightLines := m.renderWorkerPane(bodyHeight, rightWidth)
-
-	divider := m.sty.Muted.Render("│")
-	for i := range bodyHeight {
-		left := ""
-		if i < len(leftLines) {
-			left = leftLines[i]
-		}
-		right := ""
-		if i < len(rightLines) {
-			right = rightLines[i]
-		}
-		lines = append(lines, padRight(left, leftWidth)+divider+padRight(right, rightWidth))
+	layout := m.currentLayout()
+	var content string
+	switch {
+	case layout.tooSmall:
+		content = m.renderStateScreen("Terminal too small", []string{
+			fmt.Sprintf("Mission Control needs at least %dx%d.", minDashboardWidth, minDashboardHeight),
+			fmt.Sprintf("Current size: %dx%d.", m.width, m.height),
+		}, []string{"Resize the terminal to restore the live dashboard.", "Press q to quit."})
+	case m.refreshing && m.missionObj == nil:
+		content = m.renderStateScreen("Mission Control loading", []string{
+			"Connecting to durable mission state…",
+			"Waiting for the latest mission snapshot.",
+		}, []string{"The dashboard refreshes automatically every 2s.", "Press q to quit."})
+	case m.lastErr != nil && m.missionObj == nil && !isNoMissionError(m.lastErr):
+		content = m.renderStateScreen("Dashboard error", []string{
+			ansi.Truncate(m.lastErr.Error(), max(1, m.width-2), "…"),
+		}, []string{"Press r to retry the refresh.", "Press q to quit."})
+	case layout.stateOnly:
+		content = m.renderStateScreen("No active mission", []string{
+			"Create one with /mission new or run golem mission new.",
+			"Mission Control will attach as soon as durable mission state exists.",
+		}, []string{"Press r to check again.", "Use q to quit."})
+	case layout.narrow:
+		content = m.renderNarrowLayout(layout)
+	default:
+		content = m.renderWideLayout(layout)
 	}
 
-	lines = append(lines, m.renderSeparator())
-	lines = append(lines, m.renderEventPane(eventHeight, m.width)...)
-	lines = append(lines, m.renderFooter())
-
-	for len(lines) < m.height {
-		lines = append(lines, "")
-	}
-	if len(lines) > m.height {
-		lines = lines[:m.height]
-	}
-
-	v := tea.NewView(strings.Join(lines, "\n"))
+	v := tea.NewView(content)
 	m.configureView(&v)
 	return v
 }
@@ -462,6 +436,175 @@ func (m *Model) windowTitle() string {
 	return title
 }
 
+type paneSection struct {
+	pane   pane
+	height int
+	startY int
+}
+
+type dashboardLayout struct {
+	tooSmall    bool
+	stateOnly   bool
+	narrow      bool
+	headerLines int
+	leftWidth   int
+	rightWidth  int
+	bodyHeight  int
+	taskHeight  int
+	eventHeight int
+	sections    []paneSection
+}
+
+func (m *Model) computeLayout() dashboardLayout {
+	return m.currentLayout()
+}
+
+func (m *Model) currentLayout() dashboardLayout {
+	layout := dashboardLayout{}
+	if m.width < minDashboardWidth || m.height < minDashboardHeight {
+		layout.tooSmall = true
+		return layout
+	}
+	layout.headerLines = len(m.renderHeader())
+	if m.missionObj == nil {
+		layout.stateOnly = true
+		return layout
+	}
+	layout.narrow = m.width < narrowDashboardWidth
+	if layout.narrow {
+		layout.sections = m.narrowSections(layout.headerLines)
+		return layout
+	}
+	layout.eventHeight = 3
+	if m.height < 18 {
+		layout.eventHeight = 2
+	}
+	layout.bodyHeight = m.height - layout.headerLines - 1 - layout.eventHeight - 1
+	if layout.bodyHeight < 4 {
+		layout.bodyHeight = 4
+	}
+	layout.leftWidth = m.width * 3 / 5
+	layout.rightWidth = m.width - layout.leftWidth - 1
+	if layout.rightWidth < 10 {
+		layout.rightWidth = 10
+		layout.leftWidth = m.width - layout.rightWidth - 1
+	}
+	if layout.leftWidth < 1 {
+		layout.leftWidth = 1
+		layout.rightWidth = max(1, m.width-layout.leftWidth-1)
+	}
+	layout.taskHeight = layout.bodyHeight * 3 / 5
+	return layout
+}
+
+func (m *Model) narrowSections(headerLines int) []paneSection {
+	available := m.height - headerLines - 1 - 3 - 1
+	if available < 8 {
+		available = 8
+	}
+	baseHeights := []int{6, 6, 5, 4}
+	panes := []pane{paneTasks, paneWorkers, paneEvidence, paneEvents}
+	sections := make([]paneSection, 0, len(baseHeights))
+	used := 0
+	remaining := len(baseHeights)
+	cursorY := headerLines + 2
+	for i, base := range baseHeights {
+		remaining--
+		height := base
+		left := available - used
+		minRemaining := remaining * 3
+		if height > left-minRemaining {
+			height = max(3, left-minRemaining)
+		}
+		if i == len(baseHeights)-1 {
+			height = max(3, left)
+		}
+		if height < 3 {
+			height = 3
+		}
+		sections = append(sections, paneSection{pane: panes[i], height: height, startY: cursorY})
+		used += height
+		cursorY += height + 1
+	}
+	return sections
+}
+
+func (m *Model) renderWideLayout(layout dashboardLayout) string {
+	lines := append([]string{}, m.renderHeader()...)
+	lines = append(lines, m.renderSeparator())
+
+	leftLines := append(m.renderTaskPane(layout.taskHeight, layout.leftWidth), m.renderEvidencePane(layout.bodyHeight-layout.taskHeight, layout.leftWidth)...)
+	rightLines := m.renderWorkerPane(layout.bodyHeight, layout.rightWidth)
+	divider := m.sty.Muted.Render("│")
+	for i := 0; i < layout.bodyHeight; i++ {
+		left := ""
+		if i < len(leftLines) {
+			left = leftLines[i]
+		}
+		right := ""
+		if i < len(rightLines) {
+			right = rightLines[i]
+		}
+		lines = append(lines, padRight(left, layout.leftWidth)+divider+padRight(right, layout.rightWidth))
+	}
+
+	lines = append(lines, m.renderSeparator())
+	lines = append(lines, m.renderEventPane(layout.eventHeight, m.width)...)
+	lines = append(lines, m.renderFooter())
+	return m.finalizeLines(lines)
+}
+
+func (m *Model) renderNarrowLayout(layout dashboardLayout) string {
+	lines := append([]string{}, m.renderHeader()...)
+	lines = append(lines, m.renderSeparator())
+	for i, section := range layout.sections {
+		switch section.pane {
+		case paneTasks:
+			lines = append(lines, m.renderTaskPane(section.height, m.width)...)
+		case paneWorkers:
+			lines = append(lines, m.renderWorkerPane(section.height, m.width)...)
+		case paneEvidence:
+			lines = append(lines, m.renderEvidencePane(section.height, m.width)...)
+		case paneEvents:
+			lines = append(lines, m.renderEventPane(section.height, m.width)...)
+		}
+		if i < len(layout.sections)-1 {
+			lines = append(lines, m.renderSeparator())
+		}
+	}
+	lines = append(lines, m.renderFooter())
+	return m.finalizeLines(lines)
+}
+
+func (m *Model) renderStateScreen(title string, body, hints []string) string {
+	lines := []string{m.sty.Panel.Title.Render("Mission Control")}
+	lines = append(lines, m.sty.Panel.StateTitle.Render(title))
+	for _, line := range body {
+		for _, wrapped := range wrapPlainText(line, max(1, m.width-2)) {
+			lines = append(lines, m.sty.Panel.StateBody.Render(wrapped))
+		}
+	}
+	if len(hints) > 0 {
+		lines = append(lines, "")
+		for _, hint := range hints {
+			for _, wrapped := range wrapPlainText(hint, max(1, m.width-2)) {
+				lines = append(lines, m.sty.Panel.StateHint.Render(wrapped))
+			}
+		}
+	}
+	return m.finalizeLines(lines)
+}
+
+func (m *Model) finalizeLines(lines []string) string {
+	for len(lines) < m.height {
+		lines = append(lines, "")
+	}
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // renderHeader renders the mission header.
 func (m *Model) renderHeader() []string {
 	if m.missionObj == nil {
@@ -475,8 +618,13 @@ func (m *Model) renderHeader() []string {
 	}
 
 	ms := m.missionObj
-	tc := m.summary.TaskCounts
-	activeRuns := m.summary.ActiveRuns
+	summary := m.summary
+	if summary == nil {
+		summary = &mission.MissionSummary{Mission: ms}
+		summary.FillDisplayDefaults()
+	}
+	tc := summary.TaskCounts
+	activeRuns := summary.ActiveRuns
 	if activeRuns == 0 {
 		for _, r := range m.runs {
 			if r.Status == mission.RunRunning || r.Status == mission.RunQueued {
@@ -486,6 +634,9 @@ func (m *Model) renderHeader() []string {
 	}
 
 	titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip(string(ms.Status), fmt.Sprintf("%s %s", missionStatusIcon(ms.Status), ms.Status))
+	if m.refreshing {
+		titleLine += "  " + m.renderStatusChip("refreshing", "Refreshing")
+	}
 
 	missionTitle := strings.TrimSpace(ms.Title)
 	if missionTitle == "" {
@@ -495,9 +646,13 @@ func (m *Model) renderHeader() []string {
 
 	done := tc.Done + tc.Integrated + tc.Accepted
 	blocked := tc.Blocked + tc.Failed
+	evidenceCount := len(m.artifacts) + len(completedReviewRuns(m.runs)) + len(pendingApprovals(m.approvals))
 	metricSegments := []string{
 		m.renderMetric("Tasks", fmt.Sprintf("%d/%d complete", done, tc.Total)),
 		m.renderMetric("Workers", fmt.Sprintf("%d active", activeRuns)),
+		m.renderMetric("Blockers", fmt.Sprintf("%d stalled", blocked)),
+		m.renderMetric("Approvals", fmt.Sprintf("%d pending", summary.PendingApprovals)),
+		m.renderMetric("Evidence", fmt.Sprintf("%d items", evidenceCount)),
 	}
 	if tc.Running > 0 {
 		metricSegments = append(metricSegments, m.renderMetric("Running", fmt.Sprintf("%d now", tc.Running)))
@@ -507,15 +662,6 @@ func (m *Model) renderHeader() []string {
 	}
 	if tc.AwaitingReview > 0 {
 		metricSegments = append(metricSegments, m.renderMetric("Review", fmt.Sprintf("%d waiting", tc.AwaitingReview)))
-	}
-	if blocked > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Blocked", fmt.Sprintf("%d stalled", blocked)))
-	}
-	if m.summary.PendingApprovals > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Approvals", fmt.Sprintf("%d pending", m.summary.PendingApprovals)))
-	}
-	if len(m.artifacts) > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Evidence", fmt.Sprintf("%d items", len(m.artifacts))))
 	}
 	if ms.StartedAt != nil {
 		metricSegments = append(metricSegments, m.renderMetric("Elapsed", time.Since(*ms.StartedAt).Truncate(time.Second).String()))
@@ -538,17 +684,31 @@ func (m *Model) renderHeader() []string {
 	if ms.Budget.MaxConcurrentWorkers > 0 {
 		metaSegments = append(metaSegments, m.renderMetric("Budget", fmt.Sprintf("%d workers", ms.Budget.MaxConcurrentWorkers)))
 	}
+	if summary.PhaseLabel != "" {
+		metaSegments = append(metaSegments, m.renderMetric("Phase", summary.PhaseLabel))
+	}
 
 	lines := []string{titleLine, missionLine}
 	lines = append(lines, wrapSegments(metricSegments, max(1, m.width), m.sty.Panel.Separator.Render(" • "))...)
 	if len(metaSegments) > 0 {
 		lines = append(lines, wrapSegments(metaSegments, max(1, m.width), m.sty.Panel.Separator.Render(" • "))...)
 	}
-
+	if summary.Attention != "" {
+		lines = append(lines, m.renderHeaderSummaryLine("Attention", summary.Attention))
+	}
+	if summary.NextAction != "" {
+		lines = append(lines, m.renderHeaderSummaryLine("Next", summary.NextAction))
+	}
 	goalLabel := m.sty.Panel.MetricKey.Render("Goal")
 	goalText := ansi.Truncate(ms.Goal, max(1, m.width-lipgloss.Width(goalLabel)-1), "…")
 	lines = append(lines, goalLabel+" "+m.sty.HalfMuted.Render(goalText))
 	return lines
+}
+
+func (m *Model) renderHeaderSummaryLine(label, text string) string {
+	prefix := m.sty.Panel.MetricKey.Render(label)
+	body := ansi.Truncate(text, max(1, m.width-lipgloss.Width(prefix)-1), "…")
+	return prefix + " " + m.sty.Panel.StateBody.Render(body)
 }
 
 // renderTaskPane renders the task DAG view.
@@ -556,13 +716,13 @@ func (m *Model) renderTaskPane(height, width int) []string {
 	header := m.renderPaneHeader("Tasks", m.focusPane == paneTasks, width)
 	lines := []string{header}
 	budget := height - 1
+	if budget <= 0 {
+		return lines[:min(len(lines), height)]
+	}
 
 	if len(m.tasks) == 0 {
-		lines = append(lines, m.renderEmptyState(width, "No tasks yet", "Plan the mission to populate the task graph and operator queue.")...)
-		for len(lines) < height {
-			lines = append(lines, "")
-		}
-		return lines[:height]
+		lines = append(lines, m.renderEmptyState(width, "No tasks yet", "Plan the mission to populate the task graph and operator queue.", "Tip: approve the plan so workers can start leasing ready tasks.")...)
+		return padLines(lines, height)
 	}
 
 	depMap := make(map[string][]string)
@@ -582,7 +742,6 @@ func (m *Model) renderTaskPane(height, width int) []string {
 		{"Pending", []mission.TaskStatus{mission.TaskPending}},
 	}
 
-	offset := m.scrollPos[paneTasks]
 	var allItems []string
 	for _, g := range groups {
 		var groupTasks []*mission.Task
@@ -620,20 +779,9 @@ func (m *Model) renderTaskPane(height, width int) []string {
 	if len(allItems) > 0 && allItems[len(allItems)-1] == "" {
 		allItems = allItems[:len(allItems)-1]
 	}
-	if offset > len(allItems) {
-		offset = len(allItems)
-		m.scrollPos[paneTasks] = offset
-	}
-	visible := allItems[offset:]
-	if len(visible) > budget {
-		visible = visible[:budget]
-	}
+	visible := clampVisible(allItems, &m.scrollPos[paneTasks], budget)
 	lines = append(lines, visible...)
-
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	return lines[:height]
+	return padLines(lines, height)
 }
 
 // renderWorkerPane renders the worker lane cards.
@@ -641,6 +789,9 @@ func (m *Model) renderWorkerPane(height, width int) []string {
 	header := m.renderPaneHeader("Workers", m.focusPane == paneWorkers, width)
 	lines := []string{header}
 	budget := height - 1
+	if budget <= 0 {
+		return lines[:min(len(lines), height)]
+	}
 
 	var activeRuns []*mission.Run
 	for _, r := range m.runs {
@@ -650,11 +801,8 @@ func (m *Model) renderWorkerPane(height, width int) []string {
 	}
 
 	if len(activeRuns) == 0 {
-		lines = append(lines, m.renderEmptyState(width, "No active workers", "Mission Control is idle. Start the mission to see workers, reviews, and queued work.")...)
-		for len(lines) < height {
-			lines = append(lines, "")
-		}
-		return lines[:height]
+		lines = append(lines, m.renderEmptyState(width, "No active workers", "Mission Control is idle. Start the mission to see workers, reviews, and queued work.", "Tip: pending approvals or blocked tasks will pause dispatch.")...)
+		return padLines(lines, height)
 	}
 
 	taskMap := make(map[string]*mission.Task)
@@ -662,10 +810,9 @@ func (m *Model) renderWorkerPane(height, width int) []string {
 		taskMap[t.ID] = t
 	}
 
-	offset := m.scrollPos[paneWorkers]
 	allItems := []string{m.renderSectionLabel("Active", len(activeRuns), width)}
 	for _, r := range activeRuns {
-		runID := r.ID[:min(12, len(r.ID))]
+		runID := shortenID(r.ID, 12)
 		headerLine := fmt.Sprintf(" %s %s [%s]", runModeIcon(r.Mode), runID, runStatusStyle(r.Status, m.sty))
 		allItems = append(allItems, ansi.Truncate(m.sty.Bold.Render(headerLine), max(1, width-1), "…"))
 
@@ -703,28 +850,17 @@ func (m *Model) renderWorkerPane(height, width int) []string {
 			if r.Status == mission.RunFailed {
 				icon = "✗"
 			}
-			line := fmt.Sprintf(" %s %s [%s]", icon, r.ID[:min(12, len(r.ID))], r.Status)
+			line := fmt.Sprintf(" %s %s [%s]", icon, shortenID(r.ID, 12), r.Status)
 			allItems = append(allItems, m.sty.Muted.Render(ansi.Truncate(line, max(1, width-2), "…")))
 		}
 	}
-
 	if len(allItems) > 0 && allItems[len(allItems)-1] == "" {
 		allItems = allItems[:len(allItems)-1]
 	}
-	if offset > len(allItems) {
-		offset = len(allItems)
-		m.scrollPos[paneWorkers] = offset
-	}
-	visible := allItems[offset:]
-	if len(visible) > budget {
-		visible = visible[:budget]
-	}
-	lines = append(lines, visible...)
 
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	return lines[:height]
+	visible := clampVisible(allItems, &m.scrollPos[paneWorkers], budget)
+	lines = append(lines, visible...)
+	return padLines(lines, height)
 }
 
 // renderEvidencePane renders review decisions, verification, and approvals.
@@ -733,102 +869,81 @@ func (m *Model) renderEvidencePane(height, width int) []string {
 	header := m.renderPaneHeader("Evidence", m.focusPane == paneEvidence, width)
 	lines := []string{sep, header}
 	budget := height - 2
+	if budget <= 0 {
+		return padLines(lines, height)
+	}
 
-	offset := m.scrollPos[paneEvidence]
 	var allItems []string
 
-	var reviewLines []string
+	reviewRuns := completedReviewRuns(m.runs)
+	if len(reviewRuns) > 0 {
+		allItems = append(allItems, m.renderSectionLabel("Reviews", len(reviewRuns), width))
+		for _, r := range reviewRuns {
+			icon := "✓"
+			label := "pass"
+			if r.Status == mission.RunFailed {
+				icon = "✗"
+				label = "fail"
+			}
+			summary := r.Summary
+			if summary == "" {
+				summary = r.TaskID
+			}
+			line := fmt.Sprintf(" %s Review %s: %s", icon, label, ansi.Truncate(summary, max(1, width-20), "…"))
+			allItems = append(allItems, m.sty.Panel.TaskText.Render(line))
+		}
+	}
+
+	pending := pendingApprovals(m.approvals)
+	if len(pending) > 0 {
+		allItems = append(allItems, m.renderSectionLabel("Approvals", len(pending), width))
+		for _, a := range pending {
+			line := fmt.Sprintf(" ⏳ Approval: %s [pending]", a.Kind)
+			allItems = append(allItems, m.sty.Panel.TaskText.Render(ansi.Truncate(line, max(1, width-2), "…")))
+		}
+	}
+
+	var failures []*mission.Run
 	for _, r := range m.runs {
-		if r.Mode != mission.RunModeReview {
-			continue
+		if r.Status == mission.RunFailed && r.Mode != mission.RunModeReview {
+			failures = append(failures, r)
 		}
-		if r.Status != mission.RunSucceeded && r.Status != mission.RunFailed {
-			continue
-		}
-		icon := "✓"
-		label := "pass"
-		if r.Status == mission.RunFailed {
-			icon = "✗"
-			label = "fail"
-		}
-		summary := r.Summary
-		if summary == "" {
-			summary = r.TaskID
-		}
-		line := fmt.Sprintf(" %s Review %s: %s", icon, label, ansi.Truncate(summary, max(1, width-20), "…"))
-		reviewLines = append(reviewLines, m.sty.Panel.TaskText.Render(line))
 	}
-	if len(reviewLines) > 0 {
-		allItems = append(allItems, m.renderSectionLabel("Reviews", len(reviewLines), width))
-		allItems = append(allItems, reviewLines...)
+	if len(failures) > 0 {
+		allItems = append(allItems, m.renderSectionLabel("Failures", len(failures), width))
+		for _, r := range failures {
+			errText := r.ErrorText
+			if errText == "" {
+				errText = "unknown error"
+			}
+			line := fmt.Sprintf(" ✗ %s %s: %s", r.Mode, r.TaskID, ansi.Truncate(errText, max(1, width-20), "…"))
+			allItems = append(allItems, m.sty.Panel.TaskText.Render(ansi.Truncate(line, max(1, width-2), "…")))
+		}
 	}
 
-	var approvalLines []string
-	for _, a := range m.approvals {
-		if a.Status != mission.ApprovalPending {
-			continue
+	if len(m.artifacts) > 0 {
+		allItems = append(allItems, m.renderSectionLabel("Artifacts", len(m.artifacts), width))
+		for _, a := range m.artifacts {
+			label := a.Type
+			if label == "" {
+				label = "artifact"
+			}
+			target := a.RelativePath
+			if target == "" {
+				target = shortenID(a.ID, 12)
+			}
+			line := fmt.Sprintf(" %s %s: %s", styles.ResultPrefix, label, ansi.Truncate(target, max(1, width-16), "…"))
+			allItems = append(allItems, m.sty.Panel.TaskText.Render(ansi.Truncate(line, max(1, width-2), "…")))
 		}
-		line := fmt.Sprintf(" ⏳ Approval: %s [pending]", a.Kind)
-		approvalLines = append(approvalLines, m.sty.Panel.TaskText.Render(ansi.Truncate(line, max(1, width-2), "…")))
-	}
-	if len(approvalLines) > 0 {
-		allItems = append(allItems, m.renderSectionLabel("Approvals", len(approvalLines), width))
-		allItems = append(allItems, approvalLines...)
-	}
-
-	var failureLines []string
-	for _, r := range m.runs {
-		if r.Status != mission.RunFailed || r.Mode == mission.RunModeReview {
-			continue
-		}
-		errText := r.ErrorText
-		if errText == "" {
-			errText = "unknown error"
-		}
-		line := fmt.Sprintf(" ✗ %s %s: %s", r.Mode, r.TaskID, ansi.Truncate(errText, max(1, width-20), "…"))
-		failureLines = append(failureLines, m.sty.Panel.TaskText.Render(ansi.Truncate(line, max(1, width-2), "…")))
-	}
-	if len(failureLines) > 0 {
-		allItems = append(allItems, m.renderSectionLabel("Failures", len(failureLines), width))
-		allItems = append(allItems, failureLines...)
-	}
-
-	var artifactLines []string
-	for _, a := range m.artifacts {
-		label := a.Type
-		if label == "" {
-			label = "artifact"
-		}
-		target := a.RelativePath
-		if target == "" {
-			target = shortenID(a.ID, 12)
-		}
-		line := fmt.Sprintf(" %s %s: %s", styles.ResultPrefix, label, ansi.Truncate(target, max(1, width-16), "…"))
-		artifactLines = append(artifactLines, m.sty.Panel.TaskText.Render(ansi.Truncate(line, max(1, width-2), "…")))
-	}
-	if len(artifactLines) > 0 {
-		allItems = append(allItems, m.renderSectionLabel("Artifacts", len(artifactLines), width))
-		allItems = append(allItems, artifactLines...)
 	}
 
 	if len(allItems) == 0 {
-		allItems = append(allItems, m.renderEmptyState(width, "No evidence yet", "Reviews, approvals, failures, and artifacts will collect here as the mission runs.")...)
+		allItems = append(allItems, m.renderEmptyState(width, "No evidence yet", "Reviews, approvals, failures, and artifacts will collect here as the mission runs.", "Tip: use this pane to spot blockers and proof without reading the full event log.")...)
 	}
 
-	if offset > len(allItems) {
-		offset = len(allItems)
-		m.scrollPos[paneEvidence] = offset
-	}
-	visible := allItems[offset:]
-	if len(visible) > budget {
-		visible = visible[:budget]
-	}
+	visible := clampVisible(allItems, &m.scrollPos[paneEvidence], budget)
 	lines = append(lines, visible...)
-
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	return lines[:height]
+	return padLines(lines, height)
 }
 
 // renderEventPane renders recent events in a compact row.
@@ -836,8 +951,10 @@ func (m *Model) renderEventPane(height, width int) []string {
 	header := m.renderPaneHeader("Events", m.focusPane == paneEvents, width)
 	lines := []string{header}
 	budget := height - 1
+	if budget <= 0 {
+		return padLines(lines, height)
+	}
 
-	offset := m.scrollPos[paneEvents]
 	var allItems []string
 	for i := len(m.events) - 1; i >= 0; i-- {
 		e := m.events[i]
@@ -849,22 +966,11 @@ func (m *Model) renderEventPane(height, width int) []string {
 		allItems = append(allItems, m.sty.Muted.Render(ansi.Truncate(line, max(1, width-2), "…")))
 	}
 	if len(allItems) == 0 {
-		allItems = append(allItems, m.renderEmptyState(width, "No events yet", "Mission lifecycle, scheduling, and approval events will stream here.")...)
+		allItems = append(allItems, m.renderEmptyState(width, "No events yet", "Mission lifecycle, scheduling, and approval events will stream here.", "Tip: if workers look stalled, compare this lane with approvals and failures.")...)
 	}
-	if offset > len(allItems) {
-		offset = len(allItems)
-		m.scrollPos[paneEvents] = offset
-	}
-	visible := allItems[offset:]
-	if len(visible) > budget {
-		visible = visible[:budget]
-	}
+	visible := clampVisible(allItems, &m.scrollPos[paneEvents], budget)
 	lines = append(lines, visible...)
-
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	return lines[:height]
+	return padLines(lines, height)
 }
 
 func (m *Model) renderSeparator() string {
@@ -872,8 +978,16 @@ func (m *Model) renderSeparator() string {
 }
 
 func (m *Model) renderFooter() string {
+	mode := "wide layout"
+	if m.width < narrowDashboardWidth {
+		mode = "narrow layout"
+	}
+	status := "live"
+	if m.refreshing {
+		status = "refreshing"
+	}
 	keys := []string{
-		m.renderMetric("Command center", "operator view"),
+		m.renderMetric("Mission Control", status+" • "+mode),
 		"q:quit",
 		"r:refresh",
 		"tab:switch pane",
@@ -904,6 +1018,16 @@ func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
 		metaStyle = m.sty.Panel.HeaderMeta.Bold(true)
 		meta = "ACTIVE • j/k scroll"
 	}
+	if m.width < narrowDashboardWidth {
+		if focused {
+			meta = "ACTIVE • stacked lane"
+		} else {
+			meta = "stacked lane"
+		}
+	}
+	if canScroll(m.focusPane, m) && focused {
+		meta += " • more"
+	}
 	label := fmt.Sprintf("%s %s %s", indicator, paneShortcut(title), title)
 	line := headStyle.Render(label) + " " + metaStyle.Render(meta)
 	return ansi.Truncate(line, max(1, width), "…")
@@ -925,7 +1049,7 @@ func (m *Model) renderStatusChip(kind, text string) string {
 		Padding(0, 1)
 	lower := strings.ToLower(kind)
 	switch {
-	case strings.Contains(lower, "run") || strings.Contains(lower, "active"):
+	case strings.Contains(lower, "run") || strings.Contains(lower, "active") || strings.Contains(lower, "refresh"):
 		style = style.Background(m.sty.Blue)
 	case strings.Contains(lower, "await") || strings.Contains(lower, "review"):
 		style = style.Background(m.sty.Yellow)
@@ -941,11 +1065,16 @@ func (m *Model) renderStatusChip(kind, text string) string {
 	return style.Render(text)
 }
 
-func (m *Model) renderEmptyState(width int, title, body string) []string {
+func (m *Model) renderEmptyState(width int, title, body string, hints ...string) []string {
 	lines := []string{m.sty.Panel.EmptyTitle.Render(" " + title)}
 	wrapped := wrapPlainText(body, max(1, width-2))
 	for _, line := range wrapped {
 		lines = append(lines, m.sty.Panel.EmptyBody.Render(" "+line))
+	}
+	for _, hint := range hints {
+		for _, line := range wrapPlainText(hint, max(1, width-2)) {
+			lines = append(lines, m.sty.Panel.StateHint.Render(" "+line))
+		}
 	}
 	return lines
 }
@@ -1149,4 +1278,70 @@ func padRight(s string, width int) string {
 		return ansi.Truncate(s, width, "…")
 	}
 	return s + strings.Repeat(" ", width-w)
+}
+
+func padLines(lines []string, height int) []string {
+	if height <= 0 {
+		return nil
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return lines
+}
+
+func clampVisible(items []string, scroll *int, budget int) []string {
+	if scroll == nil {
+		zero := 0
+		scroll = &zero
+	}
+	if *scroll > len(items) {
+		*scroll = len(items)
+	}
+	visible := items[*scroll:]
+	if len(visible) > budget {
+		visible = visible[:budget]
+	}
+	return visible
+}
+
+func completedReviewRuns(runs []*mission.Run) []*mission.Run {
+	var out []*mission.Run
+	for _, r := range runs {
+		if r.Mode == mission.RunModeReview && (r.Status == mission.RunSucceeded || r.Status == mission.RunFailed) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func pendingApprovals(approvals []*mission.Approval) []*mission.Approval {
+	var out []*mission.Approval
+	for _, a := range approvals {
+		if a.Status == mission.ApprovalPending {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func canScroll(p pane, m *Model) bool {
+	if m == nil {
+		return false
+	}
+	switch p {
+	case paneTasks:
+		return len(m.tasks) > 4
+	case paneWorkers:
+		return len(m.runs) > 2
+	case paneEvidence:
+		return len(m.artifacts)+len(m.approvals)+len(m.runs) > 3
+	case paneEvents:
+		return len(m.events) > 2
+	default:
+		return false
+	}
 }
