@@ -87,7 +87,7 @@ func (p Panel) View() tea.View {
 		if g.Status == "passed" {
 			icon = "✓"
 		} else if strings.EqualFold(g.Name, focus) {
-			label = "Gate: " + label
+			label = "Approval gate: " + label
 		}
 		b.WriteString(fmt.Sprintf(" %s %s\n", icon, label))
 	}

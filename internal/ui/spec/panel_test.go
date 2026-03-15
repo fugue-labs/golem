@@ -53,7 +53,7 @@ func TestPanelRenderGateIcons(t *testing.T) {
 	if strings.Count(view, "○") != 1 {
 		t.Errorf("expected 1 pending gate icon while waiting on first approval, got view: %q", view)
 	}
-	if !strings.Contains(view, "Gate: Spec Approval") {
+	if !strings.Contains(view, "Approval gate: Spec Approval") {
 		t.Fatalf("expected focused gate label, got: %q", view)
 	}
 
@@ -63,7 +63,7 @@ func TestPanelRenderGateIcons(t *testing.T) {
 	if !strings.Contains(view, "✓") {
 		t.Error("expected check icon after advancing gate")
 	}
-	if strings.Contains(view, "Gate: Task Decomposition") {
+	if strings.Contains(view, "Approval gate: Task Decomposition") {
 		t.Fatalf("task decomposition gate should stay secondary until the workflow is waiting on it, got: %q", view)
 	}
 }
