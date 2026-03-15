@@ -37,6 +37,8 @@ Documentation and implementation should agree on the currently shipped mission c
 
 1. **Lifecycle**
    - Mission statuses include `draft`, `planning`, `awaiting_approval`, `running`, `blocked`, `paused`, `completing`, `completed`, `failed`, and `cancelled`.
+   - `/mission new <goal>` creates a durable draft mission using repo metadata supplied by the TUI.
+   - Reviewers must not claim repository precondition enforcement inside `CreateMission` unless that validation code actually ships.
    - Operator guidance must distinguish `awaiting_approval` from the summary phase label **`Ready to start`**.
 
 2. **Approval/start semantics**

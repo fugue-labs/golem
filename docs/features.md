@@ -69,6 +69,7 @@ Mission orchestration is currently exposed through two operator-facing surfaces.
 
 1. **`/mission` inside the main TUI**
    - `/mission new <goal>` creates a durable mission in `draft` state.
+   - Mission creation is seeded from the current TUI repo context (`repo_root`, `base_branch`, `base_commit`). The current implementation persists that draft mission, but does **not** yet enforce repository preconditions inside `CreateMission` itself.
    - `/mission status` renders the durable mission summary, including status, phase label, next action, focus task, queued next task, DAG counts, active runs, approvals, blocked tasks, review queue, and ready queue.
    - `/mission tasks` lists the current task DAG with task IDs, statuses, titles, objectives, and dependency edges.
    - `/mission plan` invokes the planner, moves the mission to `planning`, and later applies the DAG into durable store state.
@@ -91,6 +92,8 @@ Mission orchestration is currently exposed through two operator-facing surfaces.
 The current shipped mission contract is:
 
 - A new mission starts in **`draft`**.
+- Mission creation uses repo metadata supplied by the TUI (`repo_root`, `base_branch`, `base_commit`) and persists the draft mission durably.
+- Repository precondition validation is **not** currently enforced by `CreateMission`; docs should treat stricter repo validation as future work unless that code ships.
 - `/mission plan` is the only normal path from `draft` to a task DAG.
 - Applying a plan creates durable tasks, dependencies, and a durable **mission-plan approval** record, then moves the mission to **`awaiting_approval`**.
 - `/mission approve` resolves that durable gate and immediately attempts to start the mission.

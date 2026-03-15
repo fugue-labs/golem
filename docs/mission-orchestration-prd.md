@@ -1321,7 +1321,7 @@ The documentation should include representative artifact examples so implementer
 ## 17.1 Mission creation
 
 1. User creates mission from the shipped TUI surface via `/mission new <goal>` (and the standalone dashboard can later attach to the durable result).
-2. Controller validates repository preconditions and persists the mission in `draft`.
+2. TUI mission creation supplies current repo metadata (`repo_root`, `base_branch`, `base_commit`) and `CreateMission` persists the mission in `draft`.
 3. User invokes `/mission plan`, which moves the mission to `planning` while the planner run executes.
 4. If planning succeeds, the controller applies tasks and dependencies transactionally and creates the durable mission-plan approval record.
 5. Mission moves from `planning` to `awaiting_approval`.
@@ -1716,7 +1716,7 @@ Current TUI help contract:
 
 Semantics:
 
-- `/mission new <goal>` creates the mission in `draft`
+- `/mission new <goal>` creates the mission in `draft`; the TUI supplies current repo metadata (`repo_root`, `base_branch`, `base_commit`) when creating it
 - `/mission plan` moves the mission into `planning` and later applies the DAG into durable store state
 - `/mission approve` resolves the durable mission-plan approval and then attempts to start execution
 - `/mission start` starts an approved `awaiting_approval` mission or resumes a `paused` mission
@@ -1856,9 +1856,11 @@ Required primary views:
 
 ### Create mission flow
 1. capture goal/title/policy
-2. validate repo preconditions
+2. capture current repo metadata (`repo_root`, `base_branch`, `base_commit`) from the TUI session
 3. create draft mission
 4. move into planning state and then overview/approval flow
+
+**Current shipped note:** repository precondition enforcement is not currently performed by `CreateMission`; if stricter repo validation is desired, treat it as future work rather than current behavior.
 
 ### Review rejection flow
 1. operator sees rejected task in board and review queue
