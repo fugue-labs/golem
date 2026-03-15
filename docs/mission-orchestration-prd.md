@@ -8,7 +8,7 @@
 - **Scope**: v1 local-first, single-host mission orchestration for repository work
 - **Audience**: implementation agents, maintainers, reviewers
 - **Quality bar**: the system must feel competitive with the best terminal coding agents in reliability, sophistication, and operator trust while remaining simpler and more elegant than a daemon-first platform
-- **Decision rule**: if implementation behavior differs from this document, the implementation is wrong unless this document is updated first
+- **Decision rule**: for the current shipped operator contract, §§7.3-7.7 and §20.3.1 take precedence; later sections remain forward-looking unless explicitly marked as current shipped behavior
 
 ---
 
@@ -66,7 +66,8 @@ The implementation must be:
 
 5. **Operator control and comprehension**
    - The user can understand what the system is doing, why it is blocked, and what changed.
-   - The user can pause, resume, approve, reject, retry, and cancel.
+   - In the shipped surface, the user can create a mission, inspect status/tasks/dashboard state, approve the mission plan, start execution, resume from `paused` via `/mission start`, pause, and cancel.
+   - Task-scoped reject/retry/replan/escalation controls discussed elsewhere in this PRD remain aspirational unless a dedicated operator surface ships.
 
 6. **Elegant implementation surface**
    - v1 must avoid unnecessary protocol, daemon, or distributed-system complexity.
@@ -134,9 +135,9 @@ The implementation must be:
 
 1. As a developer, I can say “split the monolithic auth module into OAuth2 services, add tests, and update docs” and Golem turns that into a mission.
 2. As a developer, I can watch progress across many workers without losing the thread.
-3. As a developer, I can require approval before risky escalations or final integration.
+3. As a developer, I can approve a mission plan and then start or resume execution with explicit lifecycle feedback.
 4. As a developer, I can pause a mission, restart Golem, and continue later.
-5. As a developer, I can inspect why a task failed review and decide whether to retry, replan, or stop.
+5. As a developer, I can inspect why a task failed review from durable mission evidence, even though shipped task-scoped retry/replan/escalation controls are still aspirational.
 6. As a maintainer, I can prove the system works with deterministic tests and opt-in real-provider smoke tests.
 
 ### 6.2 Secondary user stories
@@ -168,25 +169,125 @@ The experience must not feel like:
 
 ### 7.2 User-facing mission phases
 
-A mission visibly moves through these phases:
+For the current shipped behavior, use the implementation contract below rather than older aspirational command examples.
 
-1. **Draft**
-   - goal captured, not yet planned
-2. **Planning**
-   - controller is building or revising the task graph
-3. **Awaiting approval**
-   - human decision required
-4. **Running**
-   - workers and reviewers are active
-5. **Blocked**
-   - no runnable tasks and no safe automatic progress path
-6. **Paused**
-   - operator paused mission
-7. **Completing**
-   - final integration / final checks in progress
-8. **Completed / Failed / Cancelled**
+### 7.3 Implemented mission lifecycle and operator contract
 
----
+The current implementation is stricter and more explicit than the aspirational material elsewhere in this document. Treat the following as the source of truth for the shipped system:
+
+1. **`draft`**
+   - Created by `/mission new <goal>`.
+   - The mission exists durably, but has no task DAG yet.
+   - Operator next step: run `/mission plan`.
+
+2. **`planning`**
+   - Entered when `/mission plan` is accepted and the planner run starts.
+   - Planning is rejected for vague goals; the operator must create a clearer mission goal first.
+   - Re-planning is not currently supported for missions that are already `running`, `paused`, `blocked`, `completing`, or terminal.
+
+3. **`awaiting_approval`**
+   - Reached only after a plan is successfully applied.
+   - Applying a plan creates durable tasks, dependencies, and a durable mission-plan approval record.
+   - The mission summary intentionally distinguishes:
+     - **`Awaiting approval`** when the mission-plan gate is still pending.
+     - **`Ready to start`** when the plan approval is already approved and no other approvals remain.
+   - `/mission start` does **not** bypass approval. If the plan approval is still pending, the user is sent to `/mission approve`.
+
+4. **`running`**
+   - Reached from `awaiting_approval` only after the durable mission-plan approval is `approved` and no other pending approvals block execution.
+   - Also reached from `paused` via `/mission start`.
+   - Starting a mission resumes the in-process orchestrator loop for that mission; it does not create a second independent scheduler or parallel control plane.
+
+5. **`paused`**
+   - Entered only from `running` via `/mission pause`.
+   - The TUI stops the in-process orchestrator before it asks the controller to mark the mission `paused`.
+   - The operator-facing guarantee is that no new tasks will be leased while the mission remains paused.
+   - Resume semantics are currently `/mission start`, not a separate `/mission resume` command.
+
+6. **`blocked` / `completing` / terminal states**
+   - These statuses exist in the durable state model and dashboard rendering.
+   - The current operator-facing command flow primarily exposes create/plan/approve/start/pause/cancel/list/status/tasks.
+   - `completed`, `failed`, and `cancelled` are terminal mission states.
+
+### 7.4 Approval and start semantics
+
+The current approval model is intentionally durable-first:
+
+- Plan application creates a **mission-plan approval** record in the store.
+- `/mission approve` resolves that durable approval to `approved`.
+- After approval, the TUI immediately attempts `/mission start` behavior.
+- `/mission start` succeeds only when:
+  - the mission is `paused`, or
+  - the mission is `awaiting_approval` **and** the mission-plan approval is durably `approved` **and** no other approvals remain pending.
+- If the durable mission-plan approval record is missing, start fails with an operator-visible repair message rather than silently continuing.
+
+This means approval and start are related but distinct:
+
+- **Approve** = resolve the human gate durably.
+- **Start** = transition the mission into active orchestration.
+
+### 7.5 Controller, scheduler, and orchestrator responsibilities
+
+The current implementation uses one controller-centric execution model:
+
+- **Controller**
+  - creates missions,
+  - applies plans,
+  - creates and resolves the durable mission-plan approval,
+  - transitions mission status (`draft`, `planning`, `awaiting_approval`, `running`, `paused`, `cancelled`), and
+  - derives mission summaries from durable tasks, dependencies, runs, approvals, and events.
+
+- **Scheduler / worker launcher**
+  - finds ready tasks,
+  - leases them safely,
+  - prepares isolated worker specs/worktrees, and
+  - prevents the orchestrator from needing per-task ad hoc scheduling logic.
+
+- **Orchestrator**
+  - runs in-process on a tick loop,
+  - dispatches ready workers,
+  - dispatches reviewers for `awaiting_review` work,
+  - integrates accepted work,
+  - checks for mission completion, and
+  - emits **transient orchestrator/TUI event-bus updates** such as `worker.started`, `worker.completed`, `review.pass`, `review.reject`, `review.request_changes`, `integration.completed`, `integration.failed`, and `mission.completed`.
+
+Operationally, the TUI keeps one in-process orchestrator instance per active chat session and mission. `/mission start` resumes that mission by launching a fresh in-process loop against durable state, rather than by attaching to a separate daemon-only scheduler process.
+
+### 7.6 Persistence and recovery expectations
+
+Current persistence behavior:
+
+- Mission state is stored durably in the mission store and summarized from store data, not reconstructed from chat text.
+- The dashboard opens the SQLite-backed mission store directly and can attach to existing durable mission state on startup.
+- Missions persist:
+  - mission metadata,
+  - tasks,
+  - task dependencies,
+  - runs,
+  - approvals,
+  - events, and
+  - artifacts.
+- Persisted event names currently include core lifecycle and orchestration records such as `mission.created`, `plan.applied`, `mission.approved`, `mission.started`, `mission.paused`, `mission.cancelled`, `worker.dispatched`, `worker.completed`, `worker.failed`, `review.dispatched`, `review.passed`, `review.rejected`, `review.changes_requested`, `integration.completed`, `integration.conflict.requeued`, `integration.error`, `recovery.completed`, `replan.applied`, and `task.unblocked`.
+- Restart/re-attach should preserve operator-visible truth in `/mission status` and `golem dashboard`, but the shipped TUI still recreates orchestration in-process on `/mission start` rather than reconnecting to a persistent daemon loop.
+
+The implementation is therefore **local-first and durable-first**: operator surfaces are expected to reflect persisted mission truth, even when no active chat transcript is present.
+
+### 7.7 Current dashboard contract
+
+`golem dashboard` is the operator Mission Control surface for durable mission state.
+
+Current behavior:
+
+- If no mission ID is provided, the dashboard auto-selects the most relevant non-terminal mission with priority:
+  - `running` > `blocked` > `paused` > `awaiting_approval` > `planning` > `draft`.
+- The header shows mission status, task completion, active workers, pending approvals, evidence count, elapsed time, repo, branch, and worker budget.
+- Pane layout is:
+  - **Tasks**
+  - **Workers**
+  - **Evidence**
+  - **Events**
+- The evidence pane includes review results, pending approvals, failures, and artifacts.
+- The empty-state contract is explicit: if there is no durable mission state yet, the dashboard renders **Mission Control**, **No active mission**, and the current shipped guidance line **"Create one with /mission new or run golem mission new."** Treat the `golem mission new` clause as aspirational copy in the UI, not evidence of a shipped `golem mission ...` command family.
 
 ## 8. Scope Boundary
 
@@ -196,12 +297,13 @@ A mission visibly moves through these phases:
 - multiple concurrent worker runs in separate git worktrees
 - independent review runs
 - durable mission/task/run/artifact/event storage
-- mission create / plan / start / pause / resume / cancel
+- mission create / plan / approve / start / pause / cancel
+- resume from `paused` via start semantics
 - bounded task dependency graph
 - scope-based scheduling exclusion
 - review-required integration
 - explicit approval gates
-- CLI and TUI mission surfaces
+- shipped `/mission ...` TUI flow plus `golem dashboard` Mission Control
 - deterministic tests and opt-in live smoke tests
 
 ### 8.2 Explicitly out of scope for v1
@@ -267,9 +369,11 @@ v1 is **single-process and local-first**:
 - `golem` launches the mission controller in-process
 - worker and review runs are spawned as child mission runs managed by the controller
 - durable state is written immediately to SQLite and artifact files
-- on restart, the controller reconciles store state with repository state
+- restart preserves durable mission truth, and the shipped operator path re-enters orchestration from `/mission start`
 
 There is **no required local daemon** in v1.
+
+**Current shipped note:** recovery and replan-related code exists in the mission subsystem, but the normal TUI flow should be described as durable-state re-entry plus in-process orchestrator restart, not as automatic daemon-style attach/resume on launch.
 
 A daemon mode may be added later if and only if it materially improves:
 
@@ -297,7 +401,7 @@ The mission controller must:
 
 - own the mission lifecycle
 - persist and load state
-- request planning and replanning
+- request initial planning for the shipped `/mission plan` flow
 - schedule runnable tasks
 - lease and monitor runs
 - collect artifacts
@@ -306,6 +410,8 @@ The mission controller must:
 - integrate reviewed work
 - emit events for UI and logs
 - perform recovery on startup
+
+The current implementation also contains recovery/replan-related durable state and events, but user-facing task-scoped replan controls are not yet part of the shipped operator contract.
 
 The mission controller must **not**:
 
@@ -431,6 +537,8 @@ Strong default heuristics for v1:
 - prefer one writable scope per task
 - prefer one review run per completed worker task
 - prefer follow-up tasks over speculative front-loading
+
+**Aspirational note:** the remainder of this replanning section describes desired future policy and recovery behavior, not the current shipped operator surface. Today the shipped user-facing commands remain centered on `/mission new|status|tasks|plan|approve|start|pause|cancel|list` plus `golem dashboard`; there is no shipped `/mission replan`, `/mission retry`, or escalation command.
 
 ## 11.3 Replanning triggers
 
@@ -575,15 +683,15 @@ The controller also owns an **integration worktree** or mission branch workspace
 
 ## 13.2 Repository baseline
 
-At mission start, the controller must record:
+The controller records mission repository context when the mission is created:
 
-- repository root
-- HEAD commit
-- dirty working tree status
-- current branch
-- whether the mission is allowed to run on a dirty repo
+- repository root (`RepoRoot`)
+- current branch (`BaseBranch`)
+- HEAD commit when available (`BaseCommit`)
 
-Default policy:
+**Current shipped note:** the TUI currently supplies `repo_root` and `base_branch`, while `base_commit` is still empty because `gitCommit()` returns an empty string. `CreateMission` does not yet enforce dirty-repo or other repository preconditions itself, so treat the stricter policy below as forward-looking unless code lands to enforce it.
+
+Desired policy direction:
 - refuse mission start on a dirty repo unless the user explicitly approves
 
 ## 13.3 Merge strategy
@@ -652,11 +760,11 @@ A review result is one of:
 - task may move to integration
 
 ### `fail`
-- task returns to planning/retry path
+- current implementation requeues the task to `ready` with reviewer feedback in `BlockingReason`
 - result must include explicit rejection reasons
 
 ### `partial`
-- task may split into targeted follow-up tasks
+- current implementation uses the `request_changes` path, which also returns the task to `ready` with focused follow-up guidance
 - original worker diff does not integrate yet
 
 ---
@@ -697,7 +805,7 @@ CREATE TABLE missions (
   title TEXT NOT NULL,
   goal TEXT NOT NULL,
   repo_root TEXT NOT NULL,
-  base_commit TEXT NOT NULL,
+  base_commit TEXT NOT NULL DEFAULT '',
   base_branch TEXT NOT NULL,
   status TEXT NOT NULL,
   policy_json TEXT NOT NULL,
@@ -874,71 +982,60 @@ The store layer must guarantee:
 
 The event log is not a dumping ground. Event types must be explicit and low-cardinality.
 
-Recommended event families:
+For the current shipped system, distinguish between:
 
-### Mission lifecycle events
-- `mission_created`
-- `mission_planning_started`
-- `mission_planning_completed`
-- `mission_started`
-- `mission_paused`
-- `mission_resumed`
-- `mission_blocked`
-- `mission_completing`
-- `mission_completed`
-- `mission_failed`
-- `mission_cancelled`
+1. **Persisted mission-store event names** — written to the durable `events` table and rendered by the dashboard.
+2. **Transient orchestrator/TUI event-bus names** — emitted by the in-process orchestrator to update the TUI chat stream.
 
-### Plan and replan events
-- `replan_requested`
-- `replan_proposed`
-- `replan_approved`
-- `replan_rejected`
-- `replan_applied`
-- `replan_superseded`
+### Persisted mission lifecycle/store event examples
+- `mission.created`
+- `plan.applied`
+- `mission.approved`
+- `mission.started`
+- `mission.paused`
+- `mission.cancelled`
+- `mission.completed`
 
-### Task lifecycle events
-- `task_created`
-- `task_ready`
-- `task_blocked`
-- `task_leased`
-- `task_requeued`
-- `task_awaiting_review`
-- `task_accepted`
-- `task_rejected`
-- `task_integrated`
-- `task_done`
-- `task_superseded`
+### Persisted worker/review/integration/recovery examples
+- `worker.dispatched`
+- `worker.completed`
+- `worker.failed`
+- `worker.cancelled`
+- `worker.lease_lost`
+- `worker.provision_failed`
+- `review.dispatched`
+- `review.passed`
+- `review.rejected`
+- `review.changes_requested`
+- `review.failed`
+- `review.auto_accepted`
+- `review.provision_failed`
+- `integration.completed`
+- `integration.conflict.requeued`
+- `integration.error`
+- `recovery.completed`
+- `recovery.stuck_task_reset`
+- `replan.requested`
+- `replan.applied`
+- `task.unblocked`
+- `worktree.release_failed`
 
-### Run lifecycle events
-- `run_created`
-- `run_started`
-- `run_heartbeat`
-- `run_succeeded`
-- `run_failed`
-- `run_cancelled`
-- `run_timed_out`
-- `run_lease_lost`
+### Transient orchestrator/TUI event-bus examples
+- `worker.started`
+- `worker.completed`
+- `worker.failed`
+- `worker.spawn_failed`
+- `review.started`
+- `review.pass`
+- `review.reject`
+- `review.request_changes`
+- `review.failed`
+- `review.parse_failed`
+- `integration.completed`
+- `integration.failed`
+- `mission.completed`
 
-### Approval events
-- `approval_created`
-- `approval_superseded`
-- `approval_approved`
-- `approval_rejected`
-- `approval_expired`
-
-### Artifact events
-- `artifact_recorded`
-- `artifact_missing`
-- `artifact_validation_failed`
-
-### Recovery and integration events
-- `recovery_started`
-- `recovery_reconciled_run`
-- `recovery_completed`
-- `integration_started`
-- `integration_succeeded`
-- `integration_failed`
+Dashboard rendering should tolerate future additive event types, but persisted examples in this section should use the durable store names above because those are the names the dashboard/store currently persist. Transient orchestrator/TUI names should only be used when explicitly discussing the in-memory event bus.
 
 Event payload rules:
 
@@ -1226,12 +1323,12 @@ The documentation should include representative artifact examples so implementer
 
 ## 17.1 Mission creation
 
-1. User creates mission from CLI or TUI.
-2. Controller validates repository preconditions.
-3. Mission is created in `draft` state.
-4. Planning mode runs.
-5. Tasks and dependencies are persisted transactionally.
-6. Mission moves to `planning` then `awaiting_approval` or `running` depending on policy.
+1. User creates mission from the shipped TUI surface via `/mission new <goal>` (and the standalone dashboard can later attach to the durable result).
+2. TUI mission creation supplies current repo metadata. In the shipped implementation that currently means `repo_root` and `base_branch`, while `base_commit` is left empty because HEAD capture is not yet wired into `gitCommit()`. `CreateMission` then persists the mission in `draft`.
+3. User invokes `/mission plan`, which moves the mission to `planning` while the planner run executes.
+4. If planning succeeds, the controller applies tasks and dependencies transactionally and creates the durable mission-plan approval record.
+5. Mission moves from `planning` to `awaiting_approval`.
+6. Execution does **not** auto-start under the shipped operator contract; the operator must approve the durable plan gate and then transition into active orchestration via `/mission approve` or `/mission start` after approval.
 
 ## 17.2 Execution loop
 
@@ -1248,6 +1345,15 @@ The documentation should include representative artifact examples so implementer
 11. Controller checks completion, blocking, or replanning conditions.
 
 ## 17.3 Pause and resume
+
+Current shipped pause/resume semantics are intentionally simple and TUI-driven:
+
+- `/mission pause` first stops the in-process orchestrator, then asks the controller to move a `running` mission to `paused`.
+- The operator-facing guarantee is **no new tasks will be leased** until the mission is resumed.
+- Resume uses `/mission start`; there is no separate shipped `/mission resume` mission command.
+- Starting from `paused` resumes the same mission by launching a fresh in-process orchestrator loop against durable mission state. It does not create a second independent scheduler.
+
+The softer distinctions below remain useful implementation vocabulary, but they describe future/refined behavior rather than an additional shipped operator surface.
 
 ### Soft pause
 - stop leasing new tasks
@@ -1307,18 +1413,18 @@ Task policy may override:
 
 ## 18.3 Approval events
 
-By default, approvals are required for:
+Current shipped operator behavior centers on a durable **mission-plan approval** gate:
 
-- initial plan when mission is not explicitly auto-started
-- structural replan
-- writable scope escalation beyond the task spec
-- high-risk command escalation
-- integration into the user-facing branch/worktree when policy requires it
-- final mission completion when policy requires sign-off
+- applying a plan creates the mission-plan approval record
+- `/mission approve` resolves that durable gate
+- `/mission start` can begin execution only after the plan approval is durably approved
+- if any other approval records remain pending, the mission summary and start flow surface them as blockers
+
+Additional approval kinds may exist in the durable model, but the operator-facing command flow currently guarantees and documents the plan-approval gate above.
 
 ## 18.4 Approval lifecycle semantics
 
-Every approval request must have:
+The durable approval model supports approval records with these fields:
 
 - a stable `approval_id`
 - `kind`
@@ -1330,13 +1436,15 @@ Every approval request must have:
 - `resolved_at`
 - optional `superseded_by`
 
+Current shipped operator flow guarantees only the mission-plan approval path described above. The broader rejection/supersession semantics below describe durable model expectations and future-proof behavior, not an additional shipped user command surface.
+
 Controller rules:
 
 1. there must be at most one active blocking approval for the same decision surface
 2. repeated identical approval requests must coalesce instead of spamming the operator
 3. a new approval that makes an older one obsolete must mark the older request `superseded`
 4. approvals must be durable across restart
-5. rejecting an approval must always produce a deterministic next state:
+5. if a future operator surface supports rejection, rejecting an approval must produce a deterministic next state:
    - resume current plan
    - block task
    - cancel risky action
@@ -1426,7 +1534,7 @@ The implementation must make approval policy explicit enough that a coding agent
 
 | Decision surface | Default | Rationale |
 |---|---|---|
-| initial plan | approval required unless auto-start policy enabled | operator should confirm mission framing |
+| initial plan | approval required in the shipped TUI flow | operator should confirm mission framing before execution starts |
 | local replan | auto-approve if policy allows | keeps operator out of low-risk bookkeeping |
 | structural replan | approval required | graph meaning changes materially |
 | scope escalation to `repo_wide` | approval required | blast radius increases sharply |
@@ -1581,33 +1689,56 @@ Required outputs:
 
 ## 20. CLI and TUI Surface
 
-## 20.1 CLI commands
+## 20.1 CLI and TUI surfaces
 
-Required CLI surface:
+Current shipped operator surfaces are:
 
-```bash
-golem mission create --goal "..." [--title "..."]
-golem mission plan <mission-id>
-golem mission replan <mission-id> [--reason "..."]
-golem mission start <mission-id>
-golem mission status <mission-id> [--json]
-golem mission pause <mission-id> [--hard]
-golem mission resume <mission-id>
-golem mission cancel <mission-id>
-golem mission tasks <mission-id> [--json]
-golem mission task show <task-id> [--json]
-golem mission task retry <task-id>
-golem mission runs <mission-id> [--json]
-golem mission run show <run-id> [--json]
-golem mission approvals <mission-id> [--json]
-golem mission approval show <approval-id> [--json]
-golem mission approve <approval-id>
-golem mission reject <approval-id> --reason "..."
-golem mission replay <mission-id>
-golem mission artifacts <task-id|run-id>
+- slash commands inside the main TUI via `/mission new|status|tasks|plan|approve|start|pause|cancel|list`
+- the standalone `golem dashboard [mission-id]` Mission Control surface
+
+Implementation notes:
+
+- there is no separate shipped `/mission resume` slash command; resume is performed with `/mission start` from `paused`
+- the current docs for JSON envelopes and a broader `golem mission ...` subcommand family remain aspirational unless and until that CLI surface is implemented
+
+## 20.1.1 TUI mission commands
+
+Current TUI help contract:
+
+```text
+/mission new <goal>
+/mission status
+/mission tasks
+/mission plan
+/mission approve
+/mission start
+/mission pause
+/mission cancel
+/mission list
 ```
 
-## 20.1.1 CLI JSON output contracts
+Semantics:
+
+- `/mission new <goal>` creates the mission in `draft`; the TUI supplies `repo_root` and `base_branch`, while `base_commit` is currently left empty because `gitCommit()` still returns an empty string
+- `/mission plan` moves the mission into `planning` and later applies the DAG into durable store state
+- `/mission approve` resolves the durable mission-plan approval and then attempts to start execution
+- `/mission start` starts an approved `awaiting_approval` mission or resumes a `paused` mission
+- `/mission pause` stops new task leasing
+- `/mission status` and `/mission tasks` read durable mission state
+- `/mission list` shows known missions and marks the currently active one in the TUI session
+
+## 20.1.2 Dashboard surface
+
+Current dashboard contract:
+
+- `golem dashboard [mission-id]` opens Mission Control against the durable mission store
+- if no mission ID is supplied, the dashboard selects the highest-priority non-terminal mission (`running` > `blocked` > `paused` > `awaiting_approval` > `planning` > `draft`)
+- the surface renders four panes: **Tasks**, **Workers**, **Evidence**, and **Events**
+- if no durable mission exists, the empty state should still render Mission Control and guide the operator toward `/mission new`; any broader `golem mission ...` CLI guidance remains aspirational until that CLI ships
+
+## 20.1.3 Aspirational CLI JSON contracts
+
+The broader `golem mission ... --json` contracts below remain aspirational unless and until that dedicated CLI family is implemented.
 
 All `--json` mission commands must emit stable top-level envelopes.
 
@@ -1691,7 +1822,9 @@ JSON contract rules:
 
 ## 20.2 TUI mission board
 
-The TUI must provide:
+**Aspirational note:** the detailed mission-board model in this section describes a richer future mission workspace than the currently shipped surface. Today the shipped operator experience is the `/mission ...` chat flow plus `golem dashboard`, with durable summaries, task lists, and the four Mission Control panes.
+
+The future TUI mission board should provide:
 
 - mission overview panel
 - task board with dependency visibility
@@ -1726,19 +1859,21 @@ Required primary views:
 
 ### Create mission flow
 1. capture goal/title/policy
-2. validate repo preconditions
+2. capture current repo metadata from the TUI session; in the shipped implementation this means `repo_root` and `base_branch`, while `base_commit` is still empty until HEAD capture is implemented
 3. create draft mission
 4. move into planning state and then overview/approval flow
 
+**Current shipped note:** repository precondition enforcement is not currently performed by `CreateMission`; if stricter repo validation is desired, treat it as future work rather than current behavior.
+
 ### Review rejection flow
-1. operator sees rejected task in board and review queue
-2. selecting the task opens worker summary, diff, and review evidence
-3. operator can choose retry, force replan, or cancel mission path
+1. operator sees the task return to the ready/blocked work queue with recorded review evidence
+2. dashboard evidence and mission status expose the review summary, approval record, and follow-up context
+3. current shipped operator actions remain: let orchestration retry from the queue, inspect evidence, pause, start, or cancel
 
 ### Approval flow
 1. approval queue highlights blocking request
-2. approval detail screen shows requested action, evidence, paused work, and consequences
-3. operator can approve or reject without losing surrounding mission context
+2. for the shipped mission-plan gate, `/mission approve` resolves the durable approval via `ApproveMission`
+3. after approval, the TUI immediately attempts mission start, but execution still stays gated until all remaining approvals are resolved
 
 ### Completion flow
 1. overview shows mission in completing/completed state
@@ -1757,16 +1892,30 @@ The TUI must:
 
 ## 20.3 Required operator actions
 
-From the TUI, the user must be able to:
+### 20.3.1 Shipped operator actions
 
-- create a mission
-- approve/reject the plan
-- inspect task details and artifacts
-- pause/resume/cancel
-- retry a task
-- force a replan
-- approve/reject escalation
-- inspect final completion evidence
+From the shipped TUI and dashboard surfaces, the operator can currently:
+
+- create a mission with `/mission new <goal>`
+- inspect durable mission status with `/mission status`
+- inspect the task DAG with `/mission tasks`
+- invoke planning with `/mission plan`
+- approve the durable mission-plan gate with `/mission approve`
+- start or resume execution with `/mission start`
+- pause a running mission with `/mission pause`
+- cancel a mission with `/mission cancel`
+- list missions with `/mission list`
+- inspect Mission Control state in `golem dashboard`
+- inspect final or in-progress evidence through durable mission status, dashboard evidence, events, and artifacts
+
+### 20.3.2 Aspirational operator actions
+
+The following actions are still aspirational in this PRD unless and until a dedicated surface ships:
+
+- reject the plan from a user-facing mission command
+- retry a task directly from a user-facing mission command
+- force a replan from a user-facing mission command
+- approve/reject escalation from a dedicated operator control surface
 
 ## 20.4 TUI state model
 
@@ -2458,7 +2607,7 @@ A live smoke run is incomplete if evidence retention fails.
 
 The feature is accepted only when all of the following are true:
 
-1. A user can create, plan, start, pause, resume, and cancel a mission.
+1. A user can create, plan, approve, start, pause, resume via `/mission start`, and cancel a mission.
 2. A mission can run multiple workers concurrently toward a shared goal.
 3. Writable scope conflicts are prevented or explicitly policy-approved.
 4. Every accepted task has a task spec, run summary, diff or no-op proof, verification evidence, and review result.

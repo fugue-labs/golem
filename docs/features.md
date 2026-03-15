@@ -63,6 +63,78 @@ Implementation tasks should reference:
 3. the preserved **e2e UX contract** bullets that cannot regress, and
 4. any additional mission/dashboard context from `docs/tui-comparison-prompt.md`.
 
+## Mission orchestration surfaces
+
+Mission orchestration is currently exposed through two operator-facing surfaces. The shipped control surface is the TUI `/mission ...` flow plus `golem dashboard`; the broader `golem mission ...` CLI family is still aspirational unless implemented separately.
+
+1. **`/mission` inside the main TUI**
+   - `/mission new <goal>` creates a durable mission in `draft` state.
+   - Mission creation is seeded from the current TUI repo context. Today that means the TUI supplies `repo_root` and `base_branch`, while `base_commit` is currently left empty because HEAD capture is not yet wired into `gitCommit()`.
+   - The current implementation persists that draft mission, but does **not** yet enforce repository preconditions inside `CreateMission` itself.
+   - `/mission status` renders the durable mission summary, including status, phase label, attention text, next action, focus task, queued next task, DAG counts, active runs, approvals, blocked tasks, review queue, and ready queue.
+   - `/mission tasks` lists the current task DAG with task IDs, statuses, titles, objectives, and dependency edges.
+   - `/mission plan` invokes the planner, moves the mission to `planning`, and later applies the DAG into durable store state.
+   - Applying the plan creates durable tasks, dependencies, and a durable mission-plan approval row, then moves the mission to `awaiting_approval`.
+   - `/mission approve` resolves the durable mission-plan approval via `ApproveMission` and immediately attempts to start execution; if other approvals still block execution, the operator gets a clear approved-but-not-started message.
+   - `/mission start` starts a `paused` mission or starts an `awaiting_approval` mission only when the plan approval is already approved and no other approvals remain.
+   - `/mission pause` pauses a running mission after stopping the in-process orchestrator, so no new tasks are leased while the mission remains paused.
+   - `/mission cancel` stops the in-process orchestrator, marks the mission cancelled, and clears the current active mission from the chat session.
+   - `/mission list` lists known missions and marks the current chat session's active mission.
+
+2. **`golem dashboard` Mission Control**
+   - Opens the durable mission store and shows the most relevant mission even if no chat transcript is active.
+   - Auto-selects the most relevant non-terminal mission by priority: `running`, `blocked`, `paused`, `awaiting_approval`, `planning`, then `draft`.
+   - Renders four panes: **Tasks**, **Workers**, **Evidence**, and **Events**.
+   - The header surfaces status, task progress, active workers, pending approvals, evidence count, elapsed time, repo, branch, and worker budget.
+   - Empty-state behavior is explicit: the dashboard should show `Mission Control`, `No active mission`, and guidance to create one with `/mission new`.
+   - The current shipped empty-state copy may still render the exact line `Create one with /mission new or run golem mission new.` Treat the `golem mission new` phrase as aspirational UI copy, not evidence of a shipped `golem mission ...` command family.
+
+### Mission command semantics and approval model
+
+The current shipped mission contract is:
+
+- A new mission starts in **`draft`**.
+- Mission creation uses repo metadata supplied by the TUI. In the shipped implementation that currently means `repo_root` and `base_branch`, while `base_commit` is not yet populated because `gitCommit()` still returns an empty string.
+- Repository precondition validation is **not** currently enforced by `CreateMission`; docs should treat stricter repo validation as future work unless that code ships.
+- `/mission plan` is the only normal path from `draft` to a task DAG.
+- Applying a plan creates durable tasks, dependencies, and a durable **mission-plan approval** record, then moves the mission to **`awaiting_approval`**.
+- `/mission approve` resolves that durable gate and immediately attempts to start the mission; if start is still blocked by another pending approval, the UI reports that the plan is approved but execution is still gated.
+- `/mission start` does **not** bypass approval. It only starts execution when:
+  - the mission is `paused`, or
+  - the mission is `awaiting_approval` and the durable mission-plan approval is already `approved` and there are no remaining pending approvals.
+- Resume semantics are currently `/mission start`; there is no separate `/mission resume` slash command.
+- `/mission pause` stops new task leasing by stopping the in-process orchestrator.
+- `/mission cancel` transitions the mission to `cancelled` and clears the active mission from the current TUI session.
+- Shipped mission docs should stay centered on `/mission new|status|tasks|plan|approve|start|pause|cancel|list` plus `golem dashboard`; task-scoped retry/replan/escalation controls are not yet a shipped command surface.
+
+### Mission summary, orchestration, and dashboard behavior
+
+Mission status surfaces intentionally rely on durable mission state instead of chat narration:
+
+- phase labels distinguish **`Awaiting approval`** from **`Ready to start`**,
+- attention text calls out missing or pending approvals,
+- next-action text directs the operator to `/mission approve`, `/mission start`, or approval resolution as appropriate,
+- the controller owns lifecycle transitions and mission summary derivation from durable missions, tasks, dependencies, runs, and approvals,
+- the scheduler/worker launcher is responsible for safe ready-task leasing and worker preparation,
+- the in-process orchestrator tick loop dispatches workers, dispatches reviewers, integrates accepted work, checks completion, and emits transient TUI event-bus updates such as `worker.started`, `worker.completed`, `review.pass`, `review.reject`, `review.request_changes`, `integration.completed`, `integration.failed`, and `mission.completed`,
+- pending approvals are rendered both in `/mission status` and the dashboard evidence pane,
+- the dashboard header surfaces mission status, task progress, active workers, pending approvals, evidence count, elapsed time, repo, branch, and worker budget,
+- the dashboard keeps its four-pane Mission Control layout: **Tasks**, **Workers**, **Evidence**, and **Events**, and
+- dashboard evidence also includes review results, failures, and recorded artifacts.
+
+### Mission persistence expectations
+
+Mission orchestration is local-first and persistence-backed:
+
+- durable mission state includes missions, tasks, dependencies, runs, approvals, events, and artifacts,
+- `golem dashboard` reads that durable store directly,
+- restarts are expected to preserve operator-visible mission truth in status and dashboard surfaces,
+- the dashboard can attach to existing durable mission state after startup even if no active chat transcript exists,
+- persisted event examples include `mission.created`, `plan.applied`, `mission.approved`, `mission.started`, `mission.paused`, `mission.cancelled`, `worker.dispatched`, `worker.completed`, `worker.failed`, `review.dispatched`, `review.passed`, `review.rejected`, `review.changes_requested`, `integration.completed`, `integration.conflict.requeued`, `integration.error`, `recovery.completed`, `replan.applied`, and `task.unblocked`, and
+- transient orchestrator/TUI event-bus messages use a nearby but not identical naming set such as `worker.started`, `review.started`, `review.pass`, `review.reject`, `review.request_changes`, `integration.completed`, `integration.conflict`, `integration.failed`, and `mission.completed`.
+
+Mission Control should still produce a valid empty state when no missions exist.
+
 ## Commands
 
 | Command | Description |
