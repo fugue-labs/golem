@@ -57,6 +57,13 @@ type Styles struct {
 		Keystroke  lipgloss.Style
 	}
 
+	// Shell framing.
+	Shell struct {
+		SectionLabel lipgloss.Style
+		SectionMeta  lipgloss.Style
+		Rule         lipgloss.Style
+	}
+
 	// Status bar.
 	StatusBar struct {
 		Base     lipgloss.Style
@@ -236,9 +243,14 @@ func New(_ color.Color) *Styles {
 	// Header.
 	s.Header.Model = lipgloss.NewStyle().Foreground(primary).Bold(true)
 	s.Header.Provider = lipgloss.NewStyle().Foreground(secondary).Bold(true)
-	s.Header.WorkingDir = halfMuted
+	s.Header.WorkingDir = halfMuted.Italic(true)
 	s.Header.Separator = subtle
 	s.Header.Keystroke = meta.Italic(true)
+
+	// Shell framing.
+	s.Shell.SectionLabel = lipgloss.NewStyle().Foreground(fgStrong).Background(surface).Padding(0, 1).Bold(true)
+	s.Shell.SectionMeta = lipgloss.NewStyle().Foreground(fgHalf)
+	s.Shell.Rule = lipgloss.NewStyle().Foreground(border)
 
 	// Status bar.
 	s.StatusBar.Base = lipgloss.NewStyle().Background(bgSubtle).Foreground(fgBase)

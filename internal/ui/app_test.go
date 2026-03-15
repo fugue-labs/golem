@@ -8,9 +8,11 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/golem/internal/ui/styles"
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
 )
@@ -212,6 +214,119 @@ func TestAgentDoneWrappedCancelNotShownAsError(t *testing.T) {
 	for _, msg := range model.messages {
 		if msg.Kind == chat.KindError {
 			t.Fatalf("context cancel with broken wrapping shown as error: %q", msg.Content)
+		}
+	}
+}
+
+func TestViewRendersDistinctShellRegions(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.width = 100
+	m.height = 22
+	m.input.SetValue("draft task")
+
+	rendered := stripANSI(m.View().Content)
+	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Context ·", "Activity ·", "draft task", " Context "} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("view missing %q\n%s", want, rendered)
+		}
+	}
+}
+
+func TestViewWorkflowPanelGatesByWidth(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.height = 20
+	m.invariantState.Extracted = true
+
+	m.width = 109
+	narrow := stripANSI(m.View().Content)
+	if strings.Contains(narrow, "Workflow") {
+		t.Fatalf("workflow panel should be hidden below gating width\n%s", narrow)
+	}
+
+	m.width = 110
+	wide := stripANSI(m.View().Content)
+	if !strings.Contains(wide, "Workflow") {
+		t.Fatalf("workflow panel should appear at gating width\n%s", wide)
+	}
+}
+
+func TestRenderChatRespectsVerySmallHeights(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "one\ntwo\nthree"}}
+
+	for _, height := range []int{1, 2} {
+		t.Run(fmt.Sprintf("height-%d", height), func(t *testing.T) {
+			rendered := m.renderChat(height, 40)
+			if got := lipgloss.Height(rendered); got > height {
+				t.Fatalf("renderChat height=%d produced %d lines\n%s", height, got, stripANSI(rendered))
+			}
+			if strings.Contains(stripANSI(rendered), "Transcript") {
+				t.Fatalf("renderChat should skip transcript chrome at height=%d\n%s", height, stripANSI(rendered))
+			}
+		})
+	}
+}
+
+func TestViewSwitchesToCompactLayoutWhenFullShellLeavesNoTranscriptSpace(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.width = 80
+	m.height = lipgloss.Height(m.renderHeader()) + lipgloss.Height(m.renderInput()) + lipgloss.Height(m.renderStatusBar())
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "compact fallback transcript"}}
+
+	rendered := stripANSI(m.View().Content)
+	if strings.Contains(rendered, "Input") || strings.Contains(rendered, "Status") {
+		t.Fatalf("expected compact layout to collapse full-shell input/status chrome\n%s", rendered)
+	}
+	for _, want := range []string{"GOLEM", "Transcript", "compact fallback transcript", "❯"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("compact layout missing %q\n%s", want, rendered)
+		}
+	}
+}
+
+func TestVisibleChatLinesKeepsBottomWindowWithoutRenderingEntireTranscriptSlice(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	for i := 0; i < 6; i++ {
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("message %d", i+1)})
+	}
+
+	visible := stripANSI(strings.Join(m.visibleChatLines(4, 60), "\n"))
+	if strings.Contains(visible, "message 1") {
+		t.Fatalf("expected bottom-aligned transcript window, got\n%s", visible)
+	}
+	for _, want := range []string{"message 5", "message 6"} {
+		if !strings.Contains(visible, want) {
+			t.Fatalf("visible window missing %q\n%s", want, visible)
+		}
+	}
+
+	m.scroll = 2
+	scrolled := stripANSI(strings.Join(m.visibleChatLines(4, 60), "\n"))
+	if !strings.Contains(scrolled, "message 4") {
+		t.Fatalf("expected scrolled transcript to reveal earlier content\n%s", scrolled)
+	}
+}
+
+func TestViewShortWindowDoesNotExceedTerminalHeight(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.width = 72
+	m.height = 6
+	m.invariantState.Extracted = true
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "brief response"}}
+
+	rendered := stripANSI(m.View().Content)
+	if got := lipgloss.Height(rendered); got > m.height {
+		t.Fatalf("view height=%d produced %d lines\n%s", m.height, got, rendered)
+	}
+	for _, want := range []string{"GOLEM", "brief response", "❯", "Ready"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("short view missing %q\n%s", want, rendered)
 		}
 	}
 }
