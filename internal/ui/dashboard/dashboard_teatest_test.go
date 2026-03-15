@@ -774,12 +774,29 @@ func TestTeatestEvidenceFailedRuns(t *testing.T) {
 	if err := ctrl.Store().CreateRun(ctx, failedRun); err != nil {
 		t.Fatalf("create failed run: %v", err)
 	}
+	if err := ctrl.Store().CreateArtifact(ctx, &mission.Artifact{
+		ID:           "a_001",
+		MissionID:    ms.ID,
+		TaskID:       "t1",
+		RunID:        failedRun.ID,
+		Type:         "review-report",
+		RelativePath: "artifacts/review-report.md",
+		CreatedAt:    now,
+	}); err != nil {
+		t.Fatalf("create artifact: %v", err)
+	}
 
 	refreshModel(t, m)
 	view := viewString(m)
 
 	if !strings.Contains(view, "compilation error") {
 		t.Error("expected failed run error text in evidence pane")
+	}
+	if !strings.Contains(view, "Artifacts") {
+		t.Error("expected artifacts section in evidence pane")
+	}
+	if !strings.Contains(view, "review-report.md") {
+		t.Error("expected artifact path in evidence pane")
 	}
 }
 
@@ -867,6 +884,9 @@ func TestTeatestEmptyWorkerPane(t *testing.T) {
 
 	if !strings.Contains(view, "No active workers") {
 		t.Error("expected 'No active workers' message when no runs exist")
+	}
+	if !strings.Contains(view, "Mission Control is idle") {
+		t.Error("expected worker empty-state guidance when no runs exist")
 	}
 }
 

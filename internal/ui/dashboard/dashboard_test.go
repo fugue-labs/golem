@@ -149,8 +149,14 @@ func TestViewNoMission(t *testing.T) {
 	if view == "" {
 		t.Error("expected non-empty view")
 	}
+	if !containsAny(view, "Mission Control") {
+		t.Error("expected Mission Control header in no-mission state")
+	}
 	if !containsAny(view, "No active mission", "no missions", "error") {
 		t.Errorf("expected error or empty state message, got: %s", view[:min(100, len(view))])
+	}
+	if !containsAny(view, "/mission new", "golem mission new") {
+		t.Errorf("expected mission creation hint in empty state, got: %s", truncStr(view, 160))
 	}
 }
 
