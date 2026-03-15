@@ -226,7 +226,7 @@ func TestViewRendersDistinctShellRegions(t *testing.T) {
 	m.input.SetValue("draft task")
 
 	rendered := stripANSI(m.View().Content)
-	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Context ·", "Activity ·", "draft task"} {
+	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Context ·", "Activity ·", "draft task", " Context "} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("view missing %q\n%s", want, rendered)
 		}
@@ -267,6 +267,48 @@ func TestRenderChatRespectsVerySmallHeights(t *testing.T) {
 				t.Fatalf("renderChat should skip transcript chrome at height=%d\n%s", height, stripANSI(rendered))
 			}
 		})
+	}
+}
+
+func TestViewSwitchesToCompactLayoutWhenFullShellLeavesNoTranscriptSpace(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.width = 80
+	m.height = lipgloss.Height(m.renderHeader()) + lipgloss.Height(m.renderInput()) + lipgloss.Height(m.renderStatusBar())
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "compact fallback transcript"}}
+
+	rendered := stripANSI(m.View().Content)
+	if strings.Contains(rendered, "Input") || strings.Contains(rendered, "Status") {
+		t.Fatalf("expected compact layout to collapse full-shell input/status chrome\n%s", rendered)
+	}
+	for _, want := range []string{"GOLEM", "Transcript", "compact fallback transcript", "❯"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("compact layout missing %q\n%s", want, rendered)
+		}
+	}
+}
+
+func TestVisibleChatLinesKeepsBottomWindowWithoutRenderingEntireTranscriptSlice(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	for i := 0; i < 6; i++ {
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("message %d", i+1)})
+	}
+
+	visible := stripANSI(strings.Join(m.visibleChatLines(4, 60), "\n"))
+	if strings.Contains(visible, "message 1") {
+		t.Fatalf("expected bottom-aligned transcript window, got\n%s", visible)
+	}
+	for _, want := range []string{"message 5", "message 6"} {
+		if !strings.Contains(visible, want) {
+			t.Fatalf("visible window missing %q\n%s", want, visible)
+		}
+	}
+
+	m.scroll = 2
+	scrolled := stripANSI(strings.Join(m.visibleChatLines(4, 60), "\n"))
+	if !strings.Contains(scrolled, "message 4") {
+		t.Fatalf("expected scrolled transcript to reveal earlier content\n%s", scrolled)
 	}
 }
 

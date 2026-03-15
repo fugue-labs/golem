@@ -72,7 +72,7 @@ func TestShellLayoutViewGolden(t *testing.T) {
 	m.invariantState = uiinvariants.State{Extracted: true}
 
 	got := stripANSI(m.View().Content)
-	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Workflow", "Context ·", "Activity ·", "/help"} {
+	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Workflow", "Context ·", "Activity ·", "/help", " Context "} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("shell layout missing %q\n%s", want, got)
 		}

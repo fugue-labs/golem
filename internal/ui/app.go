@@ -1217,7 +1217,7 @@ func (m *Model) View() tea.View {
 	input := m.renderInput()
 	status := m.renderStatusBar()
 	fixedHeight := lipgloss.Height(header) + lipgloss.Height(input) + lipgloss.Height(status)
-	if fixedHeight > m.height {
+	if fixedHeight >= m.height {
 		return m.renderCompactView()
 	}
 
@@ -1293,7 +1293,7 @@ func (m *Model) renderChatRegion(height int) string {
 
 func (m *Model) renderCompactHeader() string {
 	shellWidth := m.shellWidth()
-	left := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.renderHeaderStateBadge()
+	left := m.sty.Shell.SectionLabel.Render(" Context ") + " " + m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.renderHeaderStateBadge()
 	right := m.sty.Header.Model.Render(styles.ModelIcon + " " + truncateText(m.cfg.Model, max(8, shellWidth/3)))
 	return lipgloss.NewStyle().Width(shellWidth).MaxWidth(shellWidth).Render(joinShellLine(left, right, shellWidth))
 }
@@ -1341,7 +1341,7 @@ func (m *Model) renderSectionHeader(label, meta string, width int) string {
 	if width <= 0 {
 		width = m.shellWidth()
 	}
-	left := m.sty.Shell.SectionLabel.Render(label)
+	left := m.sty.Shell.SectionLabel.Render(" " + label + " ")
 	if meta == "" {
 		return left
 	}
@@ -1451,6 +1451,7 @@ func fitShellLines(lines []string, height, topPad int) string {
 
 func (m *Model) renderHeader() string {
 	shellWidth := m.shellWidth()
+	contextBadge := m.sty.Shell.SectionLabel.Render(" Context ")
 	title := m.sty.StatusBar.Accent.Render(" GOLEM ")
 	mode := m.renderHeaderStateBadge()
 	model := m.sty.Header.Model.Render(styles.ModelIcon + " " + m.cfg.Model)
@@ -1458,7 +1459,7 @@ func (m *Model) renderHeader() string {
 	if m.cfg.Provider != "" {
 		provider = m.sty.Header.Separator.Render(" · ") + m.sty.Header.Provider.Render(string(m.cfg.Provider))
 	}
-	leftTop := title + " " + mode + " " + model + provider
+	leftTop := contextBadge + " " + title + " " + mode + " " + model + provider
 
 	var locationParts []string
 	if dir := m.cfg.ShortDir(); dir != "" {
@@ -1596,42 +1597,7 @@ func (m *Model) renderChat(height, width int) string {
 	}
 	bodyHeight = max(1, bodyHeight)
 
-	var visible []string
-	if len(m.messages) == 0 {
-		visible = strings.Split(m.renderWelcome(bodyHeight, width), "\n")
-	} else {
-		allLines := make([]string, 0, len(m.messages)*2)
-		for i, msg := range m.messages {
-			rendered := msg.Render(m.sty, width, m.messages)
-			msgLines := splitRenderedMessageLines(rendered)
-			if len(msgLines) == 0 {
-				continue
-			}
-			allLines = append(allLines, msgLines...)
-			if i < len(m.messages)-1 {
-				allLines = append(allLines, "")
-			}
-		}
-
-		maxScroll := len(allLines) - bodyHeight
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if m.scroll > maxScroll {
-			m.scroll = maxScroll
-		}
-
-		end := len(allLines) - m.scroll
-		if end < 0 {
-			end = 0
-		}
-		start := end - bodyHeight
-		if start < 0 {
-			start = 0
-		}
-		visible = append(visible, allLines[start:end]...)
-	}
-
+	visible := m.visibleChatLines(bodyHeight, width)
 	for len(visible) < bodyHeight {
 		visible = append([]string{""}, visible...)
 	}
@@ -1649,6 +1615,74 @@ func (m *Model) renderChat(height, width int) string {
 		return fitShellLines(strings.Split(body, "\n"), height, 0)
 	}
 	return m.renderShellRegion("Transcript", m.renderTranscriptMeta(), width, strings.Split(body, "\n"))
+}
+
+func (m *Model) visibleChatLines(bodyHeight, width int) []string {
+	if bodyHeight <= 0 {
+		return nil
+	}
+	if len(m.messages) == 0 {
+		return strings.Split(m.renderWelcome(bodyHeight, width), "\n")
+	}
+
+	totalLines := 0
+	blockHeights := make([]int, len(m.messages))
+	for i, msg := range m.messages {
+		rendered := msg.Render(m.sty, width, m.messages)
+		if rendered == "" {
+			continue
+		}
+		height := msg.Lines()
+		if height <= 0 {
+			height = len(splitRenderedMessageLines(rendered))
+		}
+		if height <= 0 {
+			continue
+		}
+		if i < len(m.messages)-1 {
+			height++
+		}
+		blockHeights[i] = height
+		totalLines += height
+	}
+
+	maxScroll := max(0, totalLines-bodyHeight)
+	if m.scroll > maxScroll {
+		m.scroll = maxScroll
+	}
+	requestedScroll := max(0, m.scroll)
+	remaining := bodyHeight
+	lines := make([]string, 0, bodyHeight)
+
+	for i := len(m.messages) - 1; i >= 0 && remaining > 0; i-- {
+		blockHeight := blockHeights[i]
+		if blockHeight == 0 {
+			continue
+		}
+		if requestedScroll >= blockHeight {
+			requestedScroll -= blockHeight
+			continue
+		}
+
+		block := splitRenderedMessageLines(m.messages[i].Render(m.sty, width, m.messages))
+		if len(block) == 0 {
+			continue
+		}
+		if i < len(m.messages)-1 {
+			block = append(block, "")
+		}
+		if requestedScroll > 0 {
+			block = block[:len(block)-requestedScroll]
+			requestedScroll = 0
+		}
+		if len(block) > remaining {
+			block = block[len(block)-remaining:]
+		}
+		lines = append(block, lines...)
+		remaining = bodyHeight - len(lines)
+	}
+
+	return lines
 }
 
 func splitRenderedMessageLines(rendered string) []string {
