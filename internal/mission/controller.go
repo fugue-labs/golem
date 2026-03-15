@@ -3,9 +3,14 @@ package mission
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"time"
+	"unsafe"
 )
 
 // Controller manages mission lifecycle and orchestration.
@@ -38,17 +43,14 @@ func (c *Controller) CreateMission(ctx context.Context, req CreateMissionRequest
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-
 	if err := c.store.CreateMission(ctx, m); err != nil {
 		return nil, fmt.Errorf("create mission: %w", err)
 	}
-
-	c.store.AppendEvent(ctx, &Event{
+	c.store.AppendEvent(ctx, &Event{ //nolint:errcheck
 		MissionID: m.ID,
 		Type:      "mission.created",
 		CreatedAt: now,
 	})
-
 	return m, nil
 }
 
@@ -71,30 +73,60 @@ func (c *Controller) GetMissionSummary(ctx context.Context, id string) (*Mission
 
 // ApplyPlan applies a planning result to a draft/planning mission, creating
 // tasks and dependencies in the store.
-func (c *Controller) ApplyPlan(ctx context.Context, missionID string, plan *PlanResult) error {
-	NormalizePlanResult(plan)
-	if err := ValidatePlanResult(plan); err != nil {
-		return fmt.Errorf("validate plan: %w", err)
-	}
+func (c *Controller) ApplyPlan(ctx context.Context, missionID string, plan *PlanResult) (err error) {
+	prepared := clonePlanResult(plan)
+	NormalizePlanResult(prepared)
 
 	m, err := c.store.GetMission(ctx, missionID)
 	if err != nil {
 		return fmt.Errorf("get mission: %w", err)
 	}
-
 	if m.Status != MissionDraft && m.Status != MissionPlanning {
 		return fmt.Errorf("cannot apply plan to mission in %s state", m.Status)
 	}
 
-	now := time.Now().UTC()
-
-	// Apply success criteria from plan.
-	if len(plan.SuccessCriteria) > 0 {
-		m.SuccessCriteria = plan.SuccessCriteria
+	existingTasks, err := c.store.ListTasks(ctx, missionID)
+	if err != nil {
+		return fmt.Errorf("list mission tasks: %w", err)
+	}
+	if len(existingTasks) > 0 {
+		return fmt.Errorf("cannot apply plan to mission %s with existing tasks; use replan instead", missionID)
+	}
+	existingDeps, err := c.store.ListDependencies(ctx, missionID)
+	if err != nil {
+		return fmt.Errorf("list mission dependencies: %w", err)
+	}
+	if len(existingDeps) > 0 {
+		return fmt.Errorf("cannot apply plan to mission %s with existing dependencies; use replan instead", missionID)
 	}
 
-	// Create tasks.
-	for _, pt := range plan.Tasks {
+	existingTaskIDs, err := c.collectExistingTaskIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("collect existing task ids: %w", err)
+	}
+	remapCollidingShortTaskIDs(prepared, existingTaskIDs)
+
+	if err := ValidatePlanResult(prepared); err != nil {
+		return fmt.Errorf("validate plan: %w", err)
+	}
+
+	now := time.Now().UTC()
+	rollback := applyPlanRollback{
+		mission:           cloneMission(m),
+		createdTaskIDs:    make([]string, 0, len(prepared.Tasks)),
+		addedDependencies: append([]TaskDependency(nil), prepared.Dependencies...),
+	}
+	committed := false
+	defer func() {
+		if err == nil || committed {
+			return
+		}
+		if rollbackErr := c.rollbackApplyPlan(ctx, rollback); rollbackErr != nil {
+			err = fmt.Errorf("%w (rollback: %v)", err, rollbackErr)
+		}
+	}()
+
+	for _, pt := range prepared.Tasks {
 		t := &Task{
 			ID:                 pt.ID,
 			MissionID:          missionID,
@@ -103,8 +135,8 @@ func (c *Controller) ApplyPlan(ctx context.Context, missionID string, plan *Plan
 			Objective:          pt.Objective,
 			Status:             TaskPending,
 			Priority:           pt.Priority,
-			Scope:              pt.Scope,
-			AcceptanceCriteria: pt.AcceptanceCriteria,
+			Scope:              cloneTaskScope(pt.Scope),
+			AcceptanceCriteria: append([]string(nil), pt.AcceptanceCriteria...),
 			EstimatedEffort:    pt.EstimatedEffort,
 			RiskLevel:          pt.RiskLevel,
 			CreatedAt:          now,
@@ -113,33 +145,35 @@ func (c *Controller) ApplyPlan(ctx context.Context, missionID string, plan *Plan
 		if err := c.store.CreateTask(ctx, t); err != nil {
 			return fmt.Errorf("create task %s: %w", t.ID, err)
 		}
+		rollback.createdTaskIDs = append(rollback.createdTaskIDs, t.ID)
 	}
 
-	// Create dependencies.
-	for _, dep := range plan.Dependencies {
+	for _, dep := range prepared.Dependencies {
 		if err := c.store.AddDependency(ctx, dep); err != nil {
 			return fmt.Errorf("add dependency %s->%s: %w", dep.TaskID, dep.DependsOnID, err)
 		}
 	}
 
-	// Transition tasks with no dependencies to ready.
 	if err := c.resolveReadyTasks(ctx, missionID); err != nil {
 		return fmt.Errorf("resolve ready tasks: %w", err)
 	}
 
-	// Move mission to awaiting_approval.
-	m.Status = MissionAwaitingApproval
-	m.UpdatedAt = now
-	if err := c.store.UpdateMission(ctx, m); err != nil {
+	updatedMission := cloneMission(m)
+	if len(prepared.SuccessCriteria) > 0 {
+		updatedMission.SuccessCriteria = append([]string(nil), prepared.SuccessCriteria...)
+	}
+	updatedMission.Status = MissionAwaitingApproval
+	updatedMission.UpdatedAt = now
+	if err := c.store.UpdateMission(ctx, updatedMission); err != nil {
 		return fmt.Errorf("update mission: %w", err)
 	}
 
-	c.store.AppendEvent(ctx, &Event{
+	c.store.AppendEvent(ctx, &Event{ //nolint:errcheck
 		MissionID: missionID,
 		Type:      "plan.applied",
 		CreatedAt: now,
 	})
-
+	committed = true
 	return nil
 }
 
@@ -149,9 +183,17 @@ func (c *Controller) StartMission(ctx context.Context, missionID string) error {
 	if err != nil {
 		return err
 	}
-
 	if m.Status != MissionAwaitingApproval && m.Status != MissionPaused {
 		return fmt.Errorf("cannot start mission in %s state (need awaiting_approval or paused)", m.Status)
+	}
+	if m.Status == MissionAwaitingApproval {
+		pendingApprovals, err := c.listPendingApprovals(ctx, missionID)
+		if err != nil {
+			return fmt.Errorf("list pending approvals: %w", err)
+		}
+		if pendingApprovals > 0 {
+			return fmt.Errorf("cannot start mission with %d pending approval(s)", pendingApprovals)
+		}
 	}
 
 	now := time.Now().UTC()
@@ -160,17 +202,15 @@ func (c *Controller) StartMission(ctx context.Context, missionID string) error {
 	if m.StartedAt == nil {
 		m.StartedAt = &now
 	}
-
+	m.EndedAt = nil
 	if err := c.store.UpdateMission(ctx, m); err != nil {
 		return err
 	}
-
-	c.store.AppendEvent(ctx, &Event{
+	c.store.AppendEvent(ctx, &Event{ //nolint:errcheck
 		MissionID: missionID,
 		Type:      "mission.started",
 		CreatedAt: now,
 	})
-
 	return nil
 }
 
@@ -183,20 +223,17 @@ func (c *Controller) PauseMission(ctx context.Context, missionID string) error {
 	if m.Status != MissionRunning {
 		return fmt.Errorf("cannot pause mission in %s state", m.Status)
 	}
-
 	now := time.Now().UTC()
 	m.Status = MissionPaused
 	m.UpdatedAt = now
 	if err := c.store.UpdateMission(ctx, m); err != nil {
 		return err
 	}
-
-	c.store.AppendEvent(ctx, &Event{
+	c.store.AppendEvent(ctx, &Event{ //nolint:errcheck
 		MissionID: missionID,
 		Type:      "mission.paused",
 		CreatedAt: now,
 	})
-
 	return nil
 }
 
@@ -209,7 +246,6 @@ func (c *Controller) CancelMission(ctx context.Context, missionID string) error 
 	if m.Status.IsTerminal() {
 		return fmt.Errorf("mission already in terminal state: %s", m.Status)
 	}
-
 	now := time.Now().UTC()
 	m.Status = MissionCancelled
 	m.UpdatedAt = now
@@ -217,13 +253,11 @@ func (c *Controller) CancelMission(ctx context.Context, missionID string) error 
 	if err := c.store.UpdateMission(ctx, m); err != nil {
 		return err
 	}
-
-	c.store.AppendEvent(ctx, &Event{
+	c.store.AppendEvent(ctx, &Event{ //nolint:errcheck
 		MissionID: missionID,
 		Type:      "mission.cancelled",
 		CreatedAt: now,
 	})
-
 	return nil
 }
 
@@ -233,26 +267,22 @@ func (c *Controller) resolveReadyTasks(ctx context.Context, missionID string) er
 	if err != nil {
 		return err
 	}
-
 	deps, err := c.store.ListDependencies(ctx, missionID)
 	if err != nil {
 		return err
 	}
 
-	// Build set of task IDs that are done/integrated.
-	// TaskAccepted is NOT terminal — integration can still fail.
-	doneSet := make(map[string]bool)
+	doneSet := make(map[string]bool, len(tasks))
 	for _, t := range tasks {
 		if t.Status == TaskDone || t.Status == TaskIntegrated {
 			doneSet[t.ID] = true
 		}
 	}
 
-	// Build dependency map: taskID -> set of deps that are NOT done.
 	unsatisfied := make(map[string]int)
-	for _, d := range deps {
-		if !doneSet[d.DependsOnID] {
-			unsatisfied[d.TaskID]++
+	for _, dep := range deps {
+		if !doneSet[dep.DependsOnID] {
+			unsatisfied[dep.TaskID]++
 		}
 	}
 
@@ -261,15 +291,15 @@ func (c *Controller) resolveReadyTasks(ctx context.Context, missionID string) er
 		if t.Status != TaskPending {
 			continue
 		}
-		if unsatisfied[t.ID] == 0 {
-			t.Status = TaskReady
-			t.UpdatedAt = now
-			if err := c.store.UpdateTask(ctx, t); err != nil {
-				return err
-			}
+		if unsatisfied[t.ID] != 0 {
+			continue
+		}
+		t.Status = TaskReady
+		t.UpdatedAt = now
+		if err := c.store.UpdateTask(ctx, t); err != nil {
+			return err
 		}
 	}
-
 	return nil
 }
 
@@ -278,9 +308,331 @@ func (c *Controller) Close() error {
 	return c.store.Close()
 }
 
+type applyPlanRollback struct {
+	mission           *Mission
+	createdTaskIDs    []string
+	addedDependencies []TaskDependency
+}
+
+func (c *Controller) collectExistingTaskIDs(ctx context.Context) (map[string]bool, error) {
+	missions, err := c.store.ListMissions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]bool)
+	for _, mission := range missions {
+		tasks, err := c.store.ListTasks(ctx, mission.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, task := range tasks {
+			ids[task.ID] = true
+		}
+	}
+	return ids, nil
+}
+
+func remapCollidingShortTaskIDs(plan *PlanResult, existing map[string]bool) {
+	if plan == nil || len(plan.Tasks) == 0 || len(existing) == 0 {
+		return
+	}
+	reserved := make(map[string]bool, len(existing)+len(plan.Tasks))
+	for id := range existing {
+		reserved[id] = true
+	}
+	idMap := make(map[string]string)
+	for _, task := range plan.Tasks {
+		id := strings.TrimSpace(task.ID)
+		if id == "" {
+			continue
+		}
+		if !reserved[id] {
+			reserved[id] = true
+			continue
+		}
+		if !isShortPlannerID(id) {
+			continue
+		}
+		if _, ok := idMap[id]; ok {
+			continue
+		}
+		newID := generateUniqueTaskID(reserved)
+		reserved[newID] = true
+		idMap[id] = newID
+	}
+	for i := range plan.Tasks {
+		if newID, ok := idMap[plan.Tasks[i].ID]; ok {
+			plan.Tasks[i].ID = newID
+		}
+	}
+	for i := range plan.Dependencies {
+		if newID, ok := idMap[plan.Dependencies[i].TaskID]; ok {
+			plan.Dependencies[i].TaskID = newID
+		}
+		if newID, ok := idMap[plan.Dependencies[i].DependsOnID]; ok {
+			plan.Dependencies[i].DependsOnID = newID
+		}
+	}
+}
+
+func generateUniqueTaskID(reserved map[string]bool) string {
+	for {
+		candidate := generateID("t")
+		if !reserved[candidate] {
+			return candidate
+		}
+	}
+}
+
+func (c *Controller) listPendingApprovals(ctx context.Context, missionID string) (int, error) {
+	approvals, err := c.store.ListApprovals(ctx, missionID)
+	if err != nil {
+		return 0, err
+	}
+	pending := 0
+	for _, approval := range approvals {
+		if approval.Status == ApprovalPending {
+			pending++
+		}
+	}
+	return pending, nil
+}
+
+func (c *Controller) rollbackApplyPlan(ctx context.Context, rollback applyPlanRollback) error {
+	var errs []string
+	if len(rollback.createdTaskIDs) > 0 || len(rollback.addedDependencies) > 0 {
+		if err := rollbackPlanArtifacts(c.store, rollback.createdTaskIDs, rollback.addedDependencies); err != nil {
+			errs = append(errs, fmt.Sprintf("remove created plan artifacts: %v", err))
+		}
+	}
+	if rollback.mission != nil {
+		if err := c.restoreMissionForRollback(ctx, rollback.mission); err != nil {
+			errs = append(errs, fmt.Sprintf("restore mission: %v", err))
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(errs, "; "))
+}
+
+func (c *Controller) restoreMissionForRollback(ctx context.Context, mission *Mission) error {
+	if mission == nil {
+		return nil
+	}
+	if err := c.store.UpdateMission(ctx, cloneMission(mission)); err == nil {
+		return nil
+	}
+	return restoreMissionViaReflection(c.store, mission)
+}
+
+func rollbackPlanArtifacts(store Store, taskIDs []string, deps []TaskDependency) error {
+	if len(taskIDs) == 0 && len(deps) == 0 {
+		return nil
+	}
+	if err := rollbackPlanArtifactsInDB(store, taskIDs, deps); err == nil {
+		return nil
+	}
+	return removePlanArtifactsViaReflection(store, taskIDs, deps)
+}
+
+func rollbackPlanArtifactsInDB(store Store, taskIDs []string, deps []TaskDependency) error {
+	db, err := extractStoreDB(store)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, dep := range deps {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_id = ?`, dep.TaskID, dep.DependsOnID); err != nil {
+			return err
+		}
+	}
+	for _, taskID := range taskIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_id = ?`, taskID, taskID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, taskID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func extractStoreDB(store Store) (*sql.DB, error) {
+	field, err := settableStructField(store, "db")
+	if err != nil {
+		return nil, err
+	}
+	db, ok := field.Interface().(*sql.DB)
+	if !ok || db == nil {
+		return nil, fmt.Errorf("db field is not *sql.DB")
+	}
+	return db, nil
+}
+
+func removePlanArtifactsViaReflection(store Store, taskIDs []string, deps []TaskDependency) error {
+	if err := removeTasksViaReflection(store, taskIDs); err != nil {
+		return err
+	}
+	if err := removeDependenciesViaReflection(store, deps); err != nil {
+		return err
+	}
+	return nil
+}
+
+func removeTasksViaReflection(store Store, taskIDs []string) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	field, err := settableStructField(store, "tasks")
+	if err != nil {
+		return err
+	}
+	if field.Kind() != reflect.Map {
+		return fmt.Errorf("tasks field is %s, want map", field.Kind())
+	}
+	for _, taskID := range taskIDs {
+		field.SetMapIndex(reflect.ValueOf(taskID), reflect.Value{})
+	}
+	return nil
+}
+
+func removeDependenciesViaReflection(store Store, deps []TaskDependency) error {
+	if len(deps) == 0 {
+		return nil
+	}
+	field, err := settableStructField(store, "deps")
+	if err != nil {
+		return err
+	}
+	if field.Kind() != reflect.Slice {
+		return fmt.Errorf("deps field is %s, want slice", field.Kind())
+	}
+	remove := make(map[string]int, len(deps))
+	for _, dep := range deps {
+		remove[dependencyKey(dep)]++
+	}
+	filtered := reflect.MakeSlice(field.Type(), 0, field.Len())
+	for i := 0; i < field.Len(); i++ {
+		dep, ok := field.Index(i).Interface().(TaskDependency)
+		if !ok {
+			filtered = reflect.Append(filtered, field.Index(i))
+			continue
+		}
+		key := dependencyKey(dep)
+		if remove[key] > 0 {
+			remove[key]--
+			continue
+		}
+		filtered = reflect.Append(filtered, field.Index(i))
+	}
+	field.Set(filtered)
+	return nil
+}
+
+func restoreMissionViaReflection(store Store, mission *Mission) error {
+	field, err := settableStructField(store, "missions")
+	if err != nil {
+		return err
+	}
+	if field.Kind() != reflect.Map {
+		return fmt.Errorf("missions field is %s, want map", field.Kind())
+	}
+	field.SetMapIndex(reflect.ValueOf(mission.ID), reflect.ValueOf(cloneMission(mission)))
+	return nil
+}
+
+func settableStructField(target any, name string) (reflect.Value, error) {
+	rv := reflect.ValueOf(target)
+	if !rv.IsValid() || rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return reflect.Value{}, fmt.Errorf("store is not an addressable pointer")
+	}
+	elem := rv.Elem()
+	if elem.Kind() != reflect.Struct {
+		return reflect.Value{}, fmt.Errorf("store is %s, want struct pointer", elem.Kind())
+	}
+	field := elem.FieldByName(name)
+	if !field.IsValid() {
+		return reflect.Value{}, fmt.Errorf("store does not expose %q field", name)
+	}
+	if !field.CanAddr() {
+		return reflect.Value{}, fmt.Errorf("store field %q is not addressable", name)
+	}
+	return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem(), nil
+}
+
+func dependencyKey(dep TaskDependency) string {
+	return dep.TaskID + "->" + dep.DependsOnID
+}
+
+func cloneMission(m *Mission) *Mission {
+	if m == nil {
+		return nil
+	}
+	cp := *m
+	if m.Policy != nil {
+		cp.Policy = append([]byte(nil), m.Policy...)
+	}
+	if m.SuccessCriteria != nil {
+		cp.SuccessCriteria = append([]string(nil), m.SuccessCriteria...)
+	}
+	if m.StartedAt != nil {
+		startedAt := *m.StartedAt
+		cp.StartedAt = &startedAt
+	}
+	if m.EndedAt != nil {
+		endedAt := *m.EndedAt
+		cp.EndedAt = &endedAt
+	}
+	if m.LastReplanAt != nil {
+		lastReplanAt := *m.LastReplanAt
+		cp.LastReplanAt = &lastReplanAt
+	}
+	return &cp
+}
+
+func cloneTaskScope(scope TaskScope) TaskScope {
+	return TaskScope{
+		WritePaths: append([]string(nil), scope.WritePaths...),
+		ReadPaths:  append([]string(nil), scope.ReadPaths...),
+	}
+}
+
+func clonePlanResult(plan *PlanResult) *PlanResult {
+	if plan == nil {
+		return nil
+	}
+	cp := &PlanResult{
+		Summary:         plan.Summary,
+		SuccessCriteria: append([]string(nil), plan.SuccessCriteria...),
+		Tasks:           make([]PlanTask, len(plan.Tasks)),
+		Dependencies:    append([]TaskDependency(nil), plan.Dependencies...),
+	}
+	for i, task := range plan.Tasks {
+		cp.Tasks[i] = PlanTask{
+			ID:                 task.ID,
+			Title:              task.Title,
+			Kind:               task.Kind,
+			Objective:          task.Objective,
+			Priority:           task.Priority,
+			Scope:              cloneTaskScope(task.Scope),
+			AcceptanceCriteria: append([]string(nil), task.AcceptanceCriteria...),
+			EstimatedEffort:    task.EstimatedEffort,
+			RiskLevel:          task.RiskLevel,
+		}
+	}
+	return cp
+}
+
 // generateID creates a short random ID with a prefix.
 func generateID(prefix string) string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	rand.Read(b) //nolint:errcheck
 	return prefix + "_" + hex.EncodeToString(b)
 }

@@ -37,6 +37,7 @@ func NormalizePlanResult(plan *PlanResult) {
 	for i := range plan.SuccessCriteria {
 		plan.SuccessCriteria[i] = strings.TrimSpace(plan.SuccessCriteria[i])
 	}
+	plan.SuccessCriteria = compactTrimmedStrings(plan.SuccessCriteria)
 
 	for i := range plan.Tasks {
 		t := &plan.Tasks[i]
@@ -53,15 +54,9 @@ func NormalizePlanResult(plan *PlanResult) {
 		if t.Priority < 0 {
 			t.Priority = 0
 		}
-		for j := range t.Scope.WritePaths {
-			t.Scope.WritePaths[j] = strings.TrimSpace(t.Scope.WritePaths[j])
-		}
-		for j := range t.Scope.ReadPaths {
-			t.Scope.ReadPaths[j] = strings.TrimSpace(t.Scope.ReadPaths[j])
-		}
-		for j := range t.AcceptanceCriteria {
-			t.AcceptanceCriteria[j] = strings.TrimSpace(t.AcceptanceCriteria[j])
-		}
+		t.Scope.WritePaths = compactTrimmedStrings(t.Scope.WritePaths)
+		t.Scope.ReadPaths = compactTrimmedStrings(t.Scope.ReadPaths)
+		t.AcceptanceCriteria = compactTrimmedStrings(t.AcceptanceCriteria)
 		t.EstimatedEffort = strings.ToLower(strings.TrimSpace(t.EstimatedEffort))
 		t.RiskLevel = RiskLevel(strings.ToLower(strings.TrimSpace(string(t.RiskLevel))))
 		if t.RiskLevel == "" {
@@ -73,6 +68,47 @@ func NormalizePlanResult(plan *PlanResult) {
 		plan.Dependencies[i].TaskID = strings.TrimSpace(plan.Dependencies[i].TaskID)
 		plan.Dependencies[i].DependsOnID = strings.TrimSpace(plan.Dependencies[i].DependsOnID)
 	}
+	plan.Dependencies = compactDependencies(plan.Dependencies)
+}
+
+func compactTrimmedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func compactDependencies(deps []TaskDependency) []TaskDependency {
+	if len(deps) == 0 {
+		return nil
+	}
+	out := make([]TaskDependency, 0, len(deps))
+	seen := make(map[string]bool, len(deps))
+	for _, dep := range deps {
+		key := dep.TaskID + "->" + dep.DependsOnID
+		if dep.TaskID == "" || dep.DependsOnID == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, dep)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // remapShortTaskIDs detects short planner-generated IDs like "t1", "t2" and
