@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/eval"
@@ -1259,6 +1260,9 @@ func (m *Model) View() tea.View {
 		m.configureView(&v)
 		return v
 	}
+	if m.belowMinimumShellSize() {
+		return m.renderMinimumSizeView()
+	}
 
 	header := m.renderHeader()
 	input := m.renderInput()
@@ -1311,6 +1315,10 @@ func (m *Model) windowTitle() string {
 }
 
 func (m *Model) renderCompactView() tea.View {
+	if m.belowMinimumShellSize() {
+		return m.renderMinimumSizeView()
+	}
+
 	sections := make([]string, 0, 4)
 	switch {
 	case m.height <= 0:
@@ -1341,34 +1349,33 @@ func (m *Model) renderChatRegion(height int) string {
 		return ""
 	}
 
-	const panelWidth = 38
-	const minWidthForPanel = 110
-	showPanel := m.hasWorkflowPanel() && m.width >= minWidthForPanel
-
-	chatWidth := max(1, m.width)
-	if showPanel {
-		chatWidth = max(1, m.width-panelWidth)
-	}
-
-	chatSection := m.renderChat(height, chatWidth)
-	if !showPanel {
-		return chatSection
-	}
-
-	chatLines := strings.Split(chatSection, "\n")
-	panelLines := strings.Split(m.renderWorkflowPanel(height, panelWidth), "\n")
-	combined := make([]string, height)
-	for i := range combined {
-		cl, pl := "", ""
-		if i < len(chatLines) {
-			cl = chatLines[i]
+	if m.hasWorkflowPanel() && m.width >= workflowPanelWideMinWidth {
+		chatWidth := max(1, m.width-workflowPanelWidth)
+		chatSection := m.renderChat(height, chatWidth)
+		chatLines := strings.Split(chatSection, "\n")
+		panelLines := strings.Split(m.renderWorkflowPanel(height, workflowPanelWidth), "\n")
+		combined := make([]string, height)
+		for i := range combined {
+			cl, pl := "", ""
+			if i < len(chatLines) {
+				cl = chatLines[i]
+			}
+			if i < len(panelLines) {
+				pl = panelLines[i]
+			}
+			combined[i] = cl + pl
 		}
-		if i < len(panelLines) {
-			pl = panelLines[i]
-		}
-		combined[i] = cl + pl
+		return strings.Join(combined, "\n")
 	}
-	return strings.Join(combined, "\n")
+
+	if workflowHeight := m.workflowStackedHeight(height); workflowHeight > 0 {
+		chatHeight := max(1, height-workflowHeight)
+		chatSection := m.renderChat(chatHeight, max(1, m.width))
+		workflowSection := m.renderWorkflowPanel(workflowHeight, max(1, m.width))
+		return chatSection + "\n" + workflowSection
+	}
+
+	return m.renderChat(height, max(1, m.width))
 }
 
 func (m *Model) renderCompactHeader() string {
@@ -1393,31 +1400,57 @@ func (m *Model) renderCompactInput() string {
 
 func (m *Model) renderCompactStatusBar() string {
 	shellWidth := m.shellWidth()
-	statusText := "Ready"
-	switch {
-	case m.approvalMode:
-		statusText = "Approval"
-	case m.askMode:
-		statusText = "Need input"
-	case m.busy:
-		statusText = "Working"
-	}
-	meta := statusText + " · " + m.cfg.Model
-	switch {
-	case m.approvalMode:
-		meta = "Approval · [y]/[n]/[a]/[d]"
-	case m.busy:
-		meta = statusText + " · Esc cancels"
-	}
+	meta := m.compactStatusMeta(shellWidth)
 	content := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-9)))
 	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
+
+const (
+	minShellWidth  = 56
+	minShellHeight = 6
+)
 
 func (m *Model) shellWidth() int {
 	if m.width > 0 {
 		return m.width
 	}
 	return 72
+}
+
+func (m *Model) belowMinimumShellSize() bool {
+	if m.width > 0 && m.width < minShellWidth {
+		return true
+	}
+	if m.height > 0 && m.height < minShellHeight {
+		return true
+	}
+	return false
+}
+
+func (m *Model) renderMinimumSizeView() tea.View {
+	shellWidth := max(1, m.shellWidth())
+	lineWidth := max(1, shellWidth)
+	recovery := "Resize the terminal to restore transcript, workflow, and input."
+	sizeLine := fmt.Sprintf("Current %dx%d · need at least %dx%d", max(0, m.width), max(0, m.height), minShellWidth, minShellHeight)
+	helpLine := "/help when resized · Esc cancel · Ctrl+L clear"
+	switch {
+	case m.width > 0 && m.width < minShellWidth && m.height > 0 && m.height < minShellHeight:
+		recovery = "Resize wider and taller to restore transcript, workflow, and input."
+	case m.width > 0 && m.width < minShellWidth:
+		recovery = "Resize wider to restore transcript, workflow, and input."
+	case m.height > 0 && m.height < minShellHeight:
+		recovery = "Resize taller to restore transcript, workflow, and input."
+	}
+	lines := []string{
+		ansi.Truncate(m.sty.StatusBar.Accent.Render(" GOLEM ")+" "+m.sty.Bold.Render("Terminal too small"), lineWidth, "…"),
+		m.sty.Muted.Render(ansi.Truncate(recovery, lineWidth, "…")),
+		m.sty.Muted.Render(ansi.Truncate(sizeLine, lineWidth, "…")),
+		m.sty.Muted.Render(ansi.Truncate(helpLine, lineWidth, "…")),
+	}
+	body := fitShellLines(lines, m.height, max(0, (m.height-len(lines))/2))
+	v := tea.NewView(body)
+	v.AltScreen = true
+	return v
 }
 
 func (m *Model) renderSectionHeader(label, meta string, width int) string {
@@ -1479,6 +1512,9 @@ func (m *Model) renderStatusMeta() string {
 	}
 	if m.busy {
 		return "Runtime state"
+	}
+	if m.shouldShowWorkflowStatusSummary() {
+		return "Usage, workflow, summary, and key hints"
 	}
 	return "Usage, workflow, and key hints"
 }
@@ -1671,6 +1707,26 @@ func (m *Model) currentActivitySummary() string {
 	default:
 		return "Ready · /help for commands · /search <query>"
 	}
+}
+
+func (m *Model) compactStatusMeta(width int) string {
+	statusText := "Ready"
+	switch {
+	case m.approvalMode:
+		return "Approval · [y]/[n]/[a]/[d]"
+	case m.askMode:
+		return "Need input · Enter answer · Esc cancel"
+	case m.busy:
+		return "Working · Esc cancels"
+	}
+	if summary := m.workflowCompactSummary(max(1, width-len(statusText)-3)); summary != "" {
+		return statusText + " · " + summary
+	}
+	return statusText + " · " + m.cfg.Model
+}
+
+func (m *Model) shouldShowWorkflowStatusSummary() bool {
+	return m.hasWorkflowPanel() && m.width >= workflowPanelStackMinWidth && m.width < workflowPanelWideMinWidth && m.height <= minShellHeight+1
 }
 
 func (m *Model) renderChat(height, width int) string {
