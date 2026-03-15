@@ -54,7 +54,7 @@ type Message struct {
 // re-rendering unchanged messages. The cache is invalidated when the message
 // content, status, or rendering width changes.
 func (msg *Message) Render(sty *styles.Styles, width int, allMessages []*Message) string {
-	live := msg.Streaming || (msg.Kind == KindToolCall && msg.Status == ToolRunning)
+	live := msg.IsLive()
 	if !live && msg.cachedRender != "" && msg.cachedWidth == width &&
 		msg.cachedContent == msg.Content && msg.cachedStatus == msg.Status &&
 		msg.cachedDuration == msg.Duration && msg.cachedStreaming == msg.Streaming {
@@ -76,6 +76,15 @@ func (msg *Message) Render(sty *styles.Styles, width int, allMessages []*Message
 	msg.cachedDuration = msg.Duration
 	msg.cachedStreaming = msg.Streaming
 	return rendered
+}
+
+// IsLive reports whether this message is still changing and should bypass
+// cached transcript rendering.
+func (msg *Message) IsLive() bool {
+	if msg == nil {
+		return false
+	}
+	return msg.Streaming || (msg.Kind == KindToolCall && msg.Status == ToolRunning)
 }
 
 // InvalidateRenderCache clears any cached rendering for this message.

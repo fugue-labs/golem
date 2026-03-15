@@ -182,6 +182,35 @@ func TestReplayStopEscape(t *testing.T) {
 	}
 }
 
+func TestReplayPageKeysScrollTranscriptWithoutTouchingTextareaCursor(t *testing.T) {
+	m := newReplayTestModel(t)
+	m.width = 72
+	m.height = 12
+	fillTranscriptMessages(m, 90)
+	m.input.SetValue("stay ready")
+	m.input.MoveToEnd()
+	m.ensureTranscriptViewport(m.width, m.height)
+
+	beforeValue := m.input.Value()
+	beforeLine := m.input.Line()
+	beforeCol := m.input.Column()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp, Text: "pgup"})
+	m = updated.(*Model)
+	if m.scroll == 0 {
+		t.Fatal("expected replay view PgUp to scroll transcript")
+	}
+	if got := m.input.Value(); got != beforeValue {
+		t.Fatalf("textarea changed after replay PgUp: got %q want %q", got, beforeValue)
+	}
+	if got := m.input.Line(); got != beforeLine {
+		t.Fatalf("cursor line changed after replay PgUp: got %d want %d", got, beforeLine)
+	}
+	if got := m.input.Column(); got != beforeCol {
+		t.Fatalf("cursor column changed after replay PgUp: got %d want %d", got, beforeCol)
+	}
+}
+
 func TestReplayViewportStickyBottomAndResize(t *testing.T) {
 	m := newReplayTestModel(t)
 	m.width = 60

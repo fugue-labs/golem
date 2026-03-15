@@ -1299,7 +1299,7 @@ func (m *Model) rebuildTranscriptBlocks(width int, compactMode bool) {
 	blocks := make([]transcriptBlock, 0, len(m.messages))
 	for _, msg := range m.messages {
 		key := transcriptMessageKey(msg)
-		live := msg.Streaming || (msg.Kind == chat.KindToolCall && msg.Status == chat.ToolRunning)
+		live := msg.IsLive()
 		needRender := true
 		if block, ok := prev[key]; ok && block.message == msg {
 			contentUnchanged := block.live == live
@@ -1494,16 +1494,12 @@ func (m *Model) transcriptScrollConsumesKey(msg tea.KeyPressMsg) bool {
 		return false
 	}
 	switch msg.String() {
-	case "pgup", "pgdown", "home", "end":
+	case "pgup", "pgdown":
 		return true
-	case "up", "down":
-		return m.busy
 	}
 	switch msg.Code {
-	case tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
+	case tea.KeyPgUp, tea.KeyPgDown:
 		return true
-	case tea.KeyUp, tea.KeyDown:
-		return m.busy
 	default:
 		return false
 	}
@@ -1514,7 +1510,7 @@ func (m *Model) hasLiveTranscriptEntries() bool {
 		if msg == nil {
 			continue
 		}
-		if msg.Streaming || (msg.Kind == chat.KindToolCall && msg.Status == chat.ToolRunning) {
+		if msg.IsLive() {
 			return true
 		}
 	}

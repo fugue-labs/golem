@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
@@ -558,29 +558,93 @@ func TestVisibleChatLinesKeepsBottomWindowWithoutRenderingEntireTranscriptSlice(
 	}
 }
 
-func TestTranscriptScrollKeysDoNotMutateTextareaWhenConsumed(t *testing.T) {
+func TestTranscriptPagingKeysDoNotMutateTextareaWhenConsumed(t *testing.T) {
 	m := newAppTestModel(t)
 	m.width = 72
 	m.height = 14
 	fillTranscriptMessages(m, 160)
-	m.input.SetValue("draft")
+	m.input.SetValue("draft\nsteer")
+	m.input.MoveToEnd()
 	m.ensureTranscriptViewport(m.width, m.height)
 
-	before := m.input.Value()
-	updated, _ := m.Update(tea.KeyPressMsg{Text: "pgup"})
+	beforeValue := m.input.Value()
+	beforeLine := m.input.Line()
+	beforeCol := m.input.Column()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp, Text: "pgup"})
 	m = updated.(*Model)
 	if m.scroll == 0 {
 		t.Fatal("expected PgUp to scroll transcript")
 	}
-	if got := m.input.Value(); got != before {
-		t.Fatalf("textarea changed after consumed PgUp: got %q want %q", got, before)
+	if got := m.input.Value(); got != beforeValue {
+		t.Fatalf("textarea changed after consumed PgUp: got %q want %q", got, beforeValue)
+	}
+	if got := m.input.Line(); got != beforeLine {
+		t.Fatalf("cursor line changed after consumed PgUp: got %d want %d", got, beforeLine)
+	}
+	if got := m.input.Column(); got != beforeCol {
+		t.Fatalf("cursor column changed after consumed PgUp: got %d want %d", got, beforeCol)
+	}
+}
+
+func TestBusySteeringKeepsTextareaCursorMovementWhileTranscriptPagingStillWorks(t *testing.T) {
+	m := newAppTestModel(t)
+	m.width = 72
+	m.height = 14
+	m.busy = true
+	fillTranscriptMessages(m, 160)
+	m.input.SetValue("alpha\nbeta")
+	m.input.MoveToEnd()
+	m.ensureTranscriptViewport(m.width, m.height)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp, Text: "up"})
+	m = updated.(*Model)
+	if got := m.input.Line(); got != 0 {
+		t.Fatalf("busy Up should move textarea cursor to previous line, got %d", got)
+	}
+	if m.scroll != 0 {
+		t.Fatalf("busy Up should not scroll transcript, scroll=%d", m.scroll)
 	}
 
-	m.busy = true
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp, Text: "up"})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyHome, Text: "home"})
 	m = updated.(*Model)
-	if got := m.input.Value(); got != before {
-		t.Fatalf("textarea changed after consumed Up during busy scroll: got %q want %q", got, before)
+	if got := m.input.Column(); got != 0 {
+		t.Fatalf("busy Home should move textarea cursor to column 0, got %d", got)
+	}
+	if m.scroll != 0 {
+		t.Fatalf("busy Home should not scroll transcript, scroll=%d", m.scroll)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown, Text: "down"})
+	m = updated.(*Model)
+	if got := m.input.Line(); got != 1 {
+		t.Fatalf("busy Down should move textarea cursor to next line, got %d", got)
+	}
+	if m.scroll != 0 {
+		t.Fatalf("busy Down should not scroll transcript, scroll=%d", m.scroll)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnd, Text: "end"})
+	m = updated.(*Model)
+	if got := m.input.Column(); got != len("beta") {
+		t.Fatalf("busy End should move textarea cursor to end of line, got %d", got)
+	}
+	if m.scroll != 0 {
+		t.Fatalf("busy End should not scroll transcript, scroll=%d", m.scroll)
+	}
+
+	lineBeforePaging := m.input.Line()
+	colBeforePaging := m.input.Column()
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp, Text: "pgup"})
+	m = updated.(*Model)
+	if m.scroll == 0 {
+		t.Fatal("expected busy PgUp to keep transcript paging functional")
+	}
+	if got := m.input.Line(); got != lineBeforePaging {
+		t.Fatalf("busy PgUp should not move textarea cursor line, got %d want %d", got, lineBeforePaging)
+	}
+	if got := m.input.Column(); got != colBeforePaging {
+		t.Fatalf("busy PgUp should not move textarea cursor column, got %d want %d", got, colBeforePaging)
 	}
 }
 
