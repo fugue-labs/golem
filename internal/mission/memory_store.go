@@ -118,6 +118,15 @@ func (s *InMemoryStore) ListTasks(_ context.Context, missionID string) ([]*Task,
 func (s *InMemoryStore) AddDependency(_ context.Context, dep TaskDependency) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateDependencyTargets(dep, func(taskID string) (string, error) {
+		task, ok := s.tasks[taskID]
+		if !ok {
+			return "", notFoundError("task", taskID)
+		}
+		return task.MissionID, nil
+	}); err != nil {
+		return err
+	}
 	for _, existing := range s.deps {
 		if existing == dep {
 			return nil
@@ -131,15 +140,15 @@ func (s *InMemoryStore) AddDependency(_ context.Context, dep TaskDependency) err
 func (s *InMemoryStore) ListDependencies(_ context.Context, missionID string) ([]TaskDependency, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	taskIDs := make(map[string]bool)
-	for _, t := range s.tasks {
-		if t.MissionID == missionID {
-			taskIDs[t.ID] = true
-		}
-	}
 	out := make([]TaskDependency, 0)
 	for _, d := range s.deps {
-		if taskIDs[d.TaskID] {
+		if dependencyBelongsToMission(d, missionID, func(taskID string) (string, bool) {
+			task, ok := s.tasks[taskID]
+			if !ok {
+				return "", false
+			}
+			return task.MissionID, true
+		}) {
 			out = append(out, d)
 		}
 	}
@@ -235,6 +244,11 @@ func (s *InMemoryStore) ListEvents(_ context.Context, missionID string, limit in
 func (s *InMemoryStore) CreateArtifact(_ context.Context, a *Artifact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, existing := range s.artifacts {
+		if existing.ID == a.ID {
+			return alreadyExistsError("artifact", a.ID)
+		}
+	}
 	s.artifacts = append(s.artifacts, cloneArtifact(a))
 	sortArtifacts(s.artifacts)
 	return nil

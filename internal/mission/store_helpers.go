@@ -358,6 +358,30 @@ func requireRowsAffected(result sql.Result, kind, id string) error {
 	return nil
 }
 
+func validateDependencyTargets(dep TaskDependency, missionForTask func(string) (string, error)) error {
+	taskMissionID, err := missionForTask(dep.TaskID)
+	if err != nil {
+		return err
+	}
+	dependsOnMissionID, err := missionForTask(dep.DependsOnID)
+	if err != nil {
+		return err
+	}
+	if taskMissionID != dependsOnMissionID {
+		return fmt.Errorf("dependency %s -> %s crosses mission boundaries", dep.TaskID, dep.DependsOnID)
+	}
+	return nil
+}
+
+func dependencyBelongsToMission(dep TaskDependency, missionID string, missionForTask func(string) (string, bool)) bool {
+	taskMissionID, ok := missionForTask(dep.TaskID)
+	if !ok || taskMissionID != missionID {
+		return false
+	}
+	dependsOnMissionID, ok := missionForTask(dep.DependsOnID)
+	return ok && dependsOnMissionID == missionID
+}
+
 // --- Time helpers ---
 
 const timeFmt = time.RFC3339Nano

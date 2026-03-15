@@ -375,6 +375,19 @@ func (s *SQLiteStore) ListTasks(ctx context.Context, missionID string) ([]*Task,
 func (s *SQLiteStore) AddDependency(ctx context.Context, dep TaskDependency) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateDependencyTargets(dep, func(taskID string) (string, error) {
+		var missionID string
+		err := s.db.QueryRowContext(ctx, `SELECT mission_id FROM tasks WHERE id = ?`, taskID).Scan(&missionID)
+		if err == sql.ErrNoRows {
+			return "", notFoundError("task", taskID)
+		}
+		if err != nil {
+			return "", err
+		}
+		return missionID, nil
+	}); err != nil {
+		return err
+	}
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)`,
@@ -390,7 +403,8 @@ func (s *SQLiteStore) ListDependencies(ctx context.Context, missionID string) ([
 		`SELECT d.task_id, d.depends_on_id
 		FROM task_dependencies d
 		JOIN tasks t ON d.task_id = t.id
-		WHERE t.mission_id = ?`, missionID)
+		JOIN tasks dt ON d.depends_on_id = dt.id
+		WHERE t.mission_id = ? AND dt.mission_id = ?`, missionID, missionID)
 	if err != nil {
 		return nil, err
 	}
@@ -590,7 +604,7 @@ func (s *SQLiteStore) CreateArtifact(ctx context.Context, a *Artifact) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.MissionID, a.TaskID, a.RunID, a.Type, a.RelativePath, a.SHA256, formatTime(a.CreatedAt),
 	)
-	return err
+	return normalizeCreateError(err, "artifact", a.ID)
 }
 
 func (s *SQLiteStore) ListArtifacts(ctx context.Context, missionID string) ([]*Artifact, error) {
