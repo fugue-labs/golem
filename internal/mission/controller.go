@@ -187,7 +187,7 @@ func (c *Controller) ApplyPlan(ctx context.Context, missionID string, plan *Plan
 }
 
 // ApproveMission resolves the durable mission-plan approval gate.
-func (c *Controller) ApproveMission(ctx context.Context, missionID string) error {
+func (c *Controller) ApproveMission(ctx context.Context, missionID string) (err error) {
 	m, err := c.store.GetMission(ctx, missionID)
 	if err != nil {
 		return err
@@ -211,12 +211,19 @@ func (c *Controller) ApproveMission(ctx context.Context, missionID string) error
 	}
 
 	now := time.Now().UTC()
+	rollback := *approval
 	approval.Status = ApprovalApproved
 	approval.ResolvedAt = &now
 	approval.ResponseJSON = marshalApprovalResponseJSON(map[string]any{
 		"decision":    "approved",
 		"approved_at": now.Format(time.RFC3339Nano),
 	})
+	defer func() {
+		if err == nil {
+			return
+		}
+		_ = c.store.UpdateApproval(ctx, &rollback)
+	}()
 	if err := c.store.UpdateApproval(ctx, approval); err != nil {
 		return fmt.Errorf("approve mission plan: %w", err)
 	}
@@ -256,7 +263,14 @@ func (c *Controller) StartMission(ctx context.Context, missionID string) error {
 			return fmt.Errorf("list pending approvals: %w", err)
 		}
 		if pendingApprovals > 0 {
-			return fmt.Errorf("cannot start mission with %d pending approval(s)", pendingApprovals)
+			blockingApproval, blockErr := c.firstBlockingPendingApproval(ctx, missionID)
+			if blockErr != nil {
+				return fmt.Errorf("list pending approvals: %w", blockErr)
+			}
+			if blockingApproval != nil {
+				return fmt.Errorf("mission plan approval is approved, but cannot start mission until %s", describeApprovalBlocker(blockingApproval))
+			}
+			return fmt.Errorf("mission plan approval is approved, but cannot start mission with %d pending approval(s)", pendingApprovals)
 		}
 	}
 
@@ -461,6 +475,53 @@ func (c *Controller) listPendingApprovals(ctx context.Context, missionID string)
 		}
 	}
 	return pending, nil
+}
+
+func (c *Controller) firstBlockingPendingApproval(ctx context.Context, missionID string) (*Approval, error) {
+	approvals, err := c.store.ListApprovals(ctx, missionID)
+	if err != nil {
+		return nil, err
+	}
+	var planApproval *Approval
+	var other *Approval
+	for _, approval := range approvals {
+		if approval == nil || approval.Status != ApprovalPending {
+			continue
+		}
+		cp := *approval
+		if approval.Kind == missionPlanApprovalKind {
+			if planApproval == nil || approval.CreatedAt.Before(planApproval.CreatedAt) || (approval.CreatedAt.Equal(planApproval.CreatedAt) && approval.ID < planApproval.ID) {
+				planApproval = &cp
+			}
+			continue
+		}
+		if other == nil || approval.CreatedAt.Before(other.CreatedAt) || (approval.CreatedAt.Equal(other.CreatedAt) && approval.ID < other.ID) {
+			other = &cp
+		}
+	}
+	if other != nil {
+		return other, nil
+	}
+	return planApproval, nil
+}
+
+func describeApprovalBlocker(approval *Approval) string {
+	if approval == nil {
+		return "approval resolves"
+	}
+	if approval.Kind == missionPlanApprovalKind {
+		return "the mission plan approval is resolved"
+	}
+	if approval.TaskID != "" {
+		if approval.Kind != "" {
+			return fmt.Sprintf("the %s approval for task %s is resolved", approval.Kind, approval.TaskID)
+		}
+		return fmt.Sprintf("the approval for task %s is resolved", approval.TaskID)
+	}
+	if approval.Kind != "" {
+		return fmt.Sprintf("the %s approval is resolved", approval.Kind)
+	}
+	return "the pending approval is resolved"
 }
 
 func (c *Controller) resolveMissionPlanApproval(ctx context.Context, missionID string) (*Approval, error) {
