@@ -586,8 +586,21 @@ func TestResumeSessionHistoryGuard(t *testing.T) {
 	if msg == nil {
 		t.Fatal("expected non-nil message")
 	}
-	if !strings.Contains(msg.Content, "already has history") {
+	if !strings.Contains(msg.Content, "already has visible state") {
 		t.Fatalf("expected history guard message, got %q", msg.Content)
+	}
+}
+
+func TestResumeSessionVisibleStateGuard(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "visible transcript"}}
+
+	msg := m.resumeSession()
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if !strings.Contains(msg.Content, "already has visible state") {
+		t.Fatalf("expected visible-state guard message, got %q", msg.Content)
 	}
 }
 

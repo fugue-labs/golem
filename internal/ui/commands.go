@@ -575,7 +575,7 @@ func (m *Model) handleSearchCommand(text string) *chat.Message {
 	if query == "" {
 		return &chat.Message{
 			Kind:    chat.KindAssistant,
-			Content: "Usage: `/search <query>` — search across all saved sessions with readable context.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`\n\nResults include the saved prompt, model/time summary, project, and nearby transcript lines when available.",
+			Content: "Usage: `/search <query>` — search across all saved sessions with readable context.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`\n\nResults include the saved prompt, model/time summary, project, and nearby transcript or workflow state when available.",
 		}
 	}
 
@@ -587,7 +587,7 @@ func (m *Model) handleSearchCommand(text string) *chat.Message {
 	if len(results) == 0 {
 		return &chat.Message{
 			Kind:    chat.KindAssistant,
-			Content: fmt.Sprintf("No sessions found matching %q. Saved sessions become searchable after successful runs.", query),
+			Content: fmt.Sprintf("No sessions found matching %q. Saved sessions become searchable after successful runs and keep transcript/workflow context when available.", query),
 		}
 	}
 
@@ -637,8 +637,8 @@ func (m *Model) resumeSession() *chat.Message {
 	if m.busy {
 		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot resume while agent is running."}
 	}
-	if len(m.history) > 0 {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "Session already has history. Use `/clear` first to resume a previous session."}
+	if m.sessionHasVisibleState() {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Session already has visible state. Use `/clear` first to resume a previous session."}
 	}
 	session, err := agent.LoadLatestSession(m.cfg.WorkingDir)
 	if err != nil {
@@ -661,6 +661,22 @@ func (m *Model) resumeSession() *chat.Message {
 	}
 	content += fmt.Sprintf(" Restored %s.", summary.RestorableStateDescription())
 	return &chat.Message{Kind: chat.KindAssistant, Content: content}
+}
+
+func (m *Model) sessionHasVisibleState() bool {
+	if len(m.messages) > 0 || len(m.history) > 0 {
+		return true
+	}
+	if strings.TrimSpace(m.lastPrompt) != "" {
+		return true
+	}
+	if m.sessionUsage.Requests > 0 || m.sessionUsage.InputTokens > 0 || m.sessionUsage.OutputTokens > 0 || m.sessionUsage.CacheReadTokens > 0 || m.sessionUsage.CacheWriteTokens > 0 || m.sessionUsage.ToolCalls > 0 {
+		return true
+	}
+	if m.planState.HasTasks() || m.invariantState.HasItems() || m.verificationState.HasEntries() || m.specState.IsActive() {
+		return true
+	}
+	return false
 }
 
 func summarizePromptPreview(prompt string) string {

@@ -26,14 +26,18 @@ type SessionResult struct {
 
 // sessionData mirrors agent.SessionData for unmarshaling.
 type sessionData struct {
-	Messages   json.RawMessage `json:"messages"`
-	Transcript json.RawMessage `json:"transcript,omitempty"`
-	WorkDir    string          `json:"work_dir"`
-	Timestamp  time.Time       `json:"timestamp"`
-	Prompt     string          `json:"prompt,omitempty"`
-	Model      string          `json:"model"`
-	Provider   string          `json:"provider,omitempty"`
-	Usage      core.RunUsage   `json:"usage,omitempty"`
+	Messages          json.RawMessage `json:"messages"`
+	Transcript        json.RawMessage `json:"transcript,omitempty"`
+	WorkDir           string          `json:"work_dir"`
+	Timestamp         time.Time       `json:"timestamp"`
+	Prompt            string          `json:"prompt,omitempty"`
+	Model             string          `json:"model"`
+	Provider          string          `json:"provider,omitempty"`
+	Usage             core.RunUsage   `json:"usage,omitempty"`
+	PlanState         json.RawMessage `json:"plan_state,omitempty"`
+	InvariantState    json.RawMessage `json:"invariant_state,omitempty"`
+	VerificationState json.RawMessage `json:"verification_state,omitempty"`
+	SpecState         json.RawMessage `json:"spec_state,omitempty"`
 }
 
 // messageContent is a minimal struct for extracting text from legacy messages.
@@ -207,7 +211,7 @@ func loadSessionData(path string) (*sessionData, error) {
 }
 
 func formatSessionSummary(meta sessionMeta) string {
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 6)
 	if !meta.timestamp.IsZero() {
 		parts = append(parts, meta.timestamp.Format("Jan 2 15:04"))
 	}
@@ -215,11 +219,9 @@ func formatSessionSummary(meta sessionMeta) string {
 	if model != "" {
 		provider := ""
 		requests := 0
-		hasTranscript := false
 		if meta.session != nil {
 			provider = strings.TrimSpace(meta.session.Provider)
 			requests = meta.session.Usage.Requests
-			hasTranscript = len(transcriptDisplayLines(meta.session.Transcript)) > 0
 		}
 		if provider != "" {
 			parts = append(parts, model+" via "+provider)
@@ -229,14 +231,56 @@ func formatSessionSummary(meta sessionMeta) string {
 		if requests > 0 {
 			parts = append(parts, fmt.Sprintf("%d requests", requests))
 		}
-		if hasTranscript {
-			parts = append(parts, "transcript")
-		}
+	}
+	if summary := formatSessionStateSummary(meta.session); summary != "" {
+		parts = append(parts, summary)
 	}
 	if len(parts) == 0 {
 		return "Saved session"
 	}
 	return strings.Join(parts, " · ")
+}
+
+func formatSessionStateSummary(sd *sessionData) string {
+	if sd == nil {
+		return ""
+	}
+	parts := make([]string, 0, 5)
+	if len(transcriptDisplayLines(sd.Transcript)) > 0 {
+		parts = append(parts, "transcript")
+	}
+	if hasSessionPayload(sd.PlanState) {
+		parts = append(parts, "plan")
+	}
+	if hasSessionPayload(sd.InvariantState) {
+		parts = append(parts, "invariants")
+	}
+	if hasSessionPayload(sd.VerificationState) {
+		parts = append(parts, "verification")
+	}
+	if hasSessionPayload(sd.SpecState) {
+		parts = append(parts, "spec")
+	}
+	return joinSessionStateSummary(parts)
+}
+
+func joinSessionStateSummary(parts []string) string {
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	default:
+		return strings.Join(parts, "/")
+	}
+}
+
+func hasSessionPayload(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" || trimmed == "[]" || trimmed == "{}" {
+		return false
+	}
+	return true
 }
 
 // extractSessionText extracts searchable text from a session.

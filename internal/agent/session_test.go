@@ -309,6 +309,35 @@ func TestLoadLatestSession_PicksLatest(t *testing.T) {
 	}
 }
 
+func TestLoadLatestSession_IgnoresReplayTraces(t *testing.T) {
+	dir := t.TempDir()
+	msgs := []core.ModelMessage{
+		core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "resume me"}}},
+	}
+	if err := SaveSession(dir, msgs, nil, nil, core.RunUsage{}, "saved-model", "provider", "", nil, nil, nil, nil); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	sessionDir, err := SessionDir(dir)
+	if err != nil {
+		t.Fatalf("SessionDir: %v", err)
+	}
+	replayRaw := []byte(`{"version":1,"start_time":"2026-03-13T10:00:00Z","model":"trace-model","provider":"provider","work_dir":"/tmp/test","events":[]}`)
+	if err := os.WriteFile(filepath.Join(sessionDir, "9999-12-31T23-59-59.replay.json"), replayRaw, 0o644); err != nil {
+		t.Fatalf("WriteFile replay trace: %v", err)
+	}
+
+	loaded, err := LoadLatestSession(dir)
+	if err != nil {
+		t.Fatalf("LoadLatestSession: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("expected saved session, got nil")
+	}
+	if loaded.Model != "saved-model" {
+		t.Fatalf("model=%q, want saved-model", loaded.Model)
+	}
+}
+
 func TestSaveSession_NilOptionalFields(t *testing.T) {
 	dir := t.TempDir()
 

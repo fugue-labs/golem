@@ -225,6 +225,71 @@ func TestSearchSessionsPrefersTranscriptSnippet(t *testing.T) {
 	}
 }
 
+func TestSearchSessionsSummaryIncludesWorkflowState(t *testing.T) {
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("Setenv HOME: %v", err)
+	}
+	defer func() { _ = os.Setenv("HOME", oldHome) }()
+
+	projectDir := t.TempDir()
+	sessionDir, err := sessionsBaseDir()
+	if err != nil {
+		t.Fatalf("sessionsBaseDir: %v", err)
+	}
+	projectHashDir := filepath.Join(sessionDir, strings.Repeat("b", 16))
+	if err := os.MkdirAll(projectHashDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	session := map[string]any{
+		"messages": []map[string]any{
+			{
+				"kind": "request",
+				"data": map[string]any{
+					"parts": []map[string]any{
+						{
+							"type": "user-prompt",
+							"data": map[string]any{"content": "resume the workflow"},
+						},
+					},
+				},
+			},
+		},
+		"work_dir":           projectDir,
+		"timestamp":          time.Now().UTC().Format(time.RFC3339),
+		"prompt":             "Workflow resume memory",
+		"model":              "gpt-5.4",
+		"provider":           "openai",
+		"usage":              map[string]any{"requests": 3},
+		"plan_state":         map[string]any{"tasks": []map[string]any{{"id": "T1", "description": "ship it", "status": "in_progress"}}},
+		"invariant_state":    map[string]any{"items": []map[string]any{{"id": "I1", "description": "tests pass", "status": "pass"}}},
+		"verification_state": map[string]any{"entries": []map[string]any{{"id": "V1", "command": "go test ./...", "status": "pass"}}},
+		"spec_state":         map[string]any{"file": "spec.md", "phase": "approved"},
+	}
+	raw, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("marshal session: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectHashDir, "2026-03-15T13-00-00.json"), raw, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	results, err := SearchSessions("workflow", "", 5)
+	if err != nil {
+		t.Fatalf("SearchSessions: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%d, want 1", len(results))
+	}
+	for _, want := range []string{"gpt-5.4 via openai", "3 requests", "plan", "invariants", "verification", "spec"} {
+		if !strings.Contains(results[0].Summary, want) {
+			t.Fatalf("summary=%q, want %q", results[0].Summary, want)
+		}
+	}
+}
+
 func TestSearchSessionsDecodesRealSavedTranscript(t *testing.T) {
 	home := t.TempDir()
 	oldHome := os.Getenv("HOME")

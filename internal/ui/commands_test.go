@@ -268,6 +268,9 @@ func TestCommandReplayList(t *testing.T) {
 	if content == "" {
 		t.Fatal("expected non-empty replay output")
 	}
+	if !strings.Contains(content, "/resume") {
+		t.Fatalf("expected replay guidance to mention resume, got %q", content)
+	}
 }
 
 func TestCommandDiff(t *testing.T) {

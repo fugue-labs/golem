@@ -95,8 +95,17 @@ func (s SessionSummary) RestorableStateDescription() string {
 	if s.HasTranscript {
 		parts = append(parts, "transcript state")
 	}
-	if s.HasPlan || s.HasInvariants || s.HasVerification || s.HasSpec {
-		parts = append(parts, "saved workflow data")
+	if s.HasPlan {
+		parts = append(parts, "plan state")
+	}
+	if s.HasInvariants {
+		parts = append(parts, "invariants")
+	}
+	if s.HasVerification {
+		parts = append(parts, "verification state")
+	}
+	if s.HasSpec {
+		parts = append(parts, "spec state")
 	}
 	return joinSummaryParts(parts)
 }
@@ -266,12 +275,13 @@ func LoadLatestSession(workDir string) (*SessionData, error) {
 		return nil, err
 	}
 
-	// Find JSON files and sort by name (timestamp-based, so lexicographic = chronological).
+	// Find saved session JSON files and sort by name (timestamp-based, so lexicographic = chronological).
 	var jsonFiles []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-			jsonFiles = append(jsonFiles, e.Name())
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || strings.HasSuffix(e.Name(), ".replay.json") {
+			continue
 		}
+		jsonFiles = append(jsonFiles, e.Name())
 	}
 	if len(jsonFiles) == 0 {
 		return nil, nil

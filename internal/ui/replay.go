@@ -26,7 +26,7 @@ func replayEmptyState(includeListHint bool) string {
 	if includeListHint {
 		lines = append(lines, "Use `/replay list` to inspect saved traces.")
 	}
-	lines = append(lines, "Use `/resume` to restore the last saved session state.")
+	lines = append(lines, "Use `/resume` after `/clear` to restore the last saved session state.")
 	return strings.Join(lines, "\n")
 }
 
@@ -39,11 +39,76 @@ func replayStartSummary(trace *agent.ReplayTrace) string {
 	if model == "" {
 		model = "unknown model"
 	}
+	stateSummary := replayTraceStateSummary(trace)
 	return strings.Join([]string{
 		fmt.Sprintf("Replaying session from %s.", trace.StartTime.Format("Jan 2 15:04")),
 		fmt.Sprintf("Model: %s via %s.", model, provider),
-		fmt.Sprintf("%d events. Press Esc to stop.", len(trace.Events)),
+		fmt.Sprintf("%d events. %s Press Esc to stop.", len(trace.Events), stateSummary),
 	}, "\n")
+}
+
+func replayTraceStateSummary(trace *agent.ReplayTrace) string {
+	if trace == nil || len(trace.Events) == 0 {
+		return "No recorded messages yet."
+	}
+
+	hasUser := false
+	hasAssistant := false
+	hasThinking := false
+	hasTool := false
+	for _, event := range trace.Events {
+		switch event.Kind {
+		case agent.EventUserInput:
+			hasUser = true
+		case agent.EventTextDelta:
+			hasAssistant = true
+		case agent.EventThinkDelta:
+			hasThinking = true
+		case agent.EventToolCall, agent.EventToolResult:
+			hasTool = true
+		}
+	}
+
+	parts := make([]string, 0, 4)
+	if hasUser {
+		parts = append(parts, "Includes user prompts")
+	}
+	if hasAssistant {
+		parts = append(parts, "assistant output")
+	}
+	if hasThinking {
+		parts = append(parts, "thinking traces")
+	}
+	if hasTool {
+		parts = append(parts, "tool activity")
+	}
+	if len(parts) == 0 {
+		return "No recorded messages yet."
+	}
+	return joinReplaySummaryParts(parts) + "."
+}
+
+func joinReplaySummaryParts(parts []string) string {
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	case 2:
+		return parts[0] + " and " + parts[1]
+	default:
+		return strings.Join(parts[:len(parts)-1], ", ") + ", and " + parts[len(parts)-1]
+	}
+}
+
+func replayTraceInfoStateSummary(events int) string {
+	if events <= 0 {
+		return "No recorded events yet."
+	}
+	if events == 1 {
+		return "One recorded event ready to replay."
+	}
+	return fmt.Sprintf("Recorded interaction ready to replay from %d events.", events)
 }
 
 // handleReplayCommand processes /replay commands.
@@ -102,17 +167,20 @@ func (m *Model) listTraces() *chat.Message {
 		if provider == "" {
 			provider = "unknown provider"
 		}
-		traceSummary := fmt.Sprintf("%s · %s via %s · %d events", t.Timestamp.Format("Jan 2 15:04"), t.Model, provider, t.Events)
-		if t.Events == 0 {
-			traceSummary += " · empty trace"
+		model := strings.TrimSpace(t.Model)
+		if model == "" {
+			model = "unknown model"
 		}
+		traceSummary := fmt.Sprintf("%s · %s via %s · %d events", t.Timestamp.Format("Jan 2 15:04"), model, provider, t.Events)
+		stateSummary := replayTraceInfoStateSummary(t.Events)
 		label := "saved"
 		if i == len(traces)-1 {
 			label = "latest"
 		}
 		fmt.Fprintf(&b, "- `%s` — %s · %s\n", t.Filename, traceSummary, label)
+		fmt.Fprintf(&b, "  %s\n", stateSummary)
 	}
-	b.WriteString("\nUse `/replay <filename>` to replay a specific trace, `/replay` for the latest trace, or `/resume` to restore the latest saved session state.")
+	b.WriteString("\nUse `/replay <filename>` to replay a specific trace, `/replay` for the latest trace, or `/resume` after `/clear` to restore the latest saved session state.")
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
 
