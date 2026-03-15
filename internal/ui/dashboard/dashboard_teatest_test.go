@@ -505,6 +505,40 @@ func TestTeatestMinimalSize(t *testing.T) {
 	}
 }
 
+func TestTeatestViewMetadataAndKeyboardNavigation(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 120, 40)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	refreshModel(t, m)
+
+	v := m.View()
+	if !v.AltScreen {
+		t.Fatal("expected alt screen metadata")
+	}
+	if !v.ReportFocus {
+		t.Fatal("expected focus reporting metadata")
+	}
+	if v.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("mouse mode = %v", v.MouseMode)
+	}
+	if !strings.Contains(v.WindowTitle, "GOLEM Dashboard") {
+		t.Fatalf("window title = %q", v.WindowTitle)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(*Model)
+	if m.focusPane != paneWorkers {
+		t.Fatalf("tab should advance focus to workers, got %d", m.focusPane)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '4'})
+	m = updated.(*Model)
+	if m.focusPane != paneEvents {
+		t.Fatalf("4 should focus events pane, got %d", m.focusPane)
+	}
+}
+
 // --- Keyboard Navigation Tests ---
 
 func TestTeatestFullPaneNavigation(t *testing.T) {
@@ -573,6 +607,58 @@ func TestTeatestFocusIndicatorRendering(t *testing.T) {
 	// The workers pane header should have the indicator.
 	if !strings.Contains(view2, "▸") {
 		t.Error("expected focus indicator after switching to workers pane")
+	}
+}
+
+func TestTeatestMouseClickFocusesPaneAndWheelScrolls(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 120, 40)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	refreshModel(t, m)
+
+	updated, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 90, Y: 10, Button: tea.MouseLeft}))
+	m = updated.(*Model)
+	if m.focusPane != paneWorkers {
+		t.Fatalf("click should focus workers pane, got %d", m.focusPane)
+	}
+
+	updated, _ = m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelDown}))
+	m = updated.(*Model)
+	if m.scrollPos[paneWorkers] != 1 {
+		t.Fatalf("wheel down should scroll focused workers pane, got %d", m.scrollPos[paneWorkers])
+	}
+
+	updated, _ = m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	m = updated.(*Model)
+	if m.scrollPos[paneWorkers] != 0 {
+		t.Fatalf("wheel up should scroll back toward top, got %d", m.scrollPos[paneWorkers])
+	}
+}
+
+func TestTeatestFocusReportingUpdatesWindowTitle(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 120, 40)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	refreshModel(t, m)
+
+	updated, _ := m.Update(tea.BlurMsg{})
+	m = updated.(*Model)
+	if m.terminalFocused {
+		t.Fatal("expected blur to clear focus flag")
+	}
+	if got := m.View().WindowTitle; !strings.Contains(got, "unfocused") {
+		t.Fatalf("blurred window title = %q", got)
+	}
+
+	updated, _ = m.Update(tea.FocusMsg{})
+	m = updated.(*Model)
+	if !m.terminalFocused {
+		t.Fatal("expected focus to restore focus flag")
+	}
+	if got := m.View().WindowTitle; strings.Contains(got, "unfocused") {
+		t.Fatalf("focused window title still marked unfocused: %q", got)
 	}
 }
 

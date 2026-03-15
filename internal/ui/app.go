@@ -122,13 +122,14 @@ type Model struct {
 	activeSkills []skills.Skill
 
 	// State.
-	messages   []*chat.Message
-	history    []core.ModelMessage // gollem conversation history across turns
-	scroll     int
-	width      int
-	height     int
-	busy       bool
-	usage      core.RunUsage
+	messages        []*chat.Message
+	history         []core.ModelMessage // gollem conversation history across turns
+	scroll          int
+	width           int
+	height          int
+	busy            bool
+	terminalFocused bool
+	usage           core.RunUsage
 	startTime  time.Time
 	runID      int
 	hookRID    atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
@@ -265,10 +266,11 @@ func New(cfg *config.Config) *Model {
 		approvalNever:  make(map[string]bool),
 		costTracker:    core.NewCostTracker(modelPricing()),
 		teamEventBus:   core.NewEventBus(),
-		checkpoints:    checkpoint.NewStore(cfg.WorkingDir),
-		historyIdx:     -1,
-		allSkills:      allSkills,
-		pace:           ps,
+		checkpoints:     checkpoint.NewStore(cfg.WorkingDir),
+		historyIdx:      -1,
+		allSkills:       allSkills,
+		pace:            ps,
+		terminalFocused: true,
 	}
 }
 
@@ -354,6 +356,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyStyles(styles.NewMode(msg.Color, &isDark))
 		return m, nil
 
+	case tea.FocusMsg:
+		m.terminalFocused = true
+		return m, nil
+
+	case tea.BlurMsg:
+		m.terminalFocused = false
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -378,6 +388,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseWheelMsg:
+		switch msg.Mouse().Button {
+		case tea.MouseWheelUp:
+			m.scroll++
+		case tea.MouseWheelDown:
+			if m.scroll > 0 {
+				m.scroll--
+			}
+		}
+		return m, nil
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -1229,11 +1250,13 @@ func (m *Model) ensureStyles() {
 func (m *Model) View() tea.View {
 	m.ensureStyles()
 	if m.sty == nil {
-		return tea.NewView("Loading...")
+		v := tea.NewView("Loading...")
+		m.configureView(&v)
+		return v
 	}
 	if m.height <= 0 {
 		v := tea.NewView("")
-		v.AltScreen = true
+		m.configureView(&v)
 		return v
 	}
 
@@ -1252,15 +1275,48 @@ func (m *Model) View() tea.View {
 	sections = append(sections, input, status)
 
 	v := tea.NewView(strings.Join(sections, "\n"))
-	v.AltScreen = true
+	m.configureView(&v)
 	return v
+}
+
+func (m *Model) configureView(v *tea.View) {
+	if v == nil {
+		return
+	}
+	v.AltScreen = true
+	v.WindowTitle = m.windowTitle()
+	v.ReportFocus = true
+	v.MouseMode = tea.MouseModeCellMotion
+}
+
+func (m *Model) windowTitle() string {
+	title := "GOLEM"
+	parts := []string{title}
+	if m.cfg != nil {
+		if dir := strings.TrimSpace(m.cfg.ShortDir()); dir != "" {
+			parts = append(parts, dir)
+		}
+	}
+	switch {
+	case m.approvalMode:
+		parts = append(parts, "approval")
+	case m.askMode:
+		parts = append(parts, "need input")
+	case m.busy:
+		parts = append(parts, "working")
+	default:
+		parts = append(parts, "ready")
+	}
+	return strings.Join(parts, " — ")
 }
 
 func (m *Model) renderCompactView() tea.View {
 	sections := make([]string, 0, 4)
 	switch {
 	case m.height <= 0:
-		return tea.NewView("")
+		v := tea.NewView("")
+		m.configureView(&v)
+		return v
 	case m.height == 1:
 		sections = append(sections, m.renderCompactInput())
 	case m.height == 2:
@@ -1276,7 +1332,7 @@ func (m *Model) renderCompactView() tea.View {
 		sections = append(sections, input, status)
 	}
 	v := tea.NewView(strings.Join(sections, "\n"))
-	v.AltScreen = true
+	m.configureView(&v)
 	return v
 }
 
@@ -1410,12 +1466,17 @@ func (m *Model) renderInputMeta() string {
 		return "Enter answer · Esc cancel"
 	case m.busy:
 		return "Enter steers · Esc cancels"
+	case !m.terminalFocused:
+		return "Input paused · refocus terminal to type"
 	default:
 		return "Enter send · Shift+Enter newline · Tab complete"
 	}
 }
 
 func (m *Model) renderStatusMeta() string {
+	if !m.terminalFocused {
+		return "Terminal unfocused"
+	}
 	if m.busy {
 		return "Runtime state"
 	}
