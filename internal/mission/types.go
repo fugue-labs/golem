@@ -284,20 +284,21 @@ type PlanTask struct {
 
 // MissionSummary provides a concise view of mission state for the TUI.
 type MissionSummary struct {
-	Mission          *Mission          `json:"mission"`
-	TaskCounts       TaskCounts        `json:"task_counts"`
-	ActiveRuns       int               `json:"active_runs"`
-	PendingApprovals int               `json:"pending_approvals"`
-	DependencyEdges  int               `json:"dependency_edges"`
-	PhaseLabel       string            `json:"phase_label,omitempty"`
-	NextAction       string            `json:"next_action,omitempty"`
-	Attention        string            `json:"attention,omitempty"`
-	FocusTask        *MissionTaskView  `json:"focus_task,omitempty"`
-	NextTask         *MissionTaskView  `json:"next_task,omitempty"`
-	RunningTasks     []MissionTaskView `json:"running_tasks,omitempty"`
-	ReviewTasks      []MissionTaskView `json:"review_tasks,omitempty"`
-	ReadyTasks       []MissionTaskView `json:"ready_tasks,omitempty"`
-	BlockedTasks     []MissionTaskView `json:"blocked_tasks,omitempty"`
+	Mission              *Mission          `json:"mission"`
+	TaskCounts           TaskCounts        `json:"task_counts"`
+	ActiveRuns           int               `json:"active_runs"`
+	PendingApprovals     int               `json:"pending_approvals"`
+	DependencyEdges      int               `json:"dependency_edges"`
+	PhaseLabel           string            `json:"phase_label,omitempty"`
+	NextAction           string            `json:"next_action,omitempty"`
+	Attention            string            `json:"attention,omitempty"`
+	FocusTask            *MissionTaskView  `json:"focus_task,omitempty"`
+	NextTask             *MissionTaskView  `json:"next_task,omitempty"`
+	RunningTasks         []MissionTaskView `json:"running_tasks,omitempty"`
+	ReviewTasks          []MissionTaskView `json:"review_tasks,omitempty"`
+	ReadyTasks           []MissionTaskView `json:"ready_tasks,omitempty"`
+	BlockedTasks         []MissionTaskView `json:"blocked_tasks,omitempty"`
+	PendingApprovalItems []MissionTaskView `json:"pending_approval_items,omitempty"`
 }
 
 // MissionTaskView is a compact task snapshot used in mission summaries.
@@ -307,6 +308,7 @@ type MissionTaskView struct {
 	Status         TaskStatus `json:"status"`
 	BlockingReason string     `json:"blocking_reason,omitempty"`
 	DependsOn      []string   `json:"depends_on,omitempty"`
+	ApprovalKind   string     `json:"approval_kind,omitempty"`
 }
 
 // TaskCounts aggregates task states for display.

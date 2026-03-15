@@ -196,37 +196,40 @@ func renderMissionSummaryMessage(summary *mission.MissionSummary) *chat.Message 
 		fmt.Fprintf(&b, "Progress: **%d/%d** complete · **%d** dependency edge(s)\n\n", tc.Completed(), tc.Total, summary.DependencyEdges)
 	}
 
+	writeMissionTaskSection := func(label string, tasks []mission.MissionTaskView, formatLine func(mission.MissionTaskView) string) {
+		if len(tasks) == 0 {
+			return
+		}
+		fmt.Fprintf(&b, "**%s: %d**\n", label, len(tasks))
+		for _, task := range tasks {
+			fmt.Fprintf(&b, "%s\n", formatLine(task))
+		}
+	}
+
 	if summary.ActiveRuns > 0 {
 		fmt.Fprintf(&b, "**Active runs**: %d\n", summary.ActiveRuns)
 		for _, task := range summary.RunningTasks {
 			fmt.Fprintf(&b, "- Running: %s\n", task.Title)
 		}
 	}
-	if summary.PendingApprovals > 0 {
-		fmt.Fprintf(&b, "**Pending approvals**: %d\n", summary.PendingApprovals)
-	}
-	if len(summary.BlockedTasks) > 0 {
-		fmt.Fprintf(&b, "**Blocked tasks**: %d\n", len(summary.BlockedTasks))
-		for _, task := range summary.BlockedTasks {
-			if task.BlockingReason != "" {
-				fmt.Fprintf(&b, "- Blocked: %s — %s\n", task.Title, task.BlockingReason)
-			} else {
-				fmt.Fprintf(&b, "- Blocked: %s\n", task.Title)
-			}
+	writeMissionTaskSection("Pending approvals", summary.PendingApprovalItems, func(task mission.MissionTaskView) string {
+		if task.ApprovalKind != "" {
+			return fmt.Sprintf("- Approval: %s (%s)", task.Title, task.ApprovalKind)
 		}
-	}
-	if len(summary.ReviewTasks) > 0 {
-		fmt.Fprintf(&b, "**Awaiting review**: %d\n", len(summary.ReviewTasks))
-		for _, task := range summary.ReviewTasks {
-			fmt.Fprintf(&b, "- Review: %s\n", task.Title)
+		return fmt.Sprintf("- Approval: %s", task.Title)
+	})
+	writeMissionTaskSection("Blocked tasks", summary.BlockedTasks, func(task mission.MissionTaskView) string {
+		if task.BlockingReason != "" {
+			return fmt.Sprintf("- Blocked: %s — %s", task.Title, task.BlockingReason)
 		}
-	}
-	if len(summary.ReadyTasks) > 0 {
-		fmt.Fprintf(&b, "**Ready queue**: %d\n", len(summary.ReadyTasks))
-		for _, task := range summary.ReadyTasks {
-			fmt.Fprintf(&b, "- Ready: %s\n", task.Title)
-		}
-	}
+		return fmt.Sprintf("- Blocked: %s", task.Title)
+	})
+	writeMissionTaskSection("Awaiting review", summary.ReviewTasks, func(task mission.MissionTaskView) string {
+		return fmt.Sprintf("- Review: %s", task.Title)
+	})
+	writeMissionTaskSection("Ready queue", summary.ReadyTasks, func(task mission.MissionTaskView) string {
+		return fmt.Sprintf("- Ready: %s", task.Title)
+	})
 
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }

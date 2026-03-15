@@ -2,13 +2,9 @@ package ui
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
-
-	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/mission"
@@ -16,10 +12,10 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
 
-// testMissionModel creates a Model wired to a Dolt mission store.
+// testMissionModel creates a Model wired to an in-memory mission store.
 func testMissionModel(t *testing.T) (*Model, *mission.Controller) {
 	t.Helper()
-	store := openTestDoltStore(t)
+	store := mission.NewInMemoryStore()
 	ctrl := mission.NewController(store)
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
@@ -29,67 +25,6 @@ func testMissionModel(t *testing.T) (*Model, *mission.Controller) {
 		m.appCancel()
 	})
 	return m, ctrl
-}
-
-func openTestDoltStore(t *testing.T) *mission.DoltStore {
-	t.Helper()
-	dbName := fmt.Sprintf("testmpanel_%d", time.Now().UnixNano())
-
-	const dsnParams = "?timeout=5s&readTimeout=5s&writeTimeout=5s"
-	rootDB, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/"+dsnParams)
-	if err != nil {
-		t.Skip("Dolt server not available:", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Use a single connection to avoid database/sql retry loop on ErrBadConn.
-	conn, err := rootDB.Conn(ctx)
-	if err != nil {
-		rootDB.Close()
-		t.Skip("Dolt server not reachable:", err)
-	}
-	if _, err := conn.ExecContext(ctx, "CREATE DATABASE `"+dbName+"`"); err != nil {
-		conn.Close()
-		rootDB.Close()
-		t.Skip("Cannot create test database:", err)
-	}
-	conn.Close()
-	rootDB.Close()
-
-	dsn := "root@tcp(127.0.0.1:3307)/" + dbName + dsnParams
-	type storeResult struct {
-		store *mission.DoltStore
-		err   error
-	}
-	ch := make(chan storeResult, 1)
-	go func() {
-		s, e := mission.OpenDoltStore(dsn)
-		ch <- storeResult{s, e}
-	}()
-	var store *mission.DoltStore
-	select {
-	case res := <-ch:
-		if res.err != nil {
-			t.Skip("Cannot open Dolt store:", res.err)
-		}
-		store = res.store
-	case <-time.After(15 * time.Second):
-		t.Skip("Dolt store open timed out")
-	}
-	t.Cleanup(func() {
-		store.Close()
-		cleanup, err := sql.Open("mysql", "root@tcp(127.0.0.1:3307)/"+dsnParams)
-		if err != nil {
-			return
-		}
-		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer ccancel()
-		cleanup.ExecContext(cctx, "DROP DATABASE IF EXISTS `"+dbName+"`")
-		cleanup.Close()
-	})
-	return store
 }
 
 // seedMission creates a mission with tasks at various statuses and returns the mission ID.

@@ -3,7 +3,6 @@ package mission
 import (
 	"context"
 	"fmt"
-	"slices"
 )
 
 // BuildMissionSummary derives a mission summary from durable mission, task,
@@ -68,19 +67,11 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 		}
 	}
 
-	pendingApprovals := 0
-	for _, approval := range approvals {
-		if approval.Status == ApprovalPending {
-			pendingApprovals++
-		}
-	}
-
 	summary := &MissionSummary{
-		Mission:          m,
-		TaskCounts:       counts,
-		ActiveRuns:       activeRuns,
-		PendingApprovals: pendingApprovals,
-		DependencyEdges:  len(deps),
+		Mission:         m,
+		TaskCounts:      counts,
+		ActiveRuns:      activeRuns,
+		DependencyEdges: len(deps),
 	}
 
 	for _, task := range tasks {
@@ -102,10 +93,29 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 			summary.BlockedTasks = append(summary.BlockedTasks, view)
 		}
 	}
-	sortMissionTaskViews(summary.RunningTasks)
-	sortMissionTaskViews(summary.ReviewTasks)
-	sortMissionTaskViews(summary.ReadyTasks)
-	sortMissionTaskViews(summary.BlockedTasks)
+
+	for _, approval := range approvals {
+		if approval.Status != ApprovalPending {
+			continue
+		}
+		summary.PendingApprovals++
+		title := "Approval gate"
+		if approval.TaskID != "" {
+			for _, task := range tasks {
+				if task.ID == approval.TaskID {
+					title = task.Title
+					break
+				}
+			}
+		} else if approval.Kind != "" {
+			title = fmt.Sprintf("%s approval", approval.Kind)
+		}
+		summary.PendingApprovalItems = append(summary.PendingApprovalItems, MissionTaskView{
+			ID:           approval.ID,
+			Title:        title,
+			ApprovalKind: approval.Kind,
+		})
+	}
 
 	focus := selectMissionFocusTask(summary, tasks, depMap)
 	if focus != nil {
@@ -175,28 +185,6 @@ func selectMissionFocusTask(summary *MissionSummary, tasks []*Task, depMap map[s
 		TaskFailed,
 		TaskRejected,
 	)
-}
-
-func sortMissionTaskViews(tasks []MissionTaskView) {
-	slices.SortStableFunc(tasks, func(a, b MissionTaskView) int {
-		return compareMissionTaskViews(a, b)
-	})
-}
-
-func compareMissionTaskViews(a, b MissionTaskView) int {
-	if a.Title != b.Title {
-		if a.Title < b.Title {
-			return -1
-		}
-		return 1
-	}
-	if a.ID < b.ID {
-		return -1
-	}
-	if a.ID > b.ID {
-		return 1
-	}
-	return 0
 }
 
 func selectMissionNextTask(tasks []*Task, depMap map[string][]string, focus *MissionTaskView) *MissionTaskView {

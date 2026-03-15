@@ -1677,7 +1677,17 @@ func (m *Model) visibleChatLines(bodyHeight, width int) []string {
 			requestedScroll = 0
 		}
 		if len(block) > remaining {
-			block = block[len(block)-remaining:]
+			trimmed := block
+			for len(trimmed) > 0 && strings.TrimSpace(trimmed[len(trimmed)-1]) == "" {
+				trimmed = trimmed[:len(trimmed)-1]
+			}
+			if len(trimmed) == 0 {
+				trimmed = block
+			}
+			if len(trimmed) > remaining {
+				trimmed = trimmed[len(trimmed)-remaining:]
+			}
+			block = trimmed
 		}
 		lines = append(block, lines...)
 		remaining = bodyHeight - len(lines)
