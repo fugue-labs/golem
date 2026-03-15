@@ -8,7 +8,7 @@
 - **Scope**: v1 local-first, single-host mission orchestration for repository work
 - **Audience**: implementation agents, maintainers, reviewers
 - **Quality bar**: the system must feel competitive with the best terminal coding agents in reliability, sophistication, and operator trust while remaining simpler and more elegant than a daemon-first platform
-- **Decision rule**: if implementation behavior differs from this document, the implementation is wrong unless this document is updated first
+- **Decision rule**: for the current shipped operator contract, §§7.3-7.7 and §20.3.1 take precedence; later sections remain forward-looking unless explicitly marked as current shipped behavior
 
 ---
 
@@ -303,7 +303,7 @@ Current behavior:
 - scope-based scheduling exclusion
 - review-required integration
 - explicit approval gates
-- CLI and TUI mission surfaces
+- shipped `/mission ...` TUI flow plus `golem dashboard` Mission Control
 - deterministic tests and opt-in live smoke tests
 
 ### 8.2 Explicitly out of scope for v1
@@ -369,9 +369,11 @@ v1 is **single-process and local-first**:
 - `golem` launches the mission controller in-process
 - worker and review runs are spawned as child mission runs managed by the controller
 - durable state is written immediately to SQLite and artifact files
-- on restart, the controller reconciles store state with repository state
+- restart preserves durable mission truth, and the shipped operator path re-enters orchestration from `/mission start`
 
 There is **no required local daemon** in v1.
+
+**Current shipped note:** recovery and replan-related code exists in the mission subsystem, but the normal TUI flow should be described as durable-state re-entry plus in-process orchestrator restart, not as automatic daemon-style attach/resume on launch.
 
 A daemon mode may be added later if and only if it materially improves:
 
@@ -681,15 +683,15 @@ The controller also owns an **integration worktree** or mission branch workspace
 
 ## 13.2 Repository baseline
 
-At mission start, the controller must record:
+The controller records mission repository context when the mission is created:
 
-- repository root
-- HEAD commit
-- dirty working tree status
-- current branch
-- whether the mission is allowed to run on a dirty repo
+- repository root (`RepoRoot`)
+- current branch (`BaseBranch`)
+- HEAD commit when available (`BaseCommit`)
 
-Default policy:
+**Current shipped note:** the TUI currently supplies `repo_root` and `base_branch`, while `base_commit` is still empty because `gitCommit()` returns an empty string. `CreateMission` does not yet enforce dirty-repo or other repository preconditions itself, so treat the stricter policy below as forward-looking unless code lands to enforce it.
+
+Desired policy direction:
 - refuse mission start on a dirty repo unless the user explicitly approves
 
 ## 13.3 Merge strategy
@@ -758,11 +760,11 @@ A review result is one of:
 - task may move to integration
 
 ### `fail`
-- task returns to planning/retry path
+- current implementation requeues the task to `ready` with reviewer feedback in `BlockingReason`
 - result must include explicit rejection reasons
 
 ### `partial`
-- task may split into targeted follow-up tasks
+- current implementation uses the `request_changes` path, which also returns the task to `ready` with focused follow-up guidance
 - original worker diff does not integrate yet
 
 ---
@@ -1864,14 +1866,14 @@ Required primary views:
 **Current shipped note:** repository precondition enforcement is not currently performed by `CreateMission`; if stricter repo validation is desired, treat it as future work rather than current behavior.
 
 ### Review rejection flow
-1. operator sees rejected task in board and review queue
-2. selecting the task opens worker summary, diff, and review evidence
-3. operator can choose retry, force replan, or cancel mission path
+1. operator sees the task return to the ready/blocked work queue with recorded review evidence
+2. dashboard evidence and mission status expose the review summary, approval record, and follow-up context
+3. current shipped operator actions remain: let orchestration retry from the queue, inspect evidence, pause, start, or cancel
 
 ### Approval flow
 1. approval queue highlights blocking request
-2. approval detail screen shows requested action, evidence, paused work, and consequences
-3. operator can approve or reject without losing surrounding mission context
+2. for the shipped mission-plan gate, `/mission approve` resolves the durable approval via `ApproveMission`
+3. after approval, the TUI immediately attempts mission start, but execution still stays gated until all remaining approvals are resolved
 
 ### Completion flow
 1. overview shows mission in completing/completed state
@@ -2769,5 +2771,12 @@ The implementation must not:
 3. If a design choice makes the system feel more distributed than necessary, more magical than auditable, or more complicated than explainable, that design choice is wrong.
 4. If a decision belongs in the reusable orchestration core, put it in Gollem.
 5. If a decision belongs to product UX or presentation, keep it in Golem.
+
+The correct v1 mission system should feel like a natural extension of Golem’s existing disciplined coding workflow, not like a separate platform stapled onto it.
+, put it in Gollem.
+5. If a decision belongs to product UX or presentation, keep it in Golem.
+
+The correct v1 mission system should feel like a natural extension of Golem’s existing disciplined coding workflow, not like a separate platform stapled onto it.
+longs to product UX or presentation, keep it in Golem.
 
 The correct v1 mission system should feel like a natural extension of Golem’s existing disciplined coding workflow, not like a separate platform stapled onto it.

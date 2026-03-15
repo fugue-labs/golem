@@ -71,14 +71,15 @@ Mission orchestration is currently exposed through two operator-facing surfaces.
    - `/mission new <goal>` creates a durable mission in `draft` state.
    - Mission creation is seeded from the current TUI repo context. Today that means the TUI supplies `repo_root` and `base_branch`, while `base_commit` is currently left empty because HEAD capture is not yet wired into `gitCommit()`.
    - The current implementation persists that draft mission, but does **not** yet enforce repository preconditions inside `CreateMission` itself.
-   - `/mission status` renders the durable mission summary, including status, phase label, next action, focus task, queued next task, DAG counts, active runs, approvals, blocked tasks, review queue, and ready queue.
+   - `/mission status` renders the durable mission summary, including status, phase label, attention text, next action, focus task, queued next task, DAG counts, active runs, approvals, blocked tasks, review queue, and ready queue.
    - `/mission tasks` lists the current task DAG with task IDs, statuses, titles, objectives, and dependency edges.
    - `/mission plan` invokes the planner, moves the mission to `planning`, and later applies the DAG into durable store state.
-   - `/mission approve` resolves the durable mission-plan approval and immediately attempts to start execution.
+   - Applying the plan creates durable tasks, dependencies, and a durable mission-plan approval row, then moves the mission to `awaiting_approval`.
+   - `/mission approve` resolves the durable mission-plan approval via `ApproveMission` and immediately attempts to start execution.
    - `/mission start` starts a `paused` mission or starts an `awaiting_approval` mission only when the plan approval is already approved and no other approvals remain.
-   - `/mission pause` pauses a running mission and stops new task leasing.
-   - `/mission cancel` marks the mission cancelled and clears the current active mission from the chat session.
-   - `/mission list` lists known missions and marks the chat session's active one.
+   - `/mission pause` pauses a running mission after stopping the in-process orchestrator, so no new tasks are leased while the mission remains paused.
+   - `/mission cancel` stops the in-process orchestrator, marks the mission cancelled, and clears the current active mission from the chat session.
+   - `/mission list` lists known missions and marks the current chat session's active mission.
 
 2. **`golem dashboard` Mission Control**
    - Opens the durable mission store and shows the most relevant mission even if no chat transcript is active.
@@ -116,7 +117,9 @@ Mission status surfaces intentionally rely on durable mission state instead of c
 - the controller owns lifecycle transitions and mission summary derivation from durable missions, tasks, dependencies, runs, and approvals,
 - the scheduler/worker launcher is responsible for safe ready-task leasing and worker preparation,
 - the in-process orchestrator tick loop dispatches workers, dispatches reviewers, integrates accepted work, checks completion, and emits transient TUI event-bus updates such as `worker.started`, `worker.completed`, `review.pass`, `review.reject`, `review.request_changes`, `integration.completed`, `integration.failed`, and `mission.completed`,
-- pending approvals are rendered both in `/mission status` and the dashboard evidence pane, and
+- pending approvals are rendered both in `/mission status` and the dashboard evidence pane,
+- the dashboard header surfaces mission status, task progress, active workers, pending approvals, evidence count, elapsed time, repo, branch, and worker budget,
+- the dashboard keeps its four-pane Mission Control layout: **Tasks**, **Workers**, **Evidence**, and **Events**, and
 - dashboard evidence also includes review results, failures, and recorded artifacts.
 
 ### Mission persistence expectations
