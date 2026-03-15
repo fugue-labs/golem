@@ -372,8 +372,11 @@ func (m *Model) handleMissionApprove() *chat.Message {
 	}
 
 	ctx := m.appCtx
+	if err := ctrl.ApproveMission(ctx, m.activeMissionID); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to approve mission: %v", err)}
+	}
 	if err := ctrl.StartMission(ctx, m.activeMissionID); err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to approve/start mission: %v", err)}
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to start mission after approval: %v", err)}
 	}
 
 	m.startOrchestrator()

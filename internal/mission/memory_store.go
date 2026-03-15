@@ -322,64 +322,8 @@ func (s *InMemoryStore) ListApprovals(_ context.Context, missionID string) ([]*A
 	return out, nil
 }
 
-func (s *InMemoryStore) GetMissionSummary(_ context.Context, missionID string) (*MissionSummary, error) {
-	s.mu.Lock()
-	m, ok := s.missions[missionID]
-	if !ok {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("mission %s not found", missionID)
-	}
-	mCopy := *m
-
-	var counts TaskCounts
-	for _, t := range s.tasks {
-		if t.MissionID != missionID {
-			continue
-		}
-		counts.Total++
-		switch t.Status {
-		case TaskPending:
-			counts.Pending++
-		case TaskReady:
-			counts.Ready++
-		case TaskRunning, TaskLeased:
-			counts.Running++
-		case TaskAwaitingReview:
-			counts.AwaitingReview++
-		case TaskAccepted:
-			counts.Accepted++
-		case TaskIntegrated:
-			counts.Integrated++
-		case TaskDone:
-			counts.Done++
-		case TaskBlocked:
-			counts.Blocked++
-		case TaskFailed, TaskRejected:
-			counts.Failed++
-		}
-	}
-
-	var activeRuns int
-	for _, r := range s.runs {
-		if r.MissionID == missionID && r.Status == RunRunning {
-			activeRuns++
-		}
-	}
-
-	var pendingApprovals int
-	for _, a := range s.approvals {
-		if a.MissionID == missionID && a.Status == ApprovalPending {
-			pendingApprovals++
-		}
-	}
-	s.mu.Unlock()
-
-	return &MissionSummary{
-		Mission:          &mCopy,
-		TaskCounts:       counts,
-		ActiveRuns:       activeRuns,
-		PendingApprovals: pendingApprovals,
-	}, nil
+func (s *InMemoryStore) GetMissionSummary(ctx context.Context, missionID string) (*MissionSummary, error) {
+	return BuildMissionSummary(ctx, s, missionID)
 }
 
 func (s *InMemoryStore) GetReadyTasks(_ context.Context, missionID string) ([]*Task, error) {

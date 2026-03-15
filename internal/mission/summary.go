@@ -3,6 +3,7 @@ package mission
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // BuildMissionSummary derives a mission summary from durable mission, task,
@@ -31,8 +32,12 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 	}
 
 	depMap := make(map[string][]string, len(tasks))
+	taskByID := make(map[string]*Task, len(tasks))
 	for _, dep := range deps {
 		depMap[dep.TaskID] = append(depMap[dep.TaskID], dep.DependsOnID)
+	}
+	for _, task := range tasks {
+		taskByID[task.ID] = task
 	}
 
 	var counts TaskCounts
@@ -99,17 +104,7 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 			continue
 		}
 		summary.PendingApprovals++
-		title := "Approval gate"
-		if approval.TaskID != "" {
-			for _, task := range tasks {
-				if task.ID == approval.TaskID {
-					title = task.Title
-					break
-				}
-			}
-		} else if approval.Kind != "" {
-			title = fmt.Sprintf("%s approval", approval.Kind)
-		}
+		title := approvalDisplayTitle(approval, taskByID)
 		summary.PendingApprovalItems = append(summary.PendingApprovalItems, MissionTaskView{
 			ID:           approval.ID,
 			Title:        title,
@@ -131,6 +126,24 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 	summary.Attention = missionAttention(summary)
 
 	return summary, nil
+}
+
+func approvalDisplayTitle(approval *Approval, taskByID map[string]*Task) string {
+	if approval == nil {
+		return "Approval gate"
+	}
+	if approval.Kind == missionPlanApprovalKind {
+		return "Mission plan approval"
+	}
+	if approval.TaskID != "" {
+		if task := taskByID[approval.TaskID]; task != nil && strings.TrimSpace(task.Title) != "" {
+			return task.Title
+		}
+	}
+	if approval.Kind != "" {
+		return fmt.Sprintf("%s approval", approval.Kind)
+	}
+	return "Approval gate"
 }
 
 func selectMissionTaskView(tasks []*Task, depMap map[string][]string, statuses ...TaskStatus) *MissionTaskView {

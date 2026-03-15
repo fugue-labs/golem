@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -111,10 +112,15 @@ func (c *Controller) ApplyPlan(ctx context.Context, missionID string, plan *Plan
 	}
 
 	now := time.Now().UTC()
+	approval, err := newMissionPlanApproval(missionID, prepared, now)
+	if err != nil {
+		return fmt.Errorf("build plan approval: %w", err)
+	}
 	rollback := applyPlanRollback{
-		mission:           cloneMission(m),
-		createdTaskIDs:    make([]string, 0, len(prepared.Tasks)),
-		addedDependencies: append([]TaskDependency(nil), prepared.Dependencies...),
+		mission:            cloneMission(m),
+		createdTaskIDs:     make([]string, 0, len(prepared.Tasks)),
+		addedDependencies:  append([]TaskDependency(nil), prepared.Dependencies...),
+		createdApprovalIDs: []string{approval.ID},
 	}
 	committed := false
 	defer func() {
@@ -157,6 +163,9 @@ func (c *Controller) ApplyPlan(ctx context.Context, missionID string, plan *Plan
 	if err := c.resolveReadyTasks(ctx, missionID); err != nil {
 		return fmt.Errorf("resolve ready tasks: %w", err)
 	}
+	if err := c.store.CreateApproval(ctx, approval); err != nil {
+		return fmt.Errorf("create plan approval: %w", err)
+	}
 
 	updatedMission := cloneMission(m)
 	if len(prepared.SuccessCriteria) > 0 {
@@ -177,6 +186,48 @@ func (c *Controller) ApplyPlan(ctx context.Context, missionID string, plan *Plan
 	return nil
 }
 
+// ApproveMission resolves the durable mission-plan approval gate.
+func (c *Controller) ApproveMission(ctx context.Context, missionID string) error {
+	m, err := c.store.GetMission(ctx, missionID)
+	if err != nil {
+		return err
+	}
+	if m.Status != MissionAwaitingApproval {
+		return fmt.Errorf("cannot approve mission in %s state", m.Status)
+	}
+
+	approval, err := c.resolveMissionPlanApproval(ctx, missionID)
+	if err != nil {
+		return err
+	}
+	if approval == nil {
+		return fmt.Errorf("mission %s is missing a durable plan approval gate", missionID)
+	}
+	if approval.Status == ApprovalApproved {
+		return nil
+	}
+	if approval.Status != ApprovalPending {
+		return fmt.Errorf("cannot approve mission plan in %s state", approval.Status)
+	}
+
+	now := time.Now().UTC()
+	approval.Status = ApprovalApproved
+	approval.ResolvedAt = &now
+	approval.ResponseJSON = marshalApprovalResponseJSON(map[string]any{
+		"decision":    "approved",
+		"approved_at": now.Format(time.RFC3339Nano),
+	})
+	if err := c.store.UpdateApproval(ctx, approval); err != nil {
+		return fmt.Errorf("approve mission plan: %w", err)
+	}
+	c.store.AppendEvent(ctx, &Event{ //nolint:errcheck
+		MissionID: missionID,
+		Type:      "mission.approved",
+		CreatedAt: now,
+	})
+	return nil
+}
+
 // StartMission transitions a mission from awaiting_approval to running.
 func (c *Controller) StartMission(ctx context.Context, missionID string) error {
 	m, err := c.store.GetMission(ctx, missionID)
@@ -187,6 +238,33 @@ func (c *Controller) StartMission(ctx context.Context, missionID string) error {
 		return fmt.Errorf("cannot start mission in %s state (need awaiting_approval or paused)", m.Status)
 	}
 	if m.Status == MissionAwaitingApproval {
+		approval, err := c.resolveMissionPlanApproval(ctx, missionID)
+		if err != nil {
+			return err
+		}
+		if approval == nil {
+			return fmt.Errorf("cannot start mission without a durable mission-plan gate")
+		}
+		if approval.Status == ApprovalPending {
+			now := time.Now().UTC()
+			approval.Status = ApprovalApproved
+			approval.ResolvedAt = &now
+			approval.ResponseJSON = marshalApprovalResponseJSON(map[string]any{
+				"decision":    "approved",
+				"approved_at": now.Format(time.RFC3339Nano),
+				"source":      "mission.start",
+			})
+			if err := c.store.UpdateApproval(ctx, approval); err != nil {
+				return fmt.Errorf("approve mission plan during start: %w", err)
+			}
+			c.store.AppendEvent(ctx, &Event{ //nolint:errcheck
+				MissionID: missionID,
+				Type:      "mission.approved",
+				CreatedAt: now,
+			})
+		} else if approval.Status != ApprovalApproved {
+			return fmt.Errorf("cannot start mission with %s plan approval", approval.Status)
+		}
 		pendingApprovals, err := c.listPendingApprovals(ctx, missionID)
 		if err != nil {
 			return fmt.Errorf("list pending approvals: %w", err)
@@ -309,9 +387,10 @@ func (c *Controller) Close() error {
 }
 
 type applyPlanRollback struct {
-	mission           *Mission
-	createdTaskIDs    []string
-	addedDependencies []TaskDependency
+	mission            *Mission
+	createdTaskIDs     []string
+	addedDependencies  []TaskDependency
+	createdApprovalIDs []string
 }
 
 func (c *Controller) collectExistingTaskIDs(ctx context.Context) (map[string]bool, error) {
@@ -398,8 +477,101 @@ func (c *Controller) listPendingApprovals(ctx context.Context, missionID string)
 	return pending, nil
 }
 
+func (c *Controller) resolveMissionPlanApproval(ctx context.Context, missionID string) (*Approval, error) {
+	approvals, err := c.store.ListApprovals(ctx, missionID)
+	if err != nil {
+		return nil, fmt.Errorf("list approvals: %w", err)
+	}
+	var latest *Approval
+	for _, approval := range approvals {
+		if approval == nil || approval.Kind != missionPlanApprovalKind {
+			continue
+		}
+		if latest == nil || approval.CreatedAt.After(latest.CreatedAt) || (approval.CreatedAt.Equal(latest.CreatedAt) && approval.ID > latest.ID) {
+			cp := *approval
+			latest = &cp
+		}
+	}
+	return latest, nil
+}
+
+func newMissionPlanApproval(missionID string, plan *PlanResult, now time.Time) (*Approval, error) {
+	request, err := marshalMissionPlanApprovalRequest(plan)
+	if err != nil {
+		return nil, err
+	}
+	return &Approval{
+		ID:          generateID("ap"),
+		MissionID:   missionID,
+		Kind:        missionPlanApprovalKind,
+		Status:      ApprovalPending,
+		RequestJSON: request,
+		CreatedAt:   now,
+	}, nil
+}
+
+func marshalMissionPlanApprovalRequest(plan *PlanResult) (json.RawMessage, error) {
+	payload := map[string]any{
+		"summary":           "",
+		"success_criteria":  []string{},
+		"tasks":             []PlanTask{},
+		"dependencies":      []TaskDependency{},
+		"requires_approval": true,
+	}
+	if plan != nil {
+		payload["summary"] = plan.Summary
+		payload["success_criteria"] = append([]string(nil), plan.SuccessCriteria...)
+		payload["tasks"] = clonePlanTasks(plan.Tasks)
+		payload["dependencies"] = append([]TaskDependency(nil), plan.Dependencies...)
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(buf), nil
+}
+
+func marshalApprovalResponseJSON(payload map[string]any) json.RawMessage {
+	if len(payload) == 0 {
+		return json.RawMessage("{}")
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(buf)
+}
+
+func clonePlanTasks(tasks []PlanTask) []PlanTask {
+	if len(tasks) == 0 {
+		return nil
+	}
+	out := make([]PlanTask, len(tasks))
+	for i, task := range tasks {
+		out[i] = PlanTask{
+			ID:                 task.ID,
+			Title:              task.Title,
+			Kind:               task.Kind,
+			Objective:          task.Objective,
+			Priority:           task.Priority,
+			Scope:              cloneTaskScope(task.Scope),
+			AcceptanceCriteria: append([]string(nil), task.AcceptanceCriteria...),
+			EstimatedEffort:    task.EstimatedEffort,
+			RiskLevel:          task.RiskLevel,
+		}
+	}
+	return out
+}
+
+const missionPlanApprovalKind = "plan"
+
 func (c *Controller) rollbackApplyPlan(ctx context.Context, rollback applyPlanRollback) error {
 	var errs []string
+	if len(rollback.createdApprovalIDs) > 0 {
+		if err := rollbackApprovals(c.store, rollback.createdApprovalIDs); err != nil {
+			errs = append(errs, fmt.Sprintf("remove created approvals: %v", err))
+		}
+	}
 	if len(rollback.createdTaskIDs) > 0 || len(rollback.addedDependencies) > 0 {
 		if err := rollbackPlanArtifacts(c.store, rollback.createdTaskIDs, rollback.addedDependencies); err != nil {
 			errs = append(errs, fmt.Sprintf("remove created plan artifacts: %v", err))
@@ -434,6 +606,36 @@ func rollbackPlanArtifacts(store Store, taskIDs []string, deps []TaskDependency)
 		return nil
 	}
 	return removePlanArtifactsViaReflection(store, taskIDs, deps)
+}
+
+func rollbackApprovals(store Store, approvalIDs []string) error {
+	if len(approvalIDs) == 0 {
+		return nil
+	}
+	if err := rollbackApprovalsInDB(store, approvalIDs); err == nil {
+		return nil
+	}
+	return removeApprovalsViaReflection(store, approvalIDs)
+}
+
+func rollbackApprovalsInDB(store Store, approvalIDs []string) error {
+	db, err := extractStoreDB(store)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, approvalID := range approvalIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM approvals WHERE id = ?`, approvalID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func rollbackPlanArtifactsInDB(store Store, taskIDs []string, deps []TaskDependency) error {
@@ -482,6 +684,23 @@ func removePlanArtifactsViaReflection(store Store, taskIDs []string, deps []Task
 	}
 	if err := removeDependenciesViaReflection(store, deps); err != nil {
 		return err
+	}
+	return nil
+}
+
+func removeApprovalsViaReflection(store Store, approvalIDs []string) error {
+	if len(approvalIDs) == 0 {
+		return nil
+	}
+	field, err := settableStructField(store, "approvals")
+	if err != nil {
+		return err
+	}
+	if field.Kind() != reflect.Map {
+		return fmt.Errorf("approvals field is %s, want map", field.Kind())
+	}
+	for _, approvalID := range approvalIDs {
+		field.SetMapIndex(reflect.ValueOf(approvalID), reflect.Value{})
 	}
 	return nil
 }
