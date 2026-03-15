@@ -122,6 +122,41 @@ func TestClearSessionStateResetsWorkflowAndPendingState(t *testing.T) {
 	}
 }
 
+func TestWorkflowStackedHeightUsesMidWidthFallback(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "verify tests", Status: "in_progress"}}}
+
+	m.width = workflowPanelStackMinWidth - 1
+	if got := m.workflowStackedHeight(12); got != 0 {
+		t.Fatalf("narrow width stacked height=%d, want 0", got)
+	}
+
+	m.width = 80
+	if got := m.workflowStackedHeight(12); got < workflowPanelStackMinLines {
+		t.Fatalf("mid-width stacked height=%d, want at least %d", got, workflowPanelStackMinLines)
+	}
+
+	m.width = workflowPanelWideMinWidth
+	if got := m.workflowStackedHeight(12); got != 0 {
+		t.Fatalf("wide width stacked height=%d, want 0", got)
+	}
+}
+
+func TestWorkflowPanelCompactHeightKeepsSummaryVisible(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "verify tests", Status: "in_progress"}}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "no TODOs", Kind: "hard", Status: "unknown"}}}
+
+	rendered := stripANSI(m.renderWorkflowPanel(3, 80))
+	for _, want := range []string{"Workflow", "plan active"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("compact workflow panel missing %q\n%s", want, rendered)
+		}
+	}
+}
+
 func TestWorkflowPanelRendersPlanAndInvariantSections(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)

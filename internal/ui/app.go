@@ -1236,6 +1236,9 @@ func (m *Model) View() tea.View {
 		v.AltScreen = true
 		return v
 	}
+	if m.belowMinimumShellSize() {
+		return m.renderMinimumSizeView()
+	}
 
 	header := m.renderHeader()
 	input := m.renderInput()
@@ -1257,6 +1260,10 @@ func (m *Model) View() tea.View {
 }
 
 func (m *Model) renderCompactView() tea.View {
+	if m.belowMinimumShellSize() {
+		return m.renderMinimumSizeView()
+	}
+
 	sections := make([]string, 0, 4)
 	switch {
 	case m.height <= 0:
@@ -1285,34 +1292,33 @@ func (m *Model) renderChatRegion(height int) string {
 		return ""
 	}
 
-	const panelWidth = 38
-	const minWidthForPanel = 110
-	showPanel := m.hasWorkflowPanel() && m.width >= minWidthForPanel
-
-	chatWidth := max(1, m.width)
-	if showPanel {
-		chatWidth = max(1, m.width-panelWidth)
-	}
-
-	chatSection := m.renderChat(height, chatWidth)
-	if !showPanel {
-		return chatSection
-	}
-
-	chatLines := strings.Split(chatSection, "\n")
-	panelLines := strings.Split(m.renderWorkflowPanel(height, panelWidth), "\n")
-	combined := make([]string, height)
-	for i := range combined {
-		cl, pl := "", ""
-		if i < len(chatLines) {
-			cl = chatLines[i]
+	if m.hasWorkflowPanel() && m.width >= workflowPanelWideMinWidth {
+		chatWidth := max(1, m.width-workflowPanelWidth)
+		chatSection := m.renderChat(height, chatWidth)
+		chatLines := strings.Split(chatSection, "\n")
+		panelLines := strings.Split(m.renderWorkflowPanel(height, workflowPanelWidth), "\n")
+		combined := make([]string, height)
+		for i := range combined {
+			cl, pl := "", ""
+			if i < len(chatLines) {
+				cl = chatLines[i]
+			}
+			if i < len(panelLines) {
+				pl = panelLines[i]
+			}
+			combined[i] = cl + pl
 		}
-		if i < len(panelLines) {
-			pl = panelLines[i]
-		}
-		combined[i] = cl + pl
+		return strings.Join(combined, "\n")
 	}
-	return strings.Join(combined, "\n")
+
+	if workflowHeight := m.workflowStackedHeight(height); workflowHeight > 0 {
+		chatHeight := max(1, height-workflowHeight)
+		chatSection := m.renderChat(chatHeight, max(1, m.width))
+		workflowSection := m.renderWorkflowPanel(workflowHeight, max(1, m.width))
+		return chatSection + "\n" + workflowSection
+	}
+
+	return m.renderChat(height, max(1, m.width))
 }
 
 func (m *Model) renderCompactHeader() string {
@@ -1357,11 +1363,50 @@ func (m *Model) renderCompactStatusBar() string {
 	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
 
+const (
+	minShellWidth  = 56
+	minShellHeight = 6
+)
+
 func (m *Model) shellWidth() int {
 	if m.width > 0 {
 		return m.width
 	}
 	return 72
+}
+
+func (m *Model) belowMinimumShellSize() bool {
+	if m.width > 0 && m.width < minShellWidth {
+		return true
+	}
+	if m.height > 0 && m.height < minShellHeight {
+		return true
+	}
+	return false
+}
+
+func (m *Model) renderMinimumSizeView() tea.View {
+	shellWidth := max(1, m.shellWidth())
+	recovery := "Resize the terminal to restore transcript, workflow, and input."
+	sizeLine := fmt.Sprintf("Current %dx%d · need at least %dx%d", max(0, m.width), max(0, m.height), minShellWidth, minShellHeight)
+	switch {
+	case m.width > 0 && m.width < minShellWidth && m.height > 0 && m.height < minShellHeight:
+		recovery = "Resize wider and taller to restore transcript, workflow, and input."
+	case m.width > 0 && m.width < minShellWidth:
+		recovery = "Resize wider to restore transcript, workflow, and input."
+	case m.height > 0 && m.height < minShellHeight:
+		recovery = "Resize taller to restore transcript, workflow, and input."
+	}
+	lines := []string{
+		m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.Bold.Render("Terminal too small"),
+		m.sty.Muted.Render(truncateText(recovery, max(16, shellWidth))),
+		m.sty.Muted.Render(truncateText(sizeLine, max(16, shellWidth))),
+		m.sty.Muted.Render(truncateText("/help when resized · Esc cancel · Ctrl+L clear", max(16, shellWidth))),
+	}
+	body := fitShellLines(lines, m.height, max(0, (m.height-len(lines))/2))
+	v := tea.NewView(body)
+	v.AltScreen = true
+	return v
 }
 
 func (m *Model) renderSectionHeader(label, meta string, width int) string {

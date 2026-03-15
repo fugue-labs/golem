@@ -15,6 +15,15 @@ import (
 	"github.com/fugue-labs/gollem/ext/team"
 )
 
+const (
+	workflowPanelWidth          = 38
+	workflowPanelWideMinWidth   = 110
+	workflowPanelStackMinWidth  = 72
+	workflowPanelStackMinHeight = 8
+	workflowPanelStackMinLines  = 3
+	workflowPanelStackMaxLines  = 6
+)
+
 func (m *Model) cancelActiveRun(asyncCleanup bool) {
 	if m.cancel != nil {
 		m.cancel()
@@ -94,6 +103,20 @@ func (m *Model) hasTeamMembers() bool {
 		return len(activeTeamMembers(session.Team.Members())) > 1 // >1 because leader is always a member
 	}
 	return false
+}
+
+func (m *Model) workflowStackedHeight(totalHeight int) int {
+	if !m.hasWorkflowPanel() || m.width < workflowPanelStackMinWidth || m.width >= workflowPanelWideMinWidth || totalHeight < workflowPanelStackMinHeight {
+		return 0
+	}
+	workflowHeight := min(workflowPanelStackMaxLines, max(workflowPanelStackMinLines, totalHeight/3))
+	if totalHeight-workflowHeight < 4 {
+		workflowHeight = max(workflowPanelStackMinLines, totalHeight-4)
+	}
+	if workflowHeight < workflowPanelStackMinLines || totalHeight-workflowHeight < 1 {
+		return 0
+	}
+	return workflowHeight
 }
 
 // activeTeamMembers filters out stopped teammates so that stale entries

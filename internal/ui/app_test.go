@@ -12,6 +12,8 @@ import (
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
+	"github.com/fugue-labs/golem/internal/ui/plan"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
@@ -237,18 +239,105 @@ func TestViewWorkflowPanelGatesByWidth(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
 	m.height = 20
-	m.invariantState.Extracted = true
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "brief response"}}
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "verify tests", Status: "in_progress"}}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "no TODOs", Kind: "hard", Status: "unknown"}}}
 
-	m.width = 109
+	m.width = workflowPanelStackMinWidth - 1
 	narrow := stripANSI(m.View().Content)
 	if strings.Contains(narrow, "Workflow") {
-		t.Fatalf("workflow panel should be hidden below gating width\n%s", narrow)
+		t.Fatalf("workflow panel should stay hidden below stacked width\n%s", narrow)
 	}
 
-	m.width = 110
+	m.width = 80
+	stacked := stripANSI(m.View().Content)
+	if !strings.Contains(stacked, "Workflow") {
+		t.Fatalf("workflow panel should remain visible on mid-width terminals\n%s", stacked)
+	}
+
+	m.width = workflowPanelWideMinWidth
 	wide := stripANSI(m.View().Content)
 	if !strings.Contains(wide, "Workflow") {
-		t.Fatalf("workflow panel should appear at gating width\n%s", wide)
+		t.Fatalf("workflow panel should appear at wide layout width\n%s", wide)
+	}
+	sharedHeader := false
+	for _, line := range strings.Split(wide, "\n") {
+		if strings.Contains(line, "Transcript") && strings.Contains(line, "Workflow") {
+			sharedHeader = true
+			break
+		}
+	}
+	if !sharedHeader {
+		t.Fatalf("workflow panel should share the transcript row in wide layout\n%s", wide)
+	}
+}
+
+func TestViewShowsResizeHelpWhenBelowMinimumSize(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+
+	tests := []struct {
+		name   string
+		width  int
+		height int
+		want   string
+	}{
+		{name: "narrow", width: minShellWidth - 1, height: 18, want: "Resize wider"},
+		{name: "short", width: 80, height: minShellHeight - 1, want: "Resize taller"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m.width = tt.width
+			m.height = tt.height
+			rendered := stripANSI(m.View().Content)
+			for _, want := range []string{"GOLEM", "Terminal too small", tt.want, "need at least 56x6"} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("minimum-size view missing %q\n%s", want, rendered)
+				}
+			}
+		})
+	}
+}
+
+func TestViewAdaptsWorkflowPanelAcrossWidths(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.height = 20
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "brief response"}}
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "verify tests", Status: "in_progress"}}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "no TODOs", Kind: "hard", Status: "unknown"}}}
+
+	m.width = 80
+	stacked := stripANSI(m.View().Content)
+	if strings.Contains(stacked, "Terminal too small") {
+		t.Fatalf("mid-width layout should stay interactive\n%s", stacked)
+	}
+	if !strings.Contains(stacked, "Workflow") {
+		t.Fatalf("mid-width layout should keep workflow state visible\n%s", stacked)
+	}
+	stackedHasSeparateWorkflowHeader := false
+	for _, line := range strings.Split(stacked, "\n") {
+		if strings.Contains(line, "Workflow") && !strings.Contains(line, "Transcript") {
+			stackedHasSeparateWorkflowHeader = true
+			break
+		}
+	}
+	if !stackedHasSeparateWorkflowHeader {
+		t.Fatalf("expected stacked workflow header on mid-width layout\n%s", stacked)
+	}
+
+	m.width = 120
+	wide := stripANSI(m.View().Content)
+	wideHasSharedHeaderLine := false
+	for _, line := range strings.Split(wide, "\n") {
+		if strings.Contains(line, "Transcript") && strings.Contains(line, "Workflow") {
+			wideHasSharedHeaderLine = true
+			break
+		}
+	}
+	if !wideHasSharedHeaderLine {
+		t.Fatalf("expected side-by-side workflow panel on wide layout\n%s", wide)
 	}
 }
 
