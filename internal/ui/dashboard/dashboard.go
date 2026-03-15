@@ -101,7 +101,50 @@ func (m *Model) setFocus(active bool) {
 }
 
 func (m *Model) setFocusPane(p pane) {
-	m.focusPane = p
+	visible := m.visiblePanes()
+	if len(visible) == 0 {
+		m.focusPane = p
+		return
+	}
+	for _, candidate := range visible {
+		if candidate == p {
+			m.focusPane = p
+			return
+		}
+	}
+}
+
+func (m *Model) cycleFocus(delta int) {
+	visible := m.visiblePanes()
+	if len(visible) == 0 {
+		return
+	}
+	index := 0
+	for i, candidate := range visible {
+		if candidate == m.focusPane {
+			index = i
+			goto advance
+		}
+	}
+	m.focusPane = visible[0]
+	return
+
+advance:
+	index = (index + delta + len(visible)) % len(visible)
+	m.focusPane = visible[index]
+}
+
+func (m *Model) ensureVisibleFocus() {
+	visible := m.visiblePanes()
+	if len(visible) == 0 {
+		return
+	}
+	for _, candidate := range visible {
+		if candidate == m.focusPane {
+			return
+		}
+	}
+	m.focusPane = visible[0]
 }
 
 func (m *Model) scrollFocusedPane(delta int) {
@@ -300,6 +343,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sty == nil {
 			m.sty = styles.New(nil)
 		}
+		m.ensureVisibleFocus()
 		return m, nil
 
 	case tickMsg:
@@ -327,10 +371,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshing = true
 			return m, func() tea.Msg { return m.doRefresh() }
 		case "tab":
-			m.setFocusPane((m.focusPane + 1) % paneCount)
+			m.cycleFocus(1)
 			return m, nil
 		case "shift+tab":
-			m.setFocusPane((m.focusPane - 1 + paneCount) % paneCount)
+			m.cycleFocus(-1)
 			return m, nil
 		case "j", "down":
 			m.scrollFocusedPane(1)
@@ -458,6 +502,31 @@ type dashboardLayout struct {
 	evidenceEmbedded bool
 	eventHeight      int
 	sections         []paneSection
+}
+
+func (layout dashboardLayout) visiblePanes() []pane {
+	if layout.tooSmall || layout.stateOnly {
+		return nil
+	}
+	if layout.narrow {
+		visible := make([]pane, 0, len(layout.sections))
+		for _, section := range layout.sections {
+			visible = append(visible, section.pane)
+		}
+		return visible
+	}
+	visible := []pane{paneTasks, paneWorkers}
+	if layout.evidenceEmbedded {
+		visible = append(visible, paneEvidence)
+	}
+	if layout.eventHeight > 0 {
+		visible = append(visible, paneEvents)
+	}
+	return visible
+}
+
+func (m *Model) visiblePanes() []pane {
+	return m.currentLayout().visiblePanes()
 }
 
 func (m *Model) computeLayout() dashboardLayout {
@@ -652,6 +721,9 @@ func (m *Model) renderNarrowLayout(layout dashboardLayout) string {
 
 func (m *Model) renderStateScreen(title string, body, hints []string) string {
 	lines := []string{m.sty.Panel.Title.Render("Mission Control")}
+	if banner := m.renderRefreshBanner(false); banner != "" {
+		lines = append(lines, banner)
+	}
 	lines = append(lines, m.sty.Panel.StateTitle.Render(title))
 	for _, line := range body {
 		for _, wrapped := range wrapPlainText(line, max(1, m.width-2)) {
@@ -683,12 +755,16 @@ func (m *Model) finalizeLines(lines []string) string {
 func (m *Model) renderHeader() []string {
 	if m.missionObj == nil {
 		titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("idle", "No mission")
-		return []string{
-			titleLine,
+		lines := []string{titleLine}
+		if banner := m.renderRefreshBanner(false); banner != "" {
+			lines = append(lines, banner)
+		}
+		lines = append(lines,
 			m.sty.Panel.EmptyTitle.Render("No active mission"),
 			m.sty.Panel.EmptyBody.Render("Create one with /mission new or run golem mission new."),
 			m.sty.Panel.EmptyBody.Render("The dashboard will attach as soon as durable mission state exists."),
-		}
+		)
+		return lines
 	}
 
 	ms := m.missionObj
@@ -762,7 +838,11 @@ func (m *Model) renderHeader() []string {
 		metaSegments = append(metaSegments, m.renderMetric("Phase", summary.PhaseLabel))
 	}
 
-	lines := []string{titleLine, missionLine}
+	lines := []string{titleLine}
+	if banner := m.renderRefreshBanner(true); banner != "" {
+		lines = append(lines, banner)
+	}
+	lines = append(lines, missionLine)
 	lines = append(lines, wrapSegments(metricSegments, max(1, m.width), m.sty.Panel.Separator.Render(" • "))...)
 	if len(metaSegments) > 0 {
 		lines = append(lines, wrapSegments(metaSegments, max(1, m.width), m.sty.Panel.Separator.Render(" • "))...)
@@ -772,6 +852,27 @@ func (m *Model) renderHeader() []string {
 	}
 	if summary.NextAction != "" {
 		lines = append(lines, m.renderHeaderSummaryLine("Next", summary.NextAction))
+	}
+	focusParts := make([]string, 0, 3)
+	if summary.FocusTask != nil {
+		focusParts = append(focusParts, "Focus "+ansi.Truncate(summary.FocusTask.Title, 28, "…"))
+	}
+	if summary.NextTask != nil && (summary.FocusTask == nil || summary.NextTask.ID != summary.FocusTask.ID) {
+		focusParts = append(focusParts, "Queue "+ansi.Truncate(summary.NextTask.Title, 24, "…"))
+	}
+	if len(summary.PendingApprovalItems) > 0 {
+		approval := summary.PendingApprovalItems[0]
+		approvalLabel := strings.TrimSpace(approval.Title)
+		if approvalLabel == "" {
+			approvalLabel = approval.ApprovalKind
+		}
+		if approvalLabel == "" {
+			approvalLabel = approval.ID
+		}
+		focusParts = append(focusParts, "Approval "+ansi.Truncate(approvalLabel, 20, "…"))
+	}
+	if len(focusParts) > 0 {
+		lines = append(lines, m.renderHeaderSummaryLine("Watch", strings.Join(focusParts, " • ")))
 	}
 	goalLabel := m.sty.Panel.MetricKey.Render("Goal")
 	goalText := ansi.Truncate(ms.Goal, max(1, m.width-lipgloss.Width(goalLabel)-1), "…")
@@ -783,6 +884,32 @@ func (m *Model) renderHeaderSummaryLine(label, text string) string {
 	prefix := m.sty.Panel.MetricKey.Render(label)
 	body := ansi.Truncate(text, max(1, m.width-lipgloss.Width(prefix)-1), "…")
 	return prefix + " " + m.sty.Panel.StateBody.Render(body)
+}
+
+func (m *Model) renderRefreshBanner(hasCachedData bool) string {
+	if m.lastErr == nil {
+		if m.refreshing && hasCachedData {
+			message := "Refreshing live mission data • operator view updating"
+			return ansi.Truncate(m.sty.Panel.BannerInfo.Render(message), max(1, m.width), "…")
+		}
+		return ""
+	}
+	if isNoMissionError(m.lastErr) && !hasCachedData {
+		return ""
+	}
+	style := m.sty.Panel.BannerWarning
+	parts := []string{"Refresh failed"}
+	if !hasCachedData {
+		style = m.sty.Panel.BannerError
+	} else {
+		parts = append(parts, "showing cached mission data")
+	}
+	errText := strings.TrimSpace(m.lastErr.Error())
+	if errText != "" && !isNoMissionError(m.lastErr) {
+		parts = append(parts, errText)
+	}
+	parts = append(parts, "press r to retry")
+	return ansi.Truncate(style.Render(strings.Join(parts, " • ")), max(1, m.width), "…")
 }
 
 // renderTaskPane renders the task DAG view.
@@ -1060,24 +1187,33 @@ func (m *Model) renderSeparator() string {
 
 func (m *Model) renderFooter() string {
 	layout := m.currentLayout()
+	visible := layout.visiblePanes()
 	mode := "wide layout"
+	paneHint := "tab:switch pane"
 	scrollHint := "j/k:scroll"
+	jumpHint := visiblePaneJumpHint(visible)
 	if layout.narrow {
 		mode = "narrow layout"
-		scrollHint = "j/k:scroll stacked lanes"
+		paneHint = "tab:next visible lane"
+		scrollHint = "j/k:scroll stacked lane"
 	}
 	status := "live"
 	if m.refreshing {
 		status = "refreshing"
 	}
+	if m.lastErr != nil {
+		status = "degraded"
+	}
 	keys := []string{
 		m.renderMetric("Mission Control", status+" • "+mode),
 		"q:quit",
 		"r:refresh",
-		"tab:switch pane",
+		paneHint,
 		"shift+tab:back",
 		scrollHint,
-		"1-4:jump to pane",
+	}
+	if jumpHint != "" {
+		keys = append(keys, jumpHint)
 	}
 	return m.sty.Muted.Render(ansi.Truncate(strings.Join(keys, "  •  "), max(1, m.width), "…"))
 }
@@ -1161,6 +1297,32 @@ func (m *Model) renderEmptyState(width int, title, body string, hints ...string)
 		}
 	}
 	return lines
+}
+
+func visiblePaneJumpHint(visible []pane) string {
+	if len(visible) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(visible))
+	for _, p := range visible {
+		switch p {
+		case paneTasks:
+			labels = append(labels, "1")
+		case paneWorkers:
+			labels = append(labels, "2")
+		case paneEvidence:
+			labels = append(labels, "3")
+		case paneEvents:
+			labels = append(labels, "4")
+		}
+	}
+	if len(labels) == 0 {
+		return ""
+	}
+	if len(labels) == 1 {
+		return labels[0] + ":jump to pane"
+	}
+	return strings.Join(labels, "/") + ":jump to pane"
 }
 
 func wrapSegments(segments []string, width int, joiner string) []string {

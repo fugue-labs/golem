@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -439,6 +440,46 @@ func TestRenderFooterReportsLayoutAndRefreshState(t *testing.T) {
 	plain := stripANSITest(m.renderFooter())
 	if !containsAny(plain, "Mission Control refreshing • narrow layout", "refreshing") {
 		t.Fatalf("expected refresh and layout status in footer, got %q", plain)
+	}
+}
+
+func TestRenderFooterUsesVisiblePaneJumpHints(t *testing.T) {
+	m := New("")
+	m.width = 80
+	m.height = 24
+	m.missionObj = &mission.Mission{ID: "m1", Title: "Mission", Status: mission.MissionRunning, Goal: "goal"}
+	m.summary = &mission.MissionSummary{Mission: m.missionObj}
+	m.summary.FillDisplayDefaults()
+
+	layout := m.computeLayout()
+	visible := layout.visiblePanes()
+	if len(visible) == 0 {
+		t.Fatal("expected visible panes in mission layout")
+	}
+	if got := visiblePaneJumpHint(visible); got == "" {
+		t.Fatal("expected non-empty jump hint for visible panes")
+	}
+	if layout.narrow {
+		if got := visiblePaneJumpHint(visible); got == "1-4:jump to pane" {
+			t.Fatalf("expected narrowed jump hint, got %q", got)
+		}
+	}
+}
+
+func TestRenderHeaderShowsCachedRefreshFailureBanner(t *testing.T) {
+	m := New("")
+	m.width = 100
+	m.height = 24
+	m.missionObj = &mission.Mission{ID: "m1", Title: "Mission", Status: mission.MissionRunning, Goal: "goal"}
+	m.summary = &mission.MissionSummary{Mission: m.missionObj}
+	m.summary.FillDisplayDefaults()
+	m.lastErr = fmt.Errorf("dial tcp timeout")
+
+	joined := stripANSITest(stringsJoin(m.renderHeader(), "\n"))
+	for _, want := range []string{"Refresh failed", "showing cached mission data", "press r to retry"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in degraded header, got %q", want, joined)
+		}
 	}
 }
 

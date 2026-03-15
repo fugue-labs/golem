@@ -1093,3 +1093,34 @@ func TestTeatestFooterKeybindings(t *testing.T) {
 		}
 	}
 }
+
+func TestTeatestNarrowFooterAndFocusOnlyReferenceVisibleLanes(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 80, 20)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	refreshModel(t, m)
+
+	layout := m.computeLayout()
+	visible := layout.visiblePanes()
+	if len(visible) == 0 {
+		t.Fatal("expected visible panes in narrow layout")
+	}
+	if hint := visiblePaneJumpHint(visible); hint == "" {
+		t.Fatal("expected visible-pane jump hint in narrow layout")
+	}
+
+	for i := 0; i < 8; i++ {
+		m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		ok := false
+		for _, p := range visible {
+			if p == m.focusPane {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			t.Fatalf("focus pane %d not visible in narrow layout %v", m.focusPane, visible)
+		}
+	}
+}
