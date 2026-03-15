@@ -65,7 +65,7 @@ Implementation tasks should reference:
 
 ## Mission orchestration surfaces
 
-Mission orchestration is currently exposed through two operator-facing surfaces:
+Mission orchestration is currently exposed through two operator-facing surfaces. The shipped control surface is the TUI `/mission ...` flow plus `golem dashboard`; the broader `golem mission ...` CLI family is still aspirational unless implemented separately.
 
 1. **`/mission` inside the main TUI**
    - `/mission new <goal>` creates a durable mission in `draft` state.
@@ -83,7 +83,7 @@ Mission orchestration is currently exposed through two operator-facing surfaces:
    - Auto-selects the most relevant non-terminal mission by priority: `running`, `blocked`, `paused`, `awaiting_approval`, `planning`, then `draft`.
    - Renders four panes: **Tasks**, **Workers**, **Evidence**, and **Events**.
    - The header surfaces status, task progress, active workers, pending approvals, evidence count, elapsed time, repo, branch, and worker budget.
-   - Empty-state behavior is explicit: the dashboard should show `Mission Control`, `No active mission`, and guidance to create one with `/mission new` or `golem mission new`.
+   - Empty-state behavior is explicit: the dashboard should show `Mission Control`, `No active mission`, and guidance to create one with `/mission new`. Current dashboard copy may also mention a future `golem mission new` command, but docs should treat that CLI reference as aspirational until it exists.
 
 ### Mission command semantics and approval model
 
@@ -99,13 +99,16 @@ The current shipped mission contract is:
 - Resume semantics are currently `/mission start`; there is no separate `/mission resume` slash command.
 - `/mission pause` stops new task leasing by stopping the in-process orchestrator.
 
-### Mission summary and dashboard behavior
+### Mission summary, orchestration, and dashboard behavior
 
 Mission status surfaces intentionally rely on durable mission state instead of chat narration:
 
 - phase labels distinguish **`Awaiting approval`** from **`Ready to start`**,
 - attention text calls out missing or pending approvals,
 - next-action text directs the operator to `/mission approve`, `/mission start`, or approval resolution as appropriate,
+- the controller owns lifecycle transitions and mission summary derivation from durable missions, tasks, dependencies, runs, and approvals,
+- the scheduler/worker launcher is responsible for safe ready-task leasing and worker preparation,
+- the in-process orchestrator tick loop dispatches workers, dispatches reviewers, integrates accepted work, checks completion, and emits transient TUI event-bus updates such as `worker.started`, `worker.completed`, `review.pass`, `review.reject`, `review.request_changes`, `integration.completed`, `integration.failed`, and `mission.completed`,
 - pending approvals are rendered both in `/mission status` and the dashboard evidence pane, and
 - dashboard evidence also includes review results, failures, and recorded artifacts.
 
@@ -115,8 +118,11 @@ Mission orchestration is local-first and persistence-backed:
 
 - durable mission state includes missions, tasks, dependencies, runs, approvals, events, and artifacts,
 - `golem dashboard` reads that durable store directly,
-- restarts are expected to preserve operator-visible mission truth, and
-- Mission Control should still produce a valid empty state when no missions exist.
+- restarts are expected to preserve operator-visible mission truth,
+- persisted event examples include `mission.created`, `plan.applied`, `mission.approved`, `mission.started`, `mission.paused`, `mission.cancelled`, `worker.dispatched`, `worker.completed`, `worker.failed`, `review.dispatched`, `review.passed`, `review.rejected`, `review.changes_requested`, `integration.completed`, `integration.conflict.requeued`, `integration.error`, `recovery.completed`, `replan.applied`, and `task.unblocked`, and
+- transient orchestrator/TUI event-bus messages use a nearby but not identical naming set such as `worker.started`, `review.pass`, `review.reject`, `review.request_changes`, and `integration.failed`.
+
+Mission Control should still produce a valid empty state when no missions exist.
 
 ## Commands
 

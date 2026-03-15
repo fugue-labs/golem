@@ -48,12 +48,14 @@ Documentation and implementation should agree on the currently shipped mission c
 3. **Orchestration responsibilities**
    - The controller owns lifecycle transitions and mission summaries.
    - The scheduler/worker launcher dispatches ready work safely.
-   - The orchestrator runs an in-process tick loop that dispatches workers, dispatches reviewers, integrates accepted work, checks completion, and emits operator-facing events.
+   - The orchestrator runs an in-process tick loop that dispatches workers, dispatches reviewers, integrates accepted work, checks completion, and emits transient operator-facing event-bus updates.
 
 4. **Persistence and dashboard behavior**
    - Mission Control and `/mission status` must read durable mission state rather than rely on transcript-only memory.
    - `golem dashboard` must preserve its Mission Control empty state and its four-pane model: Tasks, Workers, Evidence, Events.
    - When no mission ID is supplied, the dashboard should prefer the highest-priority active mission (`running` > `blocked` > `paused` > `awaiting_approval` > `planning` > `draft`).
+   - Current shipped behavior should not claim a dedicated `golem mission new` CLI exists unless that CLI has actually shipped.
+   - Event examples must distinguish persisted mission-store names (for example `mission.created`, `plan.applied`, `review.passed`, `integration.conflict.requeued`) from transient orchestrator/TUI event-bus names (for example `worker.started`, `review.pass`, `review.request_changes`).
 
 ## Acceptance Criteria
 

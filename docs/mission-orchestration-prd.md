@@ -246,8 +246,8 @@ The current implementation uses one controller-centric execution model:
   - dispatches ready workers,
   - dispatches reviewers for `awaiting_review` work,
   - integrates accepted work,
-  - checks for mission completion,
-  - emits lifecycle events such as `worker.started`, `worker.completed`, `review.pass`/`review.reject`, `integration.completed`, `integration.conflict`, and `mission.completed`.
+  - checks for mission completion, and
+  - emits **transient orchestrator/TUI event-bus updates** such as `worker.started`, `worker.completed`, `review.pass`, `review.reject`, `review.request_changes`, `integration.completed`, `integration.failed`, and `mission.completed`.
 
 Operationally, there is one orchestrator loop per active mission session in the TUI. The implementation does **not** expose separate user-controlled scheduler processes or a daemon-only control plane.
 
@@ -284,7 +284,7 @@ Current behavior:
   - **Evidence**
   - **Events**
 - The evidence pane includes review results, pending approvals, failures, and artifacts.
-- The empty-state contract is explicit: if there is no durable mission state yet, the dashboard should say **Mission Control**, **No active mission**, and instruct the operator to create one with `/mission new` or `golem mission new`.
+- The empty-state contract is explicit: if there is no durable mission state yet, the dashboard should say **Mission Control**, **No active mission**, and instruct the operator to create one with `/mission new`. Current dashboard copy may also mention a future `golem mission new` command, but docs should treat that CLI reference as aspirational until it exists.
 
 ## 8. Scope Boundary
 
@@ -973,9 +973,12 @@ The store layer must guarantee:
 
 The event log is not a dumping ground. Event types must be explicit and low-cardinality.
 
-Current shipped examples use dotted event names such as:
+For the current shipped system, distinguish between:
 
-### Mission lifecycle events
+1. **Persisted mission-store event names** — written to the durable `events` table and rendered by the dashboard.
+2. **Transient orchestrator/TUI event-bus names** — emitted by the in-process orchestrator to update the TUI chat stream.
+
+### Persisted mission lifecycle/store event examples
 - `mission.created`
 - `plan.applied`
 - `mission.approved`
@@ -984,17 +987,20 @@ Current shipped examples use dotted event names such as:
 - `mission.cancelled`
 - `mission.completed`
 
-### Worker/review/integration/recovery examples
+### Persisted worker/review/integration/recovery examples
 - `worker.dispatched`
 - `worker.completed`
 - `worker.failed`
 - `worker.cancelled`
 - `worker.lease_lost`
+- `worker.provision_failed`
 - `review.dispatched`
 - `review.passed`
 - `review.rejected`
 - `review.changes_requested`
 - `review.failed`
+- `review.auto_accepted`
+- `review.provision_failed`
 - `integration.completed`
 - `integration.conflict.requeued`
 - `integration.error`
@@ -1003,8 +1009,24 @@ Current shipped examples use dotted event names such as:
 - `replan.requested`
 - `replan.applied`
 - `task.unblocked`
+- `worktree.release_failed`
 
-Dashboard rendering should tolerate future additive event types, but documentation examples should prefer the dotted names above because they match the current store and UI behavior.
+### Transient orchestrator/TUI event-bus examples
+- `worker.started`
+- `worker.completed`
+- `worker.failed`
+- `worker.spawn_failed`
+- `review.started`
+- `review.pass`
+- `review.reject`
+- `review.request_changes`
+- `review.failed`
+- `review.parse_failed`
+- `integration.completed`
+- `integration.failed`
+- `mission.completed`
+
+Dashboard rendering should tolerate future additive event types, but persisted examples in this section should use the durable store names above because those are the names the dashboard/store currently persist. Transient orchestrator/TUI names should only be used when explicitly discussing the in-memory event bus.
 
 Event payload rules:
 
@@ -1692,7 +1714,7 @@ Current dashboard contract:
 - `golem dashboard [mission-id]` opens Mission Control against the durable mission store
 - if no mission ID is supplied, the dashboard selects the highest-priority non-terminal mission (`running` > `blocked` > `paused` > `awaiting_approval` > `planning` > `draft`)
 - the surface renders four panes: **Tasks**, **Workers**, **Evidence**, and **Events**
-- if no durable mission exists, the empty state should still render Mission Control and guide the operator toward `/mission new` or `golem mission new`
+- if no durable mission exists, the empty state should still render Mission Control and guide the operator toward `/mission new`; any broader `golem mission ...` CLI guidance remains aspirational until that CLI ships
 
 ## 20.1.3 Aspirational CLI JSON contracts
 
