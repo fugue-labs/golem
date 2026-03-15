@@ -837,32 +837,6 @@ func dependencyKey(dep TaskDependency) string {
 	return dep.TaskID + "->" + dep.DependsOnID
 }
 
-func cloneMission(m *Mission) *Mission {
-	if m == nil {
-		return nil
-	}
-	cp := *m
-	if m.Policy != nil {
-		cp.Policy = append([]byte(nil), m.Policy...)
-	}
-	if m.SuccessCriteria != nil {
-		cp.SuccessCriteria = append([]string(nil), m.SuccessCriteria...)
-	}
-	if m.StartedAt != nil {
-		startedAt := *m.StartedAt
-		cp.StartedAt = &startedAt
-	}
-	if m.EndedAt != nil {
-		endedAt := *m.EndedAt
-		cp.EndedAt = &endedAt
-	}
-	if m.LastReplanAt != nil {
-		lastReplanAt := *m.LastReplanAt
-		cp.LastReplanAt = &lastReplanAt
-	}
-	return &cp
-}
-
 func cloneTaskScope(scope TaskScope) TaskScope {
 	return TaskScope{
 		WritePaths: append([]string(nil), scope.WritePaths...),
