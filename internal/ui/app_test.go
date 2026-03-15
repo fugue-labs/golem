@@ -11,6 +11,7 @@ import (
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/golem/internal/ui/styles"
 	"github.com/fugue-labs/gollem/core"
 	"github.com/fugue-labs/gollem/ext/codetool"
 )
@@ -213,5 +214,39 @@ func TestAgentDoneWrappedCancelNotShownAsError(t *testing.T) {
 		if msg.Kind == chat.KindError {
 			t.Fatalf("context cancel with broken wrapping shown as error: %q", msg.Content)
 		}
+	}
+}
+
+func TestViewRendersDistinctShellRegions(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.width = 100
+	m.height = 22
+	m.input.SetValue("draft task")
+
+	rendered := stripANSI(m.View().Content)
+	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Context ·", "Activity ·", "draft task"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("view missing %q\n%s", want, rendered)
+		}
+	}
+}
+
+func TestViewWorkflowPanelGatesByWidth(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.height = 20
+	m.invariantState.Extracted = true
+
+	m.width = 109
+	narrow := stripANSI(m.View().Content)
+	if strings.Contains(narrow, "Workflow") {
+		t.Fatalf("workflow panel should be hidden below gating width\n%s", narrow)
+	}
+
+	m.width = 110
+	wide := stripANSI(m.View().Content)
+	if !strings.Contains(wide, "Workflow") {
+		t.Fatalf("workflow panel should appear at gating width\n%s", wide)
 	}
 }

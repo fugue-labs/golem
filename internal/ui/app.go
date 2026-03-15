@@ -1261,6 +1261,64 @@ func (m *Model) shellWidth() int {
 	return 72
 }
 
+func (m *Model) renderSectionHeader(label, meta string, width int) string {
+	if width <= 0 {
+		width = m.shellWidth()
+	}
+	left := m.sty.Shell.SectionLabel.Render(label)
+	if meta == "" {
+		return left
+	}
+	right := m.sty.Shell.SectionMeta.Render(truncateText(meta, max(12, width/2)))
+	return joinShellLine(left, right, width)
+}
+
+func (m *Model) renderSectionRule(width int) string {
+	if width <= 0 {
+		width = m.shellWidth()
+	}
+	return m.sty.Shell.Rule.Width(width).Render(strings.Repeat(styles.Separator, width))
+}
+
+func (m *Model) renderShellRegion(label, meta string, width int, body []string) string {
+	if width <= 0 {
+		width = m.shellWidth()
+	}
+	lines := []string{m.renderSectionHeader(label, meta, width), m.renderSectionRule(width)}
+	lines = append(lines, body...)
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) renderTranscriptMeta() string {
+	if m.scroll > 0 {
+		return fmt.Sprintf("%d messages · scroll +%d", len(m.messages), m.scroll)
+	}
+	if len(m.messages) > 0 {
+		return fmt.Sprintf("%d messages", len(m.messages))
+	}
+	return "Start with a request or /help"
+}
+
+func (m *Model) renderInputMeta() string {
+	switch {
+	case m.approvalMode:
+		return "y allow · n deny · a always allow"
+	case m.askMode:
+		return "Enter answer · Esc cancel"
+	case m.busy:
+		return "Enter steers · Esc cancels"
+	default:
+		return "Enter send · Shift+Enter newline · Tab complete"
+	}
+}
+
+func (m *Model) renderStatusMeta() string {
+	if m.busy {
+		return "Runtime state"
+	}
+	return "Usage, workflow, and key hints"
+}
+
 func (m *Model) renderHeaderStateBadge() string {
 	switch {
 	case m.approvalMode:
@@ -1342,8 +1400,12 @@ func (m *Model) renderHeader() string {
 
 	lowerLeft := m.sty.Muted.Render(truncateText("Context · "+m.renderContextSummary(), max(28, shellWidth/2)))
 	lowerRight := m.sty.HalfMuted.Render(truncateText("Activity · "+m.currentActivitySummary(), max(28, shellWidth/2)))
-
-	return joinShellLine(leftTop, rightTop, shellWidth) + "\n" + joinShellLine(lowerLeft, lowerRight, shellWidth)
+	headerLines := []string{
+		joinShellLine(leftTop, rightTop, shellWidth),
+		joinShellLine(lowerLeft, lowerRight, shellWidth),
+		m.renderSectionRule(shellWidth),
+	}
+	return strings.Join(headerLines, "\n")
 }
 
 func joinShellLine(left, right string, width int) string {
@@ -1447,90 +1509,95 @@ func (m *Model) currentActivitySummary() string {
 }
 
 func (m *Model) renderChat(height, width int) string {
+	sectionMeta := m.renderTranscriptMeta()
+	bodyHeight := max(1, height-2)
+	body := ""
 	if len(m.messages) == 0 {
-		return m.renderWelcome(height, width)
-	}
-
-	// Phase 1: Compute line counts per message using cached renders.
-	// This is cheap because unchanged messages hit the render cache.
-	type msgInfo struct {
-		lines int // lines including trailing gap line
-	}
-	infos := make([]msgInfo, len(m.messages))
-	totalLines := 0
-	for i, msg := range m.messages {
-		msg.Render(m.sty, width, m.messages)
-		n := msg.Lines()
-		if n > 0 {
-			n++ // gap line between messages
+		body = m.renderWelcome(bodyHeight, width)
+	} else {
+		// Phase 1: Compute line counts per message using cached renders.
+		// This is cheap because unchanged messages hit the render cache.
+		type msgInfo struct {
+			lines int // lines including trailing gap line
 		}
-		infos[i] = msgInfo{lines: n}
-		totalLines += n
-	}
-
-	// Phase 2: Clamp scroll.
-	maxScroll := totalLines - height
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if m.scroll > maxScroll {
-		m.scroll = maxScroll
-	}
-
-	// Phase 3: Find which messages are visible.
-	// We show lines [totalLines - m.scroll - height, totalLines - m.scroll).
-	endLine := totalLines - m.scroll
-	startLine := endLine - height
-	if startLine < 0 {
-		startLine = 0
-	}
-
-	// Walk messages to find visible range.
-	var visible []string
-	linePos := 0
-	for i, info := range infos {
-		msgEnd := linePos + info.lines
-		if linePos >= endLine {
-			break // past viewport
+		infos := make([]msgInfo, len(m.messages))
+		totalLines := 0
+		for i, msg := range m.messages {
+			msg.Render(m.sty, width, m.messages)
+			n := msg.Lines()
+			if n > 0 {
+				n++ // gap line between messages
+			}
+			infos[i] = msgInfo{lines: n}
+			totalLines += n
 		}
-		if msgEnd <= startLine {
+
+		// Phase 2: Clamp scroll.
+		maxScroll := totalLines - bodyHeight
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.scroll > maxScroll {
+			m.scroll = maxScroll
+		}
+
+		// Phase 3: Find which messages are visible.
+		// We show lines [totalLines - m.scroll - bodyHeight, totalLines - m.scroll).
+		endLine := totalLines - m.scroll
+		startLine := endLine - bodyHeight
+		if startLine < 0 {
+			startLine = 0
+		}
+
+		// Walk messages to find visible range.
+		var visible []string
+		linePos := 0
+		for i, info := range infos {
+			msgEnd := linePos + info.lines
+			if linePos >= endLine {
+				break // past viewport
+			}
+			if msgEnd <= startLine {
+				linePos = msgEnd
+				continue // before viewport
+			}
+
+			// This message is (partially) visible — use cached render.
+			rendered := m.messages[i].Render(m.sty, width, m.messages)
+			if rendered == "" {
+				linePos = msgEnd
+				continue
+			}
+			msgLines := strings.Split(rendered, "\n")
+			msgLines = append(msgLines, "") // gap line
+
+			// Determine which lines of this message are visible.
+			for j, line := range msgLines {
+				globalLine := linePos + j
+				if globalLine >= startLine && globalLine < endLine {
+					visible = append(visible, line)
+				}
+			}
 			linePos = msgEnd
-			continue // before viewport
 		}
 
-		// This message is (partially) visible — use cached render.
-		rendered := m.messages[i].Render(m.sty, width, m.messages)
-		if rendered == "" {
-			linePos = msgEnd
-			continue
+		// Pad to fill viewport height.
+		for len(visible) < bodyHeight {
+			visible = append([]string{""}, visible...)
 		}
-		msgLines := strings.Split(rendered, "\n")
-		msgLines = append(msgLines, "") // gap line
 
-		// Determine which lines of this message are visible.
-		for j, line := range msgLines {
-			globalLine := linePos + j
-			if globalLine >= startLine && globalLine < endLine {
-				visible = append(visible, line)
+		// Pad every line to exact width so JoinHorizontal places the
+		// panel at a fixed column regardless of which messages are visible.
+		for i, line := range visible {
+			if w := lipgloss.Width(line); w < width {
+				visible[i] = line + strings.Repeat(" ", width-w)
 			}
 		}
-		linePos = msgEnd
+
+		body = strings.Join(visible, "\n")
 	}
 
-	// Pad to fill viewport height.
-	for len(visible) < height {
-		visible = append([]string{""}, visible...)
-	}
-
-	// Pad every line to exact width so JoinHorizontal places the
-	// panel at a fixed column regardless of which messages are visible.
-	for i, line := range visible {
-		if w := lipgloss.Width(line); w < width {
-			visible[i] = line + strings.Repeat(" ", width-w)
-		}
-	}
-
-	return strings.Join(visible, "\n")
+	return m.renderShellRegion("Transcript", sectionMeta, width, strings.Split(body, "\n"))
 }
 
 func (m *Model) renderWelcome(height, width int) string {
@@ -1546,8 +1613,9 @@ func (m *Model) renderWelcome(height, width int) string {
 		m.sty.Muted.Render("  " + truncateText("/doctor — inspect local setup before a long run", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("Describe the change you want and press Enter to start", bodyWidth)),
 		"",
-		m.sty.Bold.Render("  What this shell keeps in view"),
+		m.sty.Bold.Render("  Shell regions"),
 		m.sty.Muted.Render("  " + truncateText("Header: model, repo context, and current activity", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("Transcript: conversation, tool activity, and command output", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("Input: multiline drafting, command completion, and steering while busy", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("Status: usage, workflow state, paging, and key hints", bodyWidth)),
 		"",
@@ -1562,13 +1630,16 @@ func (m *Model) renderWelcome(height, width int) string {
 }
 
 func (m *Model) renderInput() string {
-	if m.approvalMode {
-		return m.renderApproval()
+	var body string
+	switch {
+	case m.approvalMode:
+		body = m.renderApproval()
+	case m.askMode:
+		body = m.renderAskInput()
+	default:
+		body = m.renderInputBusyOrIdle()
 	}
-	if m.askMode {
-		return m.renderAskInput()
-	}
-	return m.renderInputBusyOrIdle()
+	return m.renderShellRegion("Input", m.renderInputMeta(), m.shellWidth(), strings.Split(body, "\n"))
 }
 
 func (m *Model) renderInputBusyOrIdle() string {
@@ -1941,7 +2012,8 @@ func (m *Model) renderStatusBar() string {
 	}
 
 	content := left + strings.Repeat(" ", gap) + hints
-	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
+	bar := m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
+	return m.renderShellRegion("Status", m.renderStatusMeta(), shellWidth, []string{bar})
 }
 
 func (m *Model) renderSkillsList() []*chat.Message {

@@ -9,6 +9,8 @@ import (
 
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
+	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
+	"github.com/fugue-labs/golem/internal/ui/styles"
 )
 
 func TestRuntimeSummaryGolden(t *testing.T) {
@@ -55,5 +57,22 @@ func TestHelpMessageGolden(t *testing.T) {
 	}
 	if strings.TrimRight(got, "\n") != strings.TrimRight(string(want), "\n") {
 		t.Fatalf("help message mismatch\n--- got ---\n%s\n--- want ---\n%s", got, string(want))
+	}
+}
+
+func TestShellLayoutViewGolden(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", PermissionMode: "suggest"})
+	m.sty = styles.New(nil)
+	m.width = 120
+	m.height = 24
+	m.input.SetValue("/help")
+	m.pendingMsgs = []string{"follow-up"}
+	m.invariantState = uiinvariants.State{Extracted: true}
+
+	got := stripANSI(m.View().Content)
+	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Workflow", "Context ·", "Activity ·", "/help"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("shell layout missing %q\n%s", want, got)
+		}
 	}
 }
