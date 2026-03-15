@@ -198,7 +198,7 @@ func (s *SQLiteStore) CreateMission(ctx context.Context, m *Mission) error {
 		formatTime(m.CreatedAt), formatTime(m.UpdatedAt),
 		formatNullTime(m.StartedAt), formatNullTime(m.EndedAt), formatNullTime(m.LastReplanAt),
 	)
-	return err
+	return normalizeCreateError(err, "mission", m.ID)
 }
 
 func (s *SQLiteStore) GetMission(ctx context.Context, id string) (*Mission, error) {
@@ -293,7 +293,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, t *Task) error {
 		t.EstimatedEffort, string(t.RiskLevel), t.AttemptCount, t.BlockingReason,
 		formatTime(t.CreatedAt), formatTime(t.UpdatedAt),
 	)
-	return err
+	return normalizeCreateError(err, "task", t.ID)
 }
 
 func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
@@ -426,7 +426,7 @@ func (s *SQLiteStore) CreateRun(ctx context.Context, r *Run) error {
 		formatNullTime(r.LeaseExpires), formatNullTime(r.HeartbeatAt), r.WorktreePath,
 		formatNullTime(r.StartedAt), formatNullTime(r.EndedAt), r.Summary, r.ErrorText,
 	)
-	return err
+	return normalizeCreateError(err, "run", r.ID)
 }
 
 func (s *SQLiteStore) CreateRunExclusive(ctx context.Context, r *Run) (bool, error) {
@@ -447,7 +447,7 @@ func (s *SQLiteStore) CreateRunExclusive(ctx context.Context, r *Run) (bool, err
 		r.TaskID, string(r.Mode), string(RunRunning),
 	)
 	if err != nil {
-		return false, err
+		return false, normalizeCreateError(err, "run", r.ID)
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
@@ -638,7 +638,7 @@ func (s *SQLiteStore) CreateApproval(ctx context.Context, a *Approval) error {
 		a.ID, a.MissionID, a.TaskID, a.RunID, a.Kind, string(a.Status),
 		reqJSON, respJSON, formatTime(a.CreatedAt), formatNullTime(a.ResolvedAt),
 	)
-	return err
+	return normalizeCreateError(err, "approval", a.ID)
 }
 
 func (s *SQLiteStore) GetApproval(ctx context.Context, id string) (*Approval, error) {

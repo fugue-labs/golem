@@ -3,9 +3,13 @@ package mission
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+
+	sqlite3 "modernc.org/sqlite"
 )
 
 // --- Scan helpers ---
@@ -311,8 +315,36 @@ func compareTimePtrs(left, right *time.Time) int {
 
 // --- Error helpers ---
 
+func alreadyExistsError(kind, id string) error {
+	return fmt.Errorf("%s %s already exists", kind, id)
+}
+
 func notFoundError(kind, id string) error {
 	return fmt.Errorf("%s %s not found", kind, id)
+}
+
+func normalizeCreateError(err error, kind, id string) error {
+	if err == nil {
+		return nil
+	}
+	if isSQLiteDuplicateError(err) {
+		return alreadyExistsError(kind, id)
+	}
+	return err
+}
+
+func isSQLiteDuplicateError(err error) bool {
+	var sqlErr *sqlite3.Error
+	if errors.As(err, &sqlErr) {
+		switch sqlErr.Code() {
+		case 19, 1555, 2067:
+			return true
+		}
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint failed") ||
+		strings.Contains(message, "constraint failed") && strings.Contains(message, "(1555)") ||
+		strings.Contains(message, "constraint failed") && strings.Contains(message, "(2067)")
 }
 
 func requireRowsAffected(result sql.Result, kind, id string) error {

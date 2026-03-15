@@ -2,7 +2,6 @@ package mission
 
 import (
 	"context"
-	"fmt"
 	"sync"
 )
 
@@ -36,7 +35,7 @@ func (s *InMemoryStore) CreateMission(_ context.Context, m *Mission) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.missions[m.ID]; ok {
-		return fmt.Errorf("mission %s already exists", m.ID)
+		return alreadyExistsError("mission", m.ID)
 	}
 	s.missions[m.ID] = cloneMission(m)
 	return nil
@@ -77,7 +76,7 @@ func (s *InMemoryStore) CreateTask(_ context.Context, t *Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.tasks[t.ID]; ok {
-		return fmt.Errorf("task %s already exists", t.ID)
+		return alreadyExistsError("task", t.ID)
 	}
 	s.tasks[t.ID] = cloneTask(t)
 	return nil
@@ -152,7 +151,7 @@ func (s *InMemoryStore) CreateRun(_ context.Context, r *Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.runs[r.ID]; ok {
-		return fmt.Errorf("run %s already exists", r.ID)
+		return alreadyExistsError("run", r.ID)
 	}
 	s.runs[r.ID] = cloneRun(r)
 	return nil
@@ -167,7 +166,7 @@ func (s *InMemoryStore) CreateRunExclusive(_ context.Context, r *Run) (bool, err
 		}
 	}
 	if _, ok := s.runs[r.ID]; ok {
-		return false, fmt.Errorf("run %s already exists", r.ID)
+		return false, alreadyExistsError("run", r.ID)
 	}
 	s.runs[r.ID] = cloneRun(r)
 	return true, nil
@@ -258,7 +257,7 @@ func (s *InMemoryStore) CreateApproval(_ context.Context, a *Approval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.approvals[a.ID]; ok {
-		return fmt.Errorf("approval %s already exists", a.ID)
+		return alreadyExistsError("approval", a.ID)
 	}
 	s.approvals[a.ID] = cloneApproval(a)
 	return nil
