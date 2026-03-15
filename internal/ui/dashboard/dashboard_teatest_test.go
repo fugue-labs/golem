@@ -243,11 +243,11 @@ func TestTeatestWorkerMetricsInHeader(t *testing.T) {
 	})
 
 	refreshModel(t, m)
-	view := viewString(m)
+	view := stripANSI(viewString(m))
 
 	// Header should show active worker count (running + queued = 3).
-	if !strings.Contains(view, "Workers 3") {
-		t.Errorf("expected 'Workers 3' in header metrics, got:\n%s", truncStr(view, 300))
+	if !strings.Contains(view, "Workers 3 active") {
+		t.Errorf("expected 'Workers 3 active' in header metrics, got:\n%s", truncStr(view, 300))
 	}
 }
 

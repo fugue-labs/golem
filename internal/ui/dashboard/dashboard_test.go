@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"regexp"
 	"testing"
 	"time"
 
@@ -371,6 +372,58 @@ func containsAny(s string, substrs ...string) bool {
 
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && searchString(s, sub)
+}
+
+func stripANSITest(s string) string {
+	re := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	return re.ReplaceAllString(s, "")
+}
+
+func TestRenderMetricSeparatesKeyAndValue(t *testing.T) {
+	m := New("")
+	metric := m.renderMetric("Workers", "3 active")
+	plain := stripANSITest(metric)
+	if plain != "Workers 3 active" {
+		t.Fatalf("expected plain metric text, got %q", plain)
+	}
+	if metric == plain {
+		t.Fatalf("expected styled metric output to differ from plain text")
+	}
+}
+
+func TestRenderPaneHeaderFocusedCopy(t *testing.T) {
+	m := New("")
+	plain := stripANSITest(m.renderPaneHeader("Workers", true, 80))
+	if !containsAny(plain, "▸ [2] Workers", "▸ [2] Workers ACTIVE") {
+		t.Fatalf("expected focused workers header, got %q", plain)
+	}
+	if !containsAny(plain, "ACTIVE", "j/k scroll") {
+		t.Fatalf("expected active navigation hint, got %q", plain)
+	}
+}
+
+func TestRenderHeaderNoMissionShowsReadableIdleState(t *testing.T) {
+	m := New("")
+	m.width = 80
+	lines := m.renderHeader()
+	joined := stripANSITest(stringsJoin(lines, "\n"))
+	if !containsAny(joined, "Mission Control", "No mission") {
+		t.Fatalf("expected Mission Control no-mission header, got %q", joined)
+	}
+	if !containsAny(joined, "No active mission", "/mission new") {
+		t.Fatalf("expected no-mission guidance, got %q", joined)
+	}
+}
+
+func stringsJoin(parts []string, sep string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	out := parts[0]
+	for _, part := range parts[1:] {
+		out += sep + part
+	}
+	return out
 }
 
 func searchString(s, sub string) bool {

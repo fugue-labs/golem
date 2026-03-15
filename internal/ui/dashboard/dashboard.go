@@ -326,8 +326,9 @@ func (m *Model) View() tea.View {
 // renderHeader renders the mission header.
 func (m *Model) renderHeader() []string {
 	if m.missionObj == nil {
+		titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("idle", "No mission")
 		return []string{
-			m.sty.Panel.Title.Render("Mission Control"),
+			titleLine,
 			m.sty.Panel.EmptyTitle.Render("No active mission"),
 			m.sty.Panel.EmptyBody.Render("Create one with /mission new or run golem mission new."),
 			m.sty.Panel.EmptyBody.Render("The dashboard will attach as soon as durable mission state exists."),
@@ -345,13 +346,7 @@ func (m *Model) renderHeader() []string {
 		}
 	}
 
-	statusChip := lipgloss.NewStyle().
-		Foreground(m.sty.FgBase).
-		Background(m.sty.BgSubtle).
-		Bold(true).
-		Padding(0, 1).
-		Render(fmt.Sprintf("%s %s", missionStatusIcon(ms.Status), ms.Status))
-	titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + statusChip
+	titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip(string(ms.Status), fmt.Sprintf("%s %s", missionStatusIcon(ms.Status), ms.Status))
 
 	missionTitle := strings.TrimSpace(ms.Title)
 	if missionTitle == "" {
@@ -362,26 +357,26 @@ func (m *Model) renderHeader() []string {
 	done := tc.Done + tc.Integrated + tc.Accepted
 	blocked := tc.Blocked + tc.Failed
 	metricSegments := []string{
-		m.renderMetric("Tasks", fmt.Sprintf("%d/%d", done, tc.Total)),
-		m.renderMetric("Workers", fmt.Sprintf("%d", activeRuns)),
+		m.renderMetric("Tasks", fmt.Sprintf("%d/%d complete", done, tc.Total)),
+		m.renderMetric("Workers", fmt.Sprintf("%d active", activeRuns)),
 	}
 	if tc.Running > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Running", fmt.Sprintf("%d", tc.Running)))
+		metricSegments = append(metricSegments, m.renderMetric("Running", fmt.Sprintf("%d now", tc.Running)))
 	}
 	if tc.Ready > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Ready", fmt.Sprintf("%d", tc.Ready)))
+		metricSegments = append(metricSegments, m.renderMetric("Ready", fmt.Sprintf("%d queued", tc.Ready)))
 	}
 	if tc.AwaitingReview > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Review", fmt.Sprintf("%d", tc.AwaitingReview)))
+		metricSegments = append(metricSegments, m.renderMetric("Review", fmt.Sprintf("%d waiting", tc.AwaitingReview)))
 	}
 	if blocked > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Blocked", fmt.Sprintf("%d", blocked)))
+		metricSegments = append(metricSegments, m.renderMetric("Blocked", fmt.Sprintf("%d stalled", blocked)))
 	}
 	if m.summary.PendingApprovals > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Approvals", fmt.Sprintf("%d", m.summary.PendingApprovals)))
+		metricSegments = append(metricSegments, m.renderMetric("Approvals", fmt.Sprintf("%d pending", m.summary.PendingApprovals)))
 	}
 	if len(m.artifacts) > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Evidence", fmt.Sprintf("%d", len(m.artifacts))))
+		metricSegments = append(metricSegments, m.renderMetric("Evidence", fmt.Sprintf("%d items", len(m.artifacts))))
 	}
 	if ms.StartedAt != nil {
 		metricSegments = append(metricSegments, m.renderMetric("Elapsed", time.Since(*ms.StartedAt).Truncate(time.Second).String()))
@@ -411,9 +406,9 @@ func (m *Model) renderHeader() []string {
 		lines = append(lines, wrapSegments(metaSegments, max(1, m.width), m.sty.Panel.Separator.Render(" • "))...)
 	}
 
-	goalPrefix := m.sty.Muted.Render("Goal ")
-	goalText := ansi.Truncate(ms.Goal, max(1, m.width-lipgloss.Width(goalPrefix)), "…")
-	lines = append(lines, goalPrefix+m.sty.HalfMuted.Render(goalText))
+	goalLabel := m.sty.Panel.MetricKey.Render("Goal")
+	goalText := ansi.Truncate(ms.Goal, max(1, m.width-lipgloss.Width(goalLabel)-1), "…")
+	lines = append(lines, goalLabel+" "+m.sty.HalfMuted.Render(goalText))
 	return lines
 }
 
@@ -767,8 +762,8 @@ func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
 	if focused {
 		indicator = "▸"
 		headStyle = m.sty.Panel.HeaderActive
-		metaStyle = m.sty.HalfMuted
-		meta = "j/k scroll"
+		metaStyle = m.sty.Panel.HeaderMeta.Bold(true)
+		meta = "ACTIVE • j/k scroll"
 	}
 	label := fmt.Sprintf("%s %s %s", indicator, paneShortcut(title), title)
 	line := headStyle.Render(label) + " " + metaStyle.Render(meta)
@@ -776,7 +771,35 @@ func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
 }
 
 func (m *Model) renderMetric(key, value string) string {
-	return m.sty.Panel.MetricValue.Render(key + " " + value)
+	return lipgloss.JoinHorizontal(lipgloss.Left,
+		m.sty.Panel.MetricKey.Render(key),
+		" ",
+		m.sty.Panel.MetricValue.Render(value),
+	)
+}
+
+func (m *Model) renderStatusChip(kind, text string) string {
+	style := lipgloss.NewStyle().
+		Foreground(m.sty.FgBase).
+		Background(m.sty.BgSubtle).
+		Bold(true).
+		Padding(0, 1)
+	lower := strings.ToLower(kind)
+	switch {
+	case strings.Contains(lower, "run") || strings.Contains(lower, "active"):
+		style = style.Background(m.sty.Blue)
+	case strings.Contains(lower, "await") || strings.Contains(lower, "review"):
+		style = style.Background(m.sty.Yellow)
+	case strings.Contains(lower, "block") || strings.Contains(lower, "fail") || strings.Contains(lower, "error"):
+		style = style.Background(m.sty.Red)
+	case strings.Contains(lower, "done") || strings.Contains(lower, "complete") || strings.Contains(lower, "success"):
+		style = style.Background(m.sty.Green)
+	case strings.Contains(lower, "idle") || strings.Contains(lower, "draft") || strings.Contains(lower, "pause"):
+		style = style.Background(m.sty.BgSubtle)
+	default:
+		style = style.Background(m.sty.Primary)
+	}
+	return style.Render(text)
 }
 
 func (m *Model) renderEmptyState(width int, title, body string) []string {
