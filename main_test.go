@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -108,5 +110,38 @@ func TestRunRuntimeShowsValidationWarnings(t *testing.T) {
 	}
 	if errOut.Len() != 0 {
 		t.Fatalf("unexpected stderr: %q", errOut.String())
+	}
+}
+
+func TestRunDashboardDispatchesMissionID(t *testing.T) {
+	origRunDashboard := runDashboardFunc
+	t.Cleanup(func() {
+		runDashboardFunc = origRunDashboard
+	})
+
+	called := false
+	runDashboardFunc = func(missionID string, errOut io.Writer) int {
+		called = true
+		if missionID != "mission-123" {
+			t.Fatalf("missionID=%q", missionID)
+		}
+		fmt.Fprint(errOut, "dashboard invoked")
+		return 7
+	}
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	code := run([]string{"dashboard", "mission-123"}, &out, &errOut)
+	if !called {
+		t.Fatal("expected dashboard runner to be called")
+	}
+	if code != 7 {
+		t.Fatalf("run() code=%d", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("unexpected stdout: %q", out.String())
+	}
+	if got := errOut.String(); got != "dashboard invoked" {
+		t.Fatalf("stderr=%q", got)
 	}
 }

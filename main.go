@@ -23,6 +23,7 @@ var (
 	prepareRuntimeFunc = agent.PrepareRuntime
 	loginRunFunc       = login.Run
 	logoutFunc         = login.Logout
+	runDashboardFunc   = runDashboard
 )
 
 func main() {
@@ -55,7 +56,7 @@ func run(args []string, out, errOut io.Writer) int {
 			if len(args) >= 2 {
 				missionID = args[1]
 			}
-			return runDashboard(missionID, errOut)
+			return runDashboardFunc(missionID, errOut)
 		case "status", "runtime":
 			return runRuntimeCommand(args[0], args[1:], out, errOut)
 		case "automations":

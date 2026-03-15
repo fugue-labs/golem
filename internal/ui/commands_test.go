@@ -282,8 +282,10 @@ func TestCommandDiff(t *testing.T) {
 func TestCommandSearch(t *testing.T) {
 	m := simulateCommand(t, newTestModel(), "/search")
 	content := lastMessage(t, m)
-	if !strings.Contains(content, "Usage:") {
-		t.Fatalf("expected search usage message, got %q", content)
+	for _, want := range []string{"Usage:", "/search <query>", "search across all saved sessions", "Examples"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected search usage message to contain %q, got %q", want, content)
+		}
 	}
 }
 
