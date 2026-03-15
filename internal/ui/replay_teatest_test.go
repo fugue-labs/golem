@@ -32,6 +32,53 @@ func newReplayTUIModel() replayTUIModel {
 	return replayTUIModel{}
 }
 
+func normalizeTeatestOutput(bts []byte) string {
+	s := strings.ReplaceAll(string(bts), "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
+}
+
+func outputContainsText(bts []byte, want string) bool {
+	want = strings.ReplaceAll(want, "\r\n", "\n")
+	return strings.Contains(normalizeTeatestOutput(bts), want)
+}
+
+func outputContainsLines(bts []byte, want string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(want, "\r\n", "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.Contains(normalizeTeatestOutput(bts), line) {
+			return false
+		}
+	}
+	return true
+}
+
+func outputContainsReplayEmptyState(bts []byte, includeListHint bool) bool {
+	want := replayEmptyState(includeListHint)
+	lines := strings.Split(strings.ReplaceAll(want, "\r\n", "\n"), "\n")
+	if len(lines) < 2 {
+		return outputContainsText(bts, want)
+	}
+	if !strings.Contains(normalizeTeatestOutput(bts), lines[0]) {
+		return false
+	}
+	if !strings.Contains(normalizeTeatestOutput(bts), lines[1]) {
+		return false
+	}
+	if !strings.Contains(normalizeTeatestOutput(bts), "/resume") {
+		return false
+	}
+	if includeListHint && !strings.Contains(normalizeTeatestOutput(bts), "/replay list") {
+		return false
+	}
+	return true
+}
+
+func outputContainsReplayStartSummary(bts []byte, trace *agent.ReplayTrace) bool {
+	return outputContainsLines(bts, replayStartSummary(trace))
+}
+
 func (m replayTUIModel) Init() tea.Cmd { return nil }
 
 func (m replayTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -169,11 +216,11 @@ func (m *replayTUIModel) handleReplayCommand(text string) (*chat.Message, tea.Cm
 	arg := strings.TrimSpace(strings.TrimPrefix(text, "/replay"))
 
 	if arg == "list" {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions. Run a prompt first, then use `/replay` for the latest trace."}, nil
+		return &chat.Message{Kind: chat.KindAssistant, Content: replayEmptyState(false)}, nil
 	}
 
 	// For test purposes, we don't load from files — traces are injected via startReplayMsg.
-	return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions. Run a prompt first, then use `/replay` for the latest trace or `/replay list` to inspect saved traces."}, nil
+	return &chat.Message{Kind: chat.KindAssistant, Content: replayEmptyState(true)}, nil
 }
 
 // startReplay initializes replay mode and begins feeding events.
@@ -185,12 +232,8 @@ func (m replayTUIModel) startReplay(trace *agent.ReplayTrace) (tea.Model, tea.Cm
 	m.busy = true
 
 	msg := &chat.Message{
-		Kind: chat.KindSystem,
-		Content: fmt.Sprintf("Replaying session from %s (%s, %d events). Press Esc to stop.",
-			trace.StartTime.Format("Jan 2 15:04"),
-			trace.Model,
-			len(trace.Events),
-		),
+		Kind:    chat.KindSystem,
+		Content: replayStartSummary(trace),
 	}
 	m.messages = append(m.messages, msg)
 
@@ -459,7 +502,7 @@ func TestTeatestReplayListCommand(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		return strings.Contains(string(bts), "No replay traces found.")
+		return outputContainsReplayEmptyState(bts, false)
 	}, teatest.WithDuration(5*time.Second))
 
 	tm.Quit()
@@ -475,7 +518,7 @@ func TestTeatestReplayNoTraces(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		return strings.Contains(string(bts), "No replay traces found.")
+		return outputContainsReplayEmptyState(bts, true)
 	}, teatest.WithDuration(5*time.Second))
 
 	tm.Quit()
@@ -776,9 +819,8 @@ func TestTeatestReplayEmptyTrace(t *testing.T) {
 
 	// Should immediately complete.
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		s := string(bts)
-		return strings.Contains(s, "Replaying session from") &&
-			strings.Contains(s, "0 events") &&
+		s := normalizeTeatestOutput(bts)
+		return outputContainsReplayStartSummary(bts, trace) &&
 			strings.Contains(s, "Replay complete.")
 	}, teatest.WithDuration(5*time.Second))
 

@@ -39,10 +39,11 @@ type messageContent struct {
 }
 
 type transcriptEntry struct {
-	Kind     int    `json:"kind"`
-	Content  string `json:"content,omitempty"`
-	ToolName string `json:"tool_name,omitempty"`
-	ToolArgs string `json:"tool_args,omitempty"`
+	Kind     int
+	Content  string
+	ToolName string
+	ToolArgs string
+	RawArgs  string
 }
 
 type sessionMeta struct {
@@ -125,7 +126,7 @@ func SearchSessions(query string, projectDir string, maxResults int) ([]SessionR
 			Timestamp:   meta.timestamp,
 			Prompt:      meta.prompt,
 			Score:       r.Score,
-			Snippet:     extractSessionSnippet(meta.session, r.Doc.Text, query, 220),
+			Snippet:     extractSessionSnippet(meta.session, r.Doc.Text, query, 280),
 		})
 	}
 	return out, nil
@@ -275,6 +276,9 @@ func extractLegacyMessageText(raw json.RawMessage) string {
 					if text, ok := m["text"].(string); ok {
 						appendSearchLine(&lines, text)
 					}
+					if text, ok := m["Text"].(string); ok {
+						appendSearchLine(&lines, text)
+					}
 				}
 			}
 		}
@@ -333,41 +337,16 @@ func extractTranscriptSnippet(raw json.RawMessage, query string, maxLen int) str
 		return ""
 	}
 
-	start := idx - 1
-	if start < 0 {
-		start = 0
-	}
-	end := idx + 2
-	if end > len(lines) {
-		end = len(lines)
-	}
-
-	selected := make([]string, 0, end-start)
-	remaining := maxLen
-	for _, line := range lines[start:end] {
-		if remaining <= 0 {
-			break
-		}
-		budget := remaining
-		if budget > 140 {
-			budget = 140
-		}
-		line = truncateRunes(line, budget)
-		if line == "" {
-			continue
-		}
-		selected = append(selected, line)
-		remaining -= len([]rune(line)) + 1
-	}
-	return strings.Join(selected, "\n")
+	window := snippetLineWindow(lines, idx)
+	return joinSnippetLines(window, maxLen)
 }
 
 func transcriptDisplayLines(raw json.RawMessage) []string {
 	if len(raw) == 0 {
 		return nil
 	}
-	var entries []transcriptEntry
-	if err := json.Unmarshal(raw, &entries); err != nil {
+	entries, err := decodeTranscriptEntries(raw)
+	if err != nil {
 		return nil
 	}
 
@@ -378,6 +357,147 @@ func transcriptDisplayLines(raw json.RawMessage) []string {
 		}
 	}
 	return lines
+}
+
+func decodeTranscriptEntries(raw json.RawMessage) ([]transcriptEntry, error) {
+	var wire []map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, err
+	}
+
+	entries := make([]transcriptEntry, 0, len(wire))
+	for _, item := range wire {
+		entry := transcriptEntry{
+			Kind:     decodeTranscriptKind(item),
+			Content:  firstString(item, "content", "Content"),
+			ToolName: firstString(item, "tool_name", "toolName", "ToolName"),
+			ToolArgs: firstString(item, "tool_args", "toolArgs", "ToolArgs"),
+			RawArgs:  firstString(item, "raw_args", "rawArgs", "RawArgs"),
+		}
+		if entry.Content == "" {
+			entry.Content = decodeTranscriptContent(item)
+		}
+		if entry.ToolName == "" && entry.Kind == 2 {
+			entry.ToolName = firstString(item, "name", "Name")
+		}
+		if entry.ToolArgs == "" {
+			entry.ToolArgs = decodeTranscriptToolArgs(item)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func decodeTranscriptKind(item map[string]any) int {
+	for _, key := range []string{"kind", "Kind"} {
+		if v, ok := item[key]; ok {
+			switch x := v.(type) {
+			case float64:
+				return int(x)
+			case int:
+				return x
+			case string:
+				switch strings.ToLower(strings.TrimSpace(x)) {
+				case "user", "kinduser":
+					return 0
+				case "assistant", "kindassistant":
+					return 1
+				case "toolcall", "tool_call", "kindtoolcall":
+					return 2
+				case "toolresult", "tool_result", "kindtoolresult":
+					return 3
+				case "thinking", "kindthinking":
+					return 4
+				case "error", "kinderror":
+					return 5
+				case "system", "kindsystem":
+					return 6
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func decodeTranscriptContent(item map[string]any) string {
+	for _, key := range []string{"result", "Result", "text", "Text"} {
+		if text := stringifyField(item[key]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func decodeTranscriptToolArgs(item map[string]any) string {
+	for _, key := range []string{"args", "Args"} {
+		if text := stringifyField(item[key]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func firstString(item map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if text := stringifyField(item[key]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func stringifyField(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return normalizeSearchText(x)
+	case []byte:
+		return normalizeSearchText(string(x))
+	case json.RawMessage:
+		return normalizeSearchText(string(x))
+	default:
+		return stringifySearchValue(x)
+	}
+}
+
+func snippetLineWindow(lines []string, idx int) []string {
+	if idx < 0 || idx >= len(lines) {
+		return nil
+	}
+	start := idx - 1
+	if start < 0 {
+		start = 0
+	}
+	end := idx + 2
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return lines[start:end]
+}
+
+func joinSnippetLines(lines []string, maxLen int) string {
+	if len(lines) == 0 || maxLen <= 0 {
+		return ""
+	}
+	selected := make([]string, 0, len(lines))
+	remaining := maxLen
+	for _, line := range lines {
+		if remaining <= 0 {
+			break
+		}
+		budget := remaining
+		if budget > 160 {
+			budget = 160
+		}
+		line = truncateRunes(line, budget)
+		if line == "" {
+			continue
+		}
+		selected = append(selected, line)
+		remaining -= len([]rune(line)) + 1
+	}
+	return strings.Join(selected, "\n")
 }
 
 func formatTranscriptLine(entry transcriptEntry) string {
@@ -394,12 +514,15 @@ func formatTranscriptLine(entry transcriptEntry) string {
 		}
 		return "Assistant: " + content
 	case 2:
-		parts := make([]string, 0, 3)
+		parts := make([]string, 0, 4)
 		if entry.ToolName != "" {
 			parts = append(parts, entry.ToolName)
 		}
 		if entry.ToolArgs != "" {
 			parts = append(parts, normalizeSearchText(entry.ToolArgs))
+		}
+		if entry.RawArgs != "" && normalizeSearchText(entry.RawArgs) != normalizeSearchText(entry.ToolArgs) {
+			parts = append(parts, normalizeSearchText(entry.RawArgs))
 		}
 		if content != "" {
 			parts = append(parts, content)

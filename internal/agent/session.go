@@ -16,19 +16,116 @@ import (
 
 // SessionData holds the full serializable state of a golem session.
 type SessionData struct {
-	Messages          json.RawMessage        `json:"messages"`
-	Transcript        json.RawMessage        `json:"transcript,omitempty"`
-	ToolState         map[string]any         `json:"tool_state,omitempty"`
-	Usage             core.RunUsage          `json:"usage"`
-	Model             string                 `json:"model"`
-	Provider          string                 `json:"provider"`
-	WorkDir           string                 `json:"work_dir"`
-	Timestamp         time.Time              `json:"timestamp"`
-	Prompt            string                 `json:"prompt,omitempty"`
-	PlanState         json.RawMessage        `json:"plan_state,omitempty"`
-	InvariantState    json.RawMessage        `json:"invariant_state,omitempty"`
-	VerificationState json.RawMessage        `json:"verification_state,omitempty"`
-	SpecState         json.RawMessage        `json:"spec_state,omitempty"`
+	Messages          json.RawMessage `json:"messages"`
+	Transcript        json.RawMessage `json:"transcript,omitempty"`
+	ToolState         map[string]any  `json:"tool_state,omitempty"`
+	Usage             core.RunUsage   `json:"usage"`
+	Model             string          `json:"model"`
+	Provider          string          `json:"provider"`
+	WorkDir           string          `json:"work_dir"`
+	Timestamp         time.Time       `json:"timestamp"`
+	Prompt            string          `json:"prompt,omitempty"`
+	PlanState         json.RawMessage `json:"plan_state,omitempty"`
+	InvariantState    json.RawMessage `json:"invariant_state,omitempty"`
+	VerificationState json.RawMessage `json:"verification_state,omitempty"`
+	SpecState         json.RawMessage `json:"spec_state,omitempty"`
+}
+
+// SessionSummary captures the visible state available in a saved session.
+type SessionSummary struct {
+	Timestamp       time.Time
+	PromptPreview   string
+	Model           string
+	Provider        string
+	Requests        int
+	HasTranscript   bool
+	HasPlan         bool
+	HasInvariants   bool
+	HasVerification bool
+	HasSpec         bool
+}
+
+// Summary returns a compact description of what a saved session can restore.
+func (s *SessionData) Summary() SessionSummary {
+	if s == nil {
+		return SessionSummary{}
+	}
+	return SessionSummary{
+		Timestamp:       s.Timestamp,
+		PromptPreview:   summarizeSessionPreview(s.Prompt, 72),
+		Model:           strings.TrimSpace(s.Model),
+		Provider:        strings.TrimSpace(s.Provider),
+		Requests:        s.Usage.Requests,
+		HasTranscript:   len(s.Transcript) > 0,
+		HasPlan:         len(s.PlanState) > 0,
+		HasInvariants:   len(s.InvariantState) > 0,
+		HasVerification: len(s.VerificationState) > 0,
+		HasSpec:         len(s.SpecState) > 0,
+	}
+}
+
+// ShortDescription returns a compact, human-readable summary of a saved session.
+func (s SessionSummary) ShortDescription() string {
+	parts := make([]string, 0, 4)
+	if !s.Timestamp.IsZero() {
+		parts = append(parts, s.Timestamp.Format("Jan 2 15:04"))
+	}
+	model := s.Model
+	if model == "" {
+		model = "unknown model"
+	}
+	if s.Provider != "" {
+		parts = append(parts, model+" via "+s.Provider)
+	} else {
+		parts = append(parts, model)
+	}
+	if s.Requests > 0 {
+		parts = append(parts, fmt.Sprintf("%d requests", s.Requests))
+	}
+	if s.PromptPreview != "" {
+		parts = append(parts, fmt.Sprintf("prompt %q", s.PromptPreview))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// RestorableStateDescription summarizes the kinds of state `/resume` can restore.
+func (s SessionSummary) RestorableStateDescription() string {
+	parts := []string{"conversation history"}
+	if s.HasTranscript {
+		parts = append(parts, "transcript state")
+	}
+	if s.HasPlan || s.HasInvariants || s.HasVerification || s.HasSpec {
+		parts = append(parts, "saved workflow data")
+	}
+	return joinSummaryParts(parts)
+}
+
+func summarizeSessionPreview(text string, maxRunes int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if text == "" || maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	if maxRunes == 1 {
+		return "…"
+	}
+	return string(runes[:maxRunes-1]) + "…"
+}
+
+func joinSummaryParts(parts []string) string {
+	switch len(parts) {
+	case 0:
+		return "saved session state"
+	case 1:
+		return parts[0]
+	case 2:
+		return parts[0] + " and " + parts[1]
+	default:
+		return strings.Join(parts[:len(parts)-1], ", ") + ", and " + parts[len(parts)-1]
+	}
 }
 
 // SessionDir returns the session directory for the given working directory.

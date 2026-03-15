@@ -17,6 +17,35 @@ type replayTickMsg struct{}
 // replayDoneMsg signals replay has finished.
 type replayDoneMsg struct{}
 
+func replayEmptyState(includeListHint bool) string {
+	lines := []string{
+		"No replay traces found yet for this project.",
+		"Traces are recorded automatically after agent runs.",
+		"Run a prompt first, then use `/replay` for the latest trace.",
+	}
+	if includeListHint {
+		lines = append(lines, "Use `/replay list` to inspect saved traces.")
+	}
+	lines = append(lines, "Use `/resume` to restore the last saved session state.")
+	return strings.Join(lines, "\n")
+}
+
+func replayStartSummary(trace *agent.ReplayTrace) string {
+	provider := strings.TrimSpace(trace.Provider)
+	if provider == "" {
+		provider = "unknown provider"
+	}
+	model := strings.TrimSpace(trace.Model)
+	if model == "" {
+		model = "unknown model"
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Replaying session from %s.", trace.StartTime.Format("Jan 2 15:04")),
+		fmt.Sprintf("Model: %s via %s.", model, provider),
+		fmt.Sprintf("%d events. Press Esc to stop.", len(trace.Events)),
+	}, "\n")
+}
+
 // handleReplayCommand processes /replay commands.
 func (m *Model) handleReplayCommand(text string) (*chat.Message, tea.Cmd) {
 	if m.busy {
@@ -50,7 +79,7 @@ func (m *Model) handleReplayCommand(text string) (*chat.Message, tea.Cmd) {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to load trace: %v", err)}, nil
 	}
 	if trace == nil {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions. Run a prompt first, then use `/replay` for the latest trace or `/replay list` to inspect saved traces."}, nil
+		return &chat.Message{Kind: chat.KindAssistant, Content: replayEmptyState(true)}, nil
 	}
 
 	return m.startReplay(trace)
@@ -63,20 +92,25 @@ func (m *Model) listTraces() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to list traces: %v", err)}
 	}
 	if len(traces) == 0 {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions. Run a prompt first, then use `/replay` for the latest trace."}
+		return &chat.Message{Kind: chat.KindAssistant, Content: replayEmptyState(false)}
 	}
 
 	var b strings.Builder
 	b.WriteString("**Saved replay traces**\n\n")
 	for _, t := range traces {
-		fmt.Fprintf(&b, "- `%s` — %s, %s, %d events\n",
+		provider := strings.TrimSpace(t.Provider)
+		if provider == "" {
+			provider = "unknown provider"
+		}
+		fmt.Fprintf(&b, "- `%s` — %s · %s via %s · %d events\n",
 			t.Filename,
 			t.Timestamp.Format("Jan 2 15:04"),
 			t.Model,
+			provider,
 			t.Events,
 		)
 	}
-	b.WriteString("\nUse `/replay <filename>` to replay a specific trace, or `/replay` for latest.")
+	b.WriteString("\nUse `/replay <filename>` to replay a specific trace, `/replay` for the latest trace, or `/resume` to restore the last saved session state.")
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
 
@@ -89,12 +123,8 @@ func (m *Model) startReplay(trace *agent.ReplayTrace) (*chat.Message, tea.Cmd) {
 	m.busy = true
 
 	msg := &chat.Message{
-		Kind: chat.KindSystem,
-		Content: fmt.Sprintf("Replaying session from %s (%s, %d events). Press Esc to stop.",
-			trace.StartTime.Format("Jan 2 15:04"),
-			trace.Model,
-			len(trace.Events),
-		),
+		Kind:    chat.KindSystem,
+		Content: replayStartSummary(trace),
 	}
 
 	return msg, m.replayNext()
@@ -296,4 +326,3 @@ func (m *Model) flushTrace() {
 	}
 	m.trace = nil
 }
-

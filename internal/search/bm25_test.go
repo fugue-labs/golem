@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fugue-labs/golem/internal/agent"
+	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/gollem/core"
 )
 
 func TestTokenize(t *testing.T) {
@@ -210,5 +214,42 @@ func TestSearchSessionsPrefersTranscriptSnippet(t *testing.T) {
 	}
 	if !strings.Contains(results[0].Snippet, "User: search for authentication fix") {
 		t.Fatalf("snippet=%q, want neighboring transcript context", results[0].Snippet)
+	}
+}
+
+func TestSearchSessionsDecodesRealSavedTranscript(t *testing.T) {
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("Setenv HOME: %v", err)
+	}
+	defer func() { _ = os.Setenv("HOME", oldHome) }()
+
+	projectDir := t.TempDir()
+	msgs := []core.ModelMessage{
+		core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "Investigate replay memory surface"}}},
+	}
+	transcript := []*chat.Message{
+		{Kind: chat.KindUser, Content: "Investigate replay memory surface"},
+		{Kind: chat.KindAssistant, Content: "I found the replay memory surface issue in session snippets."},
+		{Kind: chat.KindToolCall, ToolName: "grep", ToolArgs: "session snippets", RawArgs: `{"pattern":"session snippets"}`},
+	}
+
+	if err := agent.SaveSession(projectDir, msgs, transcript, nil, core.RunUsage{Requests: 1}, "gpt-5.4", "openai", "Replay memory surface", nil, nil, nil, nil); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	results, err := SearchSessions("memory surface", projectDir, 5)
+	if err != nil {
+		t.Fatalf("SearchSessions: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if !strings.Contains(results[0].Snippet, "Assistant: I found the replay memory surface issue") {
+		t.Fatalf("snippet=%q, want assistant transcript content", results[0].Snippet)
+	}
+	if !strings.Contains(results[0].Snippet, "User: Investigate replay memory surface") {
+		t.Fatalf("snippet=%q, want user transcript context", results[0].Snippet)
 	}
 }

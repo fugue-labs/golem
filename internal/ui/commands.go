@@ -575,7 +575,7 @@ func (m *Model) handleSearchCommand(text string) *chat.Message {
 	if query == "" {
 		return &chat.Message{
 			Kind:    chat.KindAssistant,
-			Content: "Usage: `/search <query>` — search across all saved sessions with readable context.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`\n\nResults include the saved prompt, project, and a transcript snippet when available.",
+			Content: "Usage: `/search <query>` — search across all saved sessions with readable context.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`\n\nResults include the saved prompt, project, and nearby transcript lines when available.",
 		}
 	}
 
