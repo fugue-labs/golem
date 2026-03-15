@@ -27,46 +27,54 @@ const (
 
 // Message is a displayable chat entry.
 type Message struct {
-	Kind    MessageKind
-	Content string
+	Kind      MessageKind
+	Content   string
+	Streaming bool // true only while assistant text is actively streaming live
 
 	// Tool-specific fields.
-	CallID   string // Provider-assigned tool call ID for exact matching.
-	ToolName string
-	ToolArgs string
-	RawArgs  string // Full JSON args for rich rendering (diffs, etc.)
+	CallID    string // Provider-assigned tool call ID for exact matching.
+	ToolName  string
+	ToolArgs  string
+	RawArgs   string // Full JSON args for rich rendering (diffs, etc.)
 	Status    ToolStatus
 	StartedAt time.Time     // when the tool call started
 	Duration  time.Duration // elapsed time for completed tool calls
 
 	// Render cache — avoids re-rendering unchanged messages every frame.
-	cachedRender   string
-	cachedWidth    int
-	cachedContent  string
-	cachedStatus   ToolStatus
-	cachedDuration time.Duration
-	cachedLines    int // number of lines in cachedRender
+	cachedRender    string
+	cachedWidth     int
+	cachedContent   string
+	cachedStatus    ToolStatus
+	cachedDuration  time.Duration
+	cachedStreaming bool
+	cachedLines     int // number of lines in cachedRender
 }
 
 // Render returns the rendered string for this message, using a cache to avoid
 // re-rendering unchanged messages. The cache is invalidated when the message
 // content, status, or rendering width changes.
 func (msg *Message) Render(sty *styles.Styles, width int, allMessages []*Message) string {
-	if msg.cachedRender != "" && msg.cachedWidth == width &&
+	live := msg.Streaming || (msg.Kind == KindToolCall && msg.Status == ToolRunning)
+	if !live && msg.cachedRender != "" && msg.cachedWidth == width &&
 		msg.cachedContent == msg.Content && msg.cachedStatus == msg.Status &&
-		msg.cachedDuration == msg.Duration {
+		msg.cachedDuration == msg.Duration && msg.cachedStreaming == msg.Streaming {
 		return msg.cachedRender
 	}
 	rendered := RenderMessage(msg, sty, width, allMessages)
+	msg.cachedLines = strings.Count(rendered, "\n") + 1
+	if rendered == "" {
+		msg.cachedLines = 0
+	}
+	if live {
+		msg.cachedRender = ""
+		return rendered
+	}
 	msg.cachedRender = rendered
 	msg.cachedWidth = width
 	msg.cachedContent = msg.Content
 	msg.cachedStatus = msg.Status
 	msg.cachedDuration = msg.Duration
-	msg.cachedLines = strings.Count(rendered, "\n") + 1
-	if rendered == "" {
-		msg.cachedLines = 0
-	}
+	msg.cachedStreaming = msg.Streaming
 	return rendered
 }
 
@@ -115,16 +123,7 @@ func RenderMessage(msg *Message, sty *styles.Styles, width int, allMessages []*M
 }
 
 func renderUserMessage(msg *Message, sty *styles.Styles, width int) string {
-	prompt := sty.Chat.UserLabel.Render(styles.PromptIcon)
-	content := sty.Base.Width(width - 4).Render(msg.Content)
-	lines := strings.Split(content, "\n")
-
-	var rendered []string
-	rendered = append(rendered, "  "+prompt+" "+lines[0])
-	for _, line := range lines[1:] {
-		rendered = append(rendered, "    "+line)
-	}
-	return strings.Join(rendered, "\n")
+	return renderRoleBlock(sty.Chat.UserTag.Render(" USER "), renderPlainBlock(sty.Base, msg.Content, width), "  ")
 }
 
 func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string {
@@ -132,67 +131,111 @@ func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string 
 		return ""
 	}
 
-	rendered := common.RenderMarkdown(sty, msg.Content, width-4)
-
-	var lines []string
-	for _, line := range strings.Split(rendered, "\n") {
-		lines = append(lines, "  "+line)
+	body := common.RenderMarkdown(sty, msg.Content, width-4)
+	extras := []string{"    " + sty.Chat.AssistantMeta.Render("markdown response")}
+	if msg.Streaming {
+		extras = append([]string{"    " + sty.Chat.Streaming.Render("LIVE")}, extras...)
 	}
-	return strings.Join(lines, "\n")
+	return renderRoleBlock(sty.Chat.AssistantTag.Render(" ASSISTANT "), body, "  ", extras...)
 }
 
 func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
-	var icon string
-	switch msg.Status {
-	case ToolPending, ToolRunning:
-		icon = sty.Tool.IconPending.Render(styles.PendingIcon)
-	case ToolSuccess:
-		icon = sty.Tool.IconSuccess.Render(styles.CheckIcon)
-	case ToolError:
-		icon = sty.Tool.IconError.Render(styles.ErrorIcon)
-	}
+	stateLabel, iconStyle, stateStyle := toolStatusParts(msg, sty)
+	icon := iconStyle.Render(toolStateIcon(msg.Status))
+	state := stateStyle.Render(stateLabel)
 
-	var header string
+	var summary string
 	if msg.ToolName == "bash" {
 		prompt := sty.Tool.CommandPrompt.Render("$")
 		command := msg.ToolArgs
 		if command == "" {
 			command = msg.ToolName
 		}
-		available := max(0, width-lipgloss.Width(icon)-lipgloss.Width(prompt)-6)
+		available := max(0, width-lipgloss.Width(prompt)-lipgloss.Width(state)-18)
 		command = ansi.Truncate(command, available, "...")
-		header = fmt.Sprintf("  %s %s %s", icon, prompt, sty.Tool.CommandText.Render(command))
+		summary = prompt + " " + sty.Tool.CommandText.Render(command)
 	} else {
 		name := sty.Tool.NameNormal.Render(msg.ToolName)
-		header = fmt.Sprintf("  %s %s", icon, name)
+		summary = name
 		if msg.ToolArgs != "" {
-			available := max(0, width-lipgloss.Width(header)-2)
+			available := max(0, width-lipgloss.Width(name)-lipgloss.Width(state)-14)
 			param := ansi.Truncate(msg.ToolArgs, available, "...")
-			header += " " + sty.Tool.ParamMain.Render(param)
+			summary += " " + sty.Tool.ParamMain.Render(param)
 		}
 	}
-
-	// Show duration for completed tool calls.
 	if msg.Duration > 0 {
-		dur := msg.Duration
-		var durStr string
-		if dur < time.Second {
-			durStr = fmt.Sprintf("%dms", dur.Milliseconds())
-		} else {
-			durStr = fmt.Sprintf("%.1fs", dur.Seconds())
-		}
-		header += " " + sty.Muted.Render(durStr)
+		summary += " " + sty.Muted.Render(formatDuration(msg.Duration))
 	}
 
-	// If the result has been stored inline, render it below the header.
+	header := fmt.Sprintf("%s %s %s", icon, state, summary)
+	bodyLines := []string{}
+	if statusLine := toolStatusLine(msg, sty); statusLine != "" {
+		bodyLines = append(bodyLines, statusLine)
+	}
 	if msg.Content != "" {
-		body := renderToolCallResult(msg, sty, width)
-		if body != "" {
-			return header + "\n" + body
+		if body := renderToolCallResult(msg, sty, width); body != "" {
+			bodyLines = append(bodyLines, body)
 		}
 	}
+	body := strings.Join(bodyLines, "\n")
+	return renderRoleBlock(sty.Tool.Summary.Render(" TOOL "), header, "  ", body)
+}
 
-	return header
+func toolStatusParts(msg *Message, sty *styles.Styles) (string, lipgloss.Style, lipgloss.Style) {
+	switch msg.Status {
+	case ToolPending:
+		return "queued", sty.Tool.IconPending, sty.Tool.StateWaiting
+	case ToolRunning:
+		return "running", sty.Tool.IconPending, sty.Tool.StateRunning
+	case ToolSuccess:
+		return "done", sty.Tool.IconSuccess, sty.Tool.StateSuccess
+	case ToolError:
+		return "error", sty.Tool.IconError, sty.Tool.StateError
+	default:
+		return "tool", sty.Tool.IconPending, sty.Tool.StateWaiting
+	}
+}
+
+func toolStateIcon(status ToolStatus) string {
+	switch status {
+	case ToolPending, ToolRunning:
+		return styles.PendingIcon
+	case ToolSuccess:
+		return styles.CheckIcon
+	case ToolError:
+		return styles.ErrorIcon
+	default:
+		return styles.PendingIcon
+	}
+}
+
+func toolStatusLine(msg *Message, sty *styles.Styles) string {
+	switch msg.Status {
+	case ToolPending:
+		return "    " + sty.Tool.StateWaiting.Render("Waiting for approval or execution slot.")
+	case ToolRunning:
+		elapsed := ""
+		if !msg.StartedAt.IsZero() {
+			elapsed = " · " + sty.Chat.Running.Render(formatDuration(time.Since(msg.StartedAt)) + " elapsed")
+		}
+		return "    " + sty.Tool.StateRunning.Render("Working… result will appear inline") + elapsed
+	case ToolSuccess:
+		if msg.Duration > 0 {
+			return "    " + sty.Tool.StateSuccess.Render("Completed inline in " + formatDuration(msg.Duration))
+		}
+	case ToolError:
+		if strings.TrimSpace(msg.Content) == "" {
+			return "    " + sty.Tool.StateError.Render("Tool failed before producing output.")
+		}
+	}
+	return ""
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 // renderToolCallResult renders the result body for a completed tool call.
@@ -314,17 +357,12 @@ func renderViewResult(content string, toolCall *Message, sty *styles.Styles, wid
 		codeLines = append(codeLines, line)
 	}
 
-	// Expand tabs to spaces before highlighting. Terminal tab stops have
-	// variable width, which breaks ansi.StringWidth / ansi.Truncate (they
-	// treat tabs as zero-width). Four spaces matches Go convention and is
-	// close enough for other languages.
 	for i, line := range codeLines {
 		if strings.ContainsRune(line, '\t') {
 			codeLines[i] = strings.ReplaceAll(line, "\t", "    ")
 		}
 	}
 
-	// Highlight all code as a block for consistent tokenization.
 	codeBlock := strings.Join(codeLines, "\n")
 	highlighted := common.SyntaxHighlight(codeBlock, fileName)
 	highlightedLines := strings.Split(highlighted, "\n")
@@ -361,7 +399,6 @@ func renderBashResult(content string, sty *styles.Styles, width int) string {
 	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
 	available := max(0, width-8)
 
-	// Empty or whitespace-only output.
 	if strings.TrimSpace(content) == "" {
 		return "  " + prefix + " " + sty.Tool.Truncation.Render("(No output)")
 	}
@@ -370,7 +407,7 @@ func renderBashResult(content string, sty *styles.Styles, width int) string {
 	maxLines := 8
 	truncated := len(lines) > maxLines
 	if truncated {
-		lines = lines[len(lines)-maxLines:] // Show tail, not head
+		lines = lines[len(lines)-maxLines:]
 	}
 
 	var rendered []string
@@ -394,7 +431,6 @@ func renderBashResult(content string, sty *styles.Styles, width int) string {
 func renderGrepResult(content string, sty *styles.Styles, width int) string {
 	rawLines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 
-	// Separate content lines from the summary footer (e.g., "(5 matches in 2 files)").
 	var contentLines []string
 	var footer string
 	for _, line := range rawLines {
@@ -413,9 +449,8 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 		contentLines = contentLines[:maxLines]
 	}
 
-	// Parse grep lines to extract paths, find common prefix.
 	type grepLine struct {
-		prefix   string // " " or ">" match indicator
+		prefix   string
 		filePath string
 		lineNum  string
 		code     string
@@ -427,24 +462,20 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 			parsed = append(parsed, grepLine{})
 			continue
 		}
-		// Lines may start with " " (context) or ">" (match).
 		indicator := ""
 		rest := line
 		if len(line) > 0 && (line[0] == ' ' || line[0] == '>') {
 			indicator = string(line[0])
 			rest = line[1:]
 		}
-		// Parse path:linenum: code
 		if p, num, code, ok := parseGrepLine(rest); ok {
 			parsed = append(parsed, grepLine{prefix: indicator, filePath: p, lineNum: num, code: code})
 			paths = append(paths, p)
 			continue
 		}
-		// Unparseable — treat as raw.
 		parsed = append(parsed, grepLine{code: line})
 	}
 
-	// Strip common directory prefix to show relative paths.
 	commonDir := longestCommonDirPrefix(paths)
 
 	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
@@ -470,8 +501,6 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 		relPath := strings.TrimPrefix(gl.filePath, commonDir)
 		locStr := relPath + ":" + gl.lineNum + ":"
 		loc := sty.Tool.DiffContext.Render(locStr)
-
-		// Syntax-highlight the code portion.
 		highlighted := common.SyntaxHighlight(gl.code, gl.filePath)
 		highlighted = strings.TrimRight(highlighted, "\n")
 
@@ -501,14 +530,12 @@ func renderGrepResult(content string, sty *styles.Styles, width int) string {
 
 // parseGrepLine parses "path:linenum: code" or "path:linenum:code".
 func parseGrepLine(line string) (path, lineNum, code string, ok bool) {
-	// Find first colon (end of path).
 	i := strings.IndexByte(line, ':')
 	if i <= 0 {
 		return "", "", "", false
 	}
 	path = line[:i]
 
-	// Find second colon (end of line number).
 	rest := line[i+1:]
 	j := strings.IndexByte(rest, ':')
 	if j <= 0 {
@@ -516,7 +543,6 @@ func parseGrepLine(line string) (path, lineNum, code string, ok bool) {
 	}
 	lineNum = rest[:j]
 
-	// Verify line number is numeric.
 	for _, c := range lineNum {
 		if c < '0' || c > '9' {
 			return "", "", "", false
@@ -580,8 +606,6 @@ func renderEditResult(content string, toolCall *Message, sty *styles.Styles, wid
 	available := max(0, width-8)
 
 	var rendered []string
-
-	// Summary on first line with ⎿ prefix.
 	summary := content
 	if summary == "" {
 		path := args.Path
@@ -594,7 +618,6 @@ func renderEditResult(content string, toolCall *Message, sty *styles.Styles, wid
 	}
 	rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentLine.Render(summary))
 
-	// Removed lines.
 	oldLines := strings.Split(args.OldString, "\n")
 	maxDiffLines := 4
 	for i, line := range oldLines {
@@ -608,7 +631,6 @@ func renderEditResult(content string, toolCall *Message, sty *styles.Styles, wid
 		rendered = append(rendered, "    "+sty.Tool.DiffDel.Render("- "+line))
 	}
 
-	// Added lines.
 	newLines := strings.Split(args.NewString, "\n")
 	for i, line := range newLines {
 		if i >= maxDiffLines {
@@ -641,20 +663,16 @@ func renderMultiEditResult(content string, toolCall *Message, sty *styles.Styles
 	available := max(0, width-8)
 
 	var rendered []string
-	// Summary with ⎿ prefix.
 	summary := content
 	if summary == "" {
 		summary = fmt.Sprintf("%d edits applied", len(args.Edits))
 	}
 	rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentLine.Render(summary))
 
-	// Show up to 3 edits with compact diffs.
 	maxEdits := min(3, len(args.Edits))
 	for i := range maxEdits {
 		e := args.Edits[i]
-		// File label.
 		rendered = append(rendered, "    "+sty.Tool.ParamKey.Render(e.Path))
-		// Show 2 removed + 2 added lines max per edit.
 		oldLines := strings.Split(e.OldString, "\n")
 		for j, line := range oldLines {
 			if j >= 2 {
@@ -693,7 +711,6 @@ func renderGlobResult(content string, sty *styles.Styles, width int) string {
 	}
 
 	lines := strings.Split(content, "\n")
-	// Separate content from any truncation footer.
 	var files []string
 	var footer string
 	for _, line := range lines {
@@ -707,7 +724,6 @@ func renderGlobResult(content string, sty *styles.Styles, width int) string {
 	prefix := sty.Tool.ResultPrefix.Render(styles.ResultPrefix)
 	available := max(0, width-8)
 
-	// Show summary on first line.
 	summary := fmt.Sprintf("%d files", len(files))
 	if footer != "" {
 		summary += " (truncated)"
@@ -715,7 +731,6 @@ func renderGlobResult(content string, sty *styles.Styles, width int) string {
 	var rendered []string
 	rendered = append(rendered, "  "+prefix+" "+sty.Tool.ContentLine.Render(summary))
 
-	// Show files grouped by directory, max 12 lines.
 	maxLines := 12
 	shown := 0
 	for _, f := range files {
@@ -746,7 +761,7 @@ func renderLsResult(content string, sty *styles.Styles, width int) string {
 	available := max(0, width-8)
 
 	maxLines := 15
-	truncated := len(lines) > maxLines+1 // +1 for header
+	truncated := len(lines) > maxLines+1
 	if truncated {
 		lines = lines[:maxLines+1]
 	}
@@ -755,7 +770,6 @@ func renderLsResult(content string, sty *styles.Styles, width int) string {
 	for i, line := range lines {
 		line = ansi.Truncate(line, available, "...")
 		if i == 0 {
-			// First line is the directory path header.
 			rendered = append(rendered, "  "+prefix+" "+sty.Tool.ParamKey.Render(line))
 		} else {
 			rendered = append(rendered, "    "+sty.Tool.ContentCode.Render(line))
@@ -811,48 +825,88 @@ func renderThinking(msg *Message, sty *styles.Styles, width int) string {
 		truncated = true
 	}
 
-	rendered := sty.Chat.Thinking.Width(width - 4).Render(content)
-	label := "Thinking"
+	body := sty.Chat.Thinking.Width(width - 4).Render(content)
+	label := "thinking"
 	if words > 0 {
-		label = fmt.Sprintf("Thinking (%d words)", words)
+		label = fmt.Sprintf("thinking · %d words", words)
 	}
 	if truncated {
-		label += " ..."
+		label += " · latest excerpt"
 	}
-	footer := sty.Chat.ThinkingFooter.Render("  " + label)
-	return rendered + "\n" + footer
+	footer := sty.Chat.ThinkingFooter.Render("    " + label)
+	return renderRoleBlock(sty.Chat.ThinkingTag.Render(" THINKING "), body, "  ", footer)
 }
 
-func renderSystem(msg *Message, sty *styles.Styles, _ int) string {
-	sep := sty.Subtle.Render("─")
-	return "  " + sep + " " + sty.Muted.Render(msg.Content)
+func renderSystem(msg *Message, sty *styles.Styles, width int) string {
+	kind := classifySystemMessage(msg.Content)
+	meta := sty.Chat.Summary.Render(kind)
+	body := renderPlainBlock(sty.Chat.SystemText, msg.Content, width)
+	return renderRoleBlock(sty.Chat.SystemTag.Render(" SUMMARY "), body, "  ", "    "+meta)
 }
 
 func renderError(msg *Message, sty *styles.Styles, width int) string {
-	tag := sty.Chat.ErrorTag.Render("ERROR")
 	content := msg.Content
 	lines := strings.Split(content, "\n")
 	available := max(0, width-12)
 
 	if len(lines) <= 1 {
 		title := ansi.Truncate(content, available, "...")
-		return fmt.Sprintf("  %s %s", tag, sty.Chat.ErrorTitle.Render(title))
+		return renderRoleBlock(sty.Chat.ErrorTag.Render(" ERROR "), sty.Chat.ErrorTitle.Render(title), "  ")
 	}
 
-	// Multi-line errors: show first line as title, rest as detail.
 	var rendered []string
 	firstLine := ansi.Truncate(lines[0], available, "...")
-	rendered = append(rendered, fmt.Sprintf("  %s %s", tag, sty.Chat.ErrorTitle.Render(firstLine)))
+	rendered = append(rendered, sty.Chat.ErrorTitle.Render(firstLine))
 	maxDetail := 6
 	for i := 1; i < len(lines) && i <= maxDetail; i++ {
 		detail := ansi.Truncate(lines[i], available, "...")
-		rendered = append(rendered, "    "+sty.Muted.Render(detail))
+		rendered = append(rendered, sty.Chat.ErrorDetails.Render(detail))
 	}
 	if len(lines) > maxDetail+1 {
-		rendered = append(rendered, "    "+sty.Muted.Render(
+		rendered = append(rendered, sty.Chat.ErrorDetails.Render(
 			fmt.Sprintf("... (%d more lines)", len(lines)-maxDetail-1)))
 	}
+	return renderRoleBlock(sty.Chat.ErrorTag.Render(" ERROR "), strings.Join(rendered, "\n"), "  ")
+}
+
+func renderRoleBlock(tag, body, indent string, extras ...string) string {
+	var rendered []string
+	rendered = append(rendered, indent+tag)
+	if strings.TrimSpace(body) != "" {
+		for _, line := range strings.Split(body, "\n") {
+			rendered = append(rendered, indent+"  "+line)
+		}
+	}
+	for _, extra := range extras {
+		if strings.TrimSpace(extra) == "" {
+			continue
+		}
+		for _, line := range strings.Split(extra, "\n") {
+			rendered = append(rendered, indent+line)
+		}
+	}
 	return strings.Join(rendered, "\n")
+}
+
+func renderPlainBlock(style lipgloss.Style, content string, width int) string {
+	if width <= 0 {
+		width = 20
+	}
+	return style.Width(width - 4).Render(content)
+}
+
+func classifySystemMessage(content string) string {
+	lower := strings.ToLower(content)
+	switch {
+	case strings.Contains(lower, "replay"):
+		return "replay"
+	case strings.Contains(lower, "budget") || strings.Contains(lower, "context window"):
+		return "status"
+	case strings.Contains(lower, "tools") || strings.Contains(lower, "↓") || strings.Contains(lower, "↑"):
+		return "usage"
+	default:
+		return "summary"
+	}
 }
 
 // extractJSONField extracts a string field from a JSON object.

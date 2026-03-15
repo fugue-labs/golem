@@ -609,6 +609,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runCtx = nil
 		m.cancel = nil
 		m.agent = nil
+		m.finishAssistantStreaming()
 		m.usage = msg.usage
 		m.sessionUsage.IncrRun(msg.usage)
 		if msg.err != nil && !isContextCanceled(msg.err) {
@@ -1623,6 +1624,9 @@ func (m *Model) restoreSessionState(session *agent.SessionData, msgs []core.Mode
 		var transcript []*chat.Message
 		if err := agent.RestoreJSON(session.Transcript, &transcript); err != nil {
 			return fmt.Errorf("restoring transcript: %w", err)
+		}
+		for _, msg := range transcript {
+			msg.Streaming = false
 		}
 		m.messages = transcript
 	}

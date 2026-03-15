@@ -75,6 +75,15 @@ type Styles struct {
 		AssistantLabel  lipgloss.Style
 		Thinking        lipgloss.Style
 		ThinkingFooter  lipgloss.Style
+		Streaming       lipgloss.Style
+		Running         lipgloss.Style
+		Summary         lipgloss.Style
+		AssistantMeta   lipgloss.Style
+		UserTag         lipgloss.Style
+		AssistantTag    lipgloss.Style
+		ThinkingTag     lipgloss.Style
+		SystemTag       lipgloss.Style
+		SystemText      lipgloss.Style
 		ErrorTag        lipgloss.Style
 		ErrorTitle      lipgloss.Style
 		ErrorDetails    lipgloss.Style
@@ -98,6 +107,10 @@ type Styles struct {
 		OutputMeta    lipgloss.Style
 		Truncation    lipgloss.Style
 		StateWaiting  lipgloss.Style
+		StateRunning  lipgloss.Style
+		StateSuccess  lipgloss.Style
+		StateError    lipgloss.Style
+		Summary       lipgloss.Style
 		DiffAdd       lipgloss.Style
 		DiffDel       lipgloss.Style
 		DiffContext   lipgloss.Style
@@ -248,6 +261,15 @@ func New(_ color.Color) *Styles {
 		BorderForeground(border).
 		PaddingLeft(1)
 	s.Chat.ThinkingFooter = meta.Italic(true)
+	s.Chat.Streaming = lipgloss.NewStyle().Foreground(bgBase).Background(primary).Padding(0, 1).Bold(true)
+	s.Chat.Running = lipgloss.NewStyle().Foreground(yellow).Bold(true)
+	s.Chat.Summary = lipgloss.NewStyle().Foreground(secondary).Bold(true)
+	s.Chat.AssistantMeta = meta.Italic(true)
+	s.Chat.UserTag = tagStyle(blue, bgBase)
+	s.Chat.AssistantTag = tagStyle(primary, bgBase)
+	s.Chat.ThinkingTag = tagStyle(surface, fgStrong)
+	s.Chat.SystemTag = tagStyle(secondary, bgBase)
+	s.Chat.SystemText = meta
 	s.Chat.ErrorTag = tagStyle(errColor, white)
 	s.Chat.ErrorTitle = lipgloss.NewStyle().Foreground(red).Bold(true)
 	s.Chat.ErrorDetails = meta
@@ -269,6 +291,10 @@ func New(_ color.Color) *Styles {
 	s.Tool.OutputMeta = meta.Italic(true)
 	s.Tool.Truncation = subtle.Italic(true)
 	s.Tool.StateWaiting = meta.Italic(true)
+	s.Tool.StateRunning = lipgloss.NewStyle().Foreground(yellow).Italic(true)
+	s.Tool.StateSuccess = lipgloss.NewStyle().Foreground(greenDk).Italic(true)
+	s.Tool.StateError = lipgloss.NewStyle().Foreground(red).Italic(true)
+	s.Tool.Summary = lipgloss.NewStyle().Foreground(secondary).Bold(true)
 	s.Tool.DiffAdd = lipgloss.NewStyle().Foreground(green)
 	s.Tool.DiffDel = lipgloss.NewStyle().Foreground(red)
 	s.Tool.DiffContext = meta

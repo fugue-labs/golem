@@ -13,6 +13,10 @@ import (
 // SyntaxHighlight applies syntax highlighting to source code.
 // fileName is used to detect the language; falls back to content analysis.
 func SyntaxHighlight(source, fileName string) string {
+	source = strings.ReplaceAll(source, "\r\n", "\n")
+	if strings.TrimSpace(source) == "" {
+		return source
+	}
 	l := lexers.Match(fileName)
 	if l == nil {
 		l = lexers.Analyse(source)

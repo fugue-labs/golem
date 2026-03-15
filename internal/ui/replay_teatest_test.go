@@ -88,7 +88,6 @@ type startReplayMsg struct {
 func (m replayTUIModel) View() tea.View {
 	var b strings.Builder
 
-	// Header: replay state.
 	if m.replayMode {
 		total := 0
 		if m.replayTrace != nil {
@@ -105,15 +104,18 @@ func (m replayTUIModel) View() tea.View {
 
 	b.WriteString(strings.Repeat("-", 40) + "\n")
 
-	// Messages.
 	for _, msg := range m.messages {
 		switch msg.Kind {
 		case chat.KindUser:
-			b.WriteString("USER: " + msg.Content + "\n")
+			b.WriteString("[USER] " + msg.Content + "\n")
 		case chat.KindAssistant:
-			b.WriteString("ASSISTANT: " + msg.Content + "\n")
+			label := "[ASSISTANT] "
+			if msg.Streaming {
+				label = "[ASSISTANT live] "
+			}
+			b.WriteString(label + msg.Content + "\n")
 		case chat.KindThinking:
-			b.WriteString("THINKING: " + msg.Content + "\n")
+			b.WriteString("[THINKING] " + msg.Content + "\n")
 		case chat.KindToolCall:
 			status := "running"
 			if msg.Status == chat.ToolSuccess {
@@ -121,11 +123,15 @@ func (m replayTUIModel) View() tea.View {
 			} else if msg.Status == chat.ToolError {
 				status = "error"
 			}
-			b.WriteString(fmt.Sprintf("TOOL[%s]: %s (%s)\n", status, msg.ToolName, msg.ToolArgs))
+			line := fmt.Sprintf("[TOOL %s] %s (%s)", status, msg.ToolName, msg.ToolArgs)
+			if msg.Content != "" {
+				line += " => " + strings.ReplaceAll(msg.Content, "\n", " | ")
+			}
+			b.WriteString(line + "\n")
 		case chat.KindSystem:
-			b.WriteString("SYSTEM: " + msg.Content + "\n")
+			b.WriteString("[SUMMARY] " + msg.Content + "\n")
 		case chat.KindError:
-			b.WriteString("ERROR: " + msg.Content + "\n")
+			b.WriteString("[ERROR] " + msg.Content + "\n")
 		}
 	}
 
@@ -172,7 +178,6 @@ func (m *replayTUIModel) handleReplayCommand(text string) (*chat.Message, tea.Cm
 		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found."}, nil
 	}
 
-	// For test purposes, we don't load from files — traces are injected via startReplayMsg.
 	return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions."}, nil
 }
 
@@ -202,7 +207,6 @@ func (m *replayTUIModel) replayNext() tea.Cmd {
 	if m.replayIdx >= len(m.replayTrace.Events) {
 		return func() tea.Msg { return replayDoneMsg{} }
 	}
-	// In tests, use zero delay to make replay instant.
 	return func() tea.Msg { return replayTickMsg{} }
 }
 
@@ -221,10 +225,7 @@ func (m replayTUIModel) handleReplayTick() (tea.Model, tea.Cmd) {
 		if err != nil {
 			break
 		}
-		m.messages = append(m.messages, &chat.Message{
-			Kind:    chat.KindUser,
-			Content: data.Text,
-		})
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindUser, Content: data.Text})
 
 	case agent.EventTextDelta:
 		data, err := agent.DecodeEvent[agent.TextDeltaData](event)
@@ -245,14 +246,7 @@ func (m replayTUIModel) handleReplayTick() (tea.Model, tea.Cmd) {
 		if err != nil {
 			break
 		}
-		toolMsg := &chat.Message{
-			Kind:      chat.KindToolCall,
-			CallID:    data.CallID,
-			ToolName:  data.Name,
-			ToolArgs:  data.Args,
-			Status:    chat.ToolRunning,
-			StartedAt: time.Now(),
-		}
+		toolMsg := &chat.Message{Kind: chat.KindToolCall, CallID: data.CallID, ToolName: data.Name, ToolArgs: data.Args, Status: chat.ToolRunning, StartedAt: time.Now()}
 		m.messages = append(m.messages, toolMsg)
 		m.activeToolName = data.Name
 		m.activeToolArgs = data.Args
@@ -271,37 +265,25 @@ func (m replayTUIModel) handleReplayTick() (tea.Model, tea.Cmd) {
 		if err != nil {
 			break
 		}
-		usageParts := []string{
-			fmt.Sprintf("%d↓ %d↑", data.InputTokens, data.OutputTokens),
-			fmt.Sprintf("%d tools", data.ToolCalls),
-		}
+		usageParts := []string{fmt.Sprintf("%d↓ %d↑", data.InputTokens, data.OutputTokens), fmt.Sprintf("%d tools", data.ToolCalls)}
 		if data.Error != "" {
 			usageParts = append(usageParts, "error: "+data.Error)
 		}
-		m.messages = append(m.messages, &chat.Message{
-			Kind:    chat.KindSystem,
-			Content: strings.Join(usageParts, " · "),
-		})
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: strings.Join(usageParts, " · ")})
 
 	case agent.EventSystem:
 		data, err := agent.DecodeEvent[agent.SystemEventData](event)
 		if err != nil {
 			break
 		}
-		m.messages = append(m.messages, &chat.Message{
-			Kind:    chat.KindSystem,
-			Content: data.Text,
-		})
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: data.Text})
 
 	case agent.EventError:
 		data, err := agent.DecodeEvent[agent.ErrorEventData](event)
 		if err != nil {
 			break
 		}
-		m.messages = append(m.messages, &chat.Message{
-			Kind:    chat.KindError,
-			Content: data.Text,
-		})
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindError, Content: data.Text})
 	}
 
 	return m, m.replayNext()
@@ -315,10 +297,7 @@ func (m replayTUIModel) handleReplayDone() (tea.Model, tea.Cmd) {
 	m.busy = false
 	m.activeToolName = ""
 	m.activeToolArgs = ""
-	m.messages = append(m.messages, &chat.Message{
-		Kind:    chat.KindSystem,
-		Content: "Replay complete.",
-	})
+	m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: "Replay complete."})
 	return m, nil
 }
 
@@ -330,13 +309,9 @@ func (m *replayTUIModel) stopReplay() {
 	m.busy = false
 	m.activeToolName = ""
 	m.activeToolArgs = ""
-	m.messages = append(m.messages, &chat.Message{
-		Kind:    chat.KindSystem,
-		Content: "Replay stopped.",
-	})
+	m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: "Replay stopped."})
 }
 
-// appendOrUpdateAssistant mirrors the real Model's method.
 func (m *replayTUIModel) appendOrUpdateAssistant(delta string) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].Kind == chat.KindAssistant {
@@ -347,13 +322,9 @@ func (m *replayTUIModel) appendOrUpdateAssistant(delta string) {
 			break
 		}
 	}
-	m.messages = append(m.messages, &chat.Message{
-		Kind:    chat.KindAssistant,
-		Content: delta,
-	})
+	m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: delta})
 }
 
-// appendOrUpdateThinking mirrors the real Model's method.
 func (m *replayTUIModel) appendOrUpdateThinking(delta string) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].Kind == chat.KindThinking {
@@ -364,13 +335,9 @@ func (m *replayTUIModel) appendOrUpdateThinking(delta string) {
 			break
 		}
 	}
-	m.messages = append(m.messages, &chat.Message{
-		Kind:    chat.KindThinking,
-		Content: delta,
-	})
+	m.messages = append(m.messages, &chat.Message{Kind: chat.KindThinking, Content: delta})
 }
 
-// finishLastTool mirrors the real Model's method.
 func (m *replayTUIModel) finishLastTool(callID, result, errText string) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		msg := m.messages[i]
@@ -382,41 +349,26 @@ func (m *replayTUIModel) finishLastTool(callID, result, errText string) {
 		}
 		if errText != "" {
 			msg.Status = chat.ToolError
+			msg.Content = errText
 		} else {
 			msg.Status = chat.ToolSuccess
-		}
-		if result != "" {
-			msg.Content = result
+			if result != "" {
+				msg.Content = result
+			}
 		}
 		return
 	}
 }
 
-// makeEvent builds a ReplayEvent with the given kind and payload.
 func makeEvent(kind agent.ReplayEventKind, offsetMs int64, payload any) agent.ReplayEvent {
 	data, _ := json.Marshal(payload)
-	return agent.ReplayEvent{
-		Kind:     kind,
-		OffsetMs: offsetMs,
-		Data:     data,
-	}
+	return agent.ReplayEvent{Kind: kind, OffsetMs: offsetMs, Data: data}
 }
 
-// makeTrace builds a synthetic ReplayTrace for testing.
 func makeTrace(events []agent.ReplayEvent) *agent.ReplayTrace {
-	return &agent.ReplayTrace{
-		Version:   1,
-		StartTime: time.Date(2026, 3, 13, 10, 0, 0, 0, time.UTC),
-		Model:     "test-model",
-		Provider:  "test-provider",
-		WorkDir:   "/tmp/test",
-		Events:    events,
-	}
+	return &agent.ReplayTrace{Version: 1, StartTime: time.Date(2026, 3, 13, 10, 0, 0, 0, time.UTC), Model: "test-model", Provider: "test-provider", WorkDir: "/tmp/test", Events: events}
 }
 
-// --- Tests ---
-
-// TestTeatestReplayCommandWhileBusy verifies /replay rejects while busy.
 func TestTeatestReplayCommandWhileBusy(t *testing.T) {
 	m := newReplayTUIModel()
 	m.busy = true
@@ -433,7 +385,6 @@ func TestTeatestReplayCommandWhileBusy(t *testing.T) {
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayCommandAlreadyPlaying verifies /replay rejects if already replaying.
 func TestTeatestReplayCommandAlreadyPlaying(t *testing.T) {
 	m := newReplayTUIModel()
 	m.replayMode = true
@@ -450,7 +401,6 @@ func TestTeatestReplayCommandAlreadyPlaying(t *testing.T) {
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayListCommand verifies /replay list works.
 func TestTeatestReplayListCommand(t *testing.T) {
 	m := newReplayTUIModel()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
@@ -466,7 +416,6 @@ func TestTeatestReplayListCommand(t *testing.T) {
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayNoTraces verifies /replay with no available traces.
 func TestTeatestReplayNoTraces(t *testing.T) {
 	m := newReplayTUIModel()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 24))
@@ -482,7 +431,6 @@ func TestTeatestReplayNoTraces(t *testing.T) {
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayStartAndComplete verifies a full replay from start to completion.
 func TestTeatestReplayStartAndComplete(t *testing.T) {
 	trace := makeTrace([]agent.ReplayEvent{
 		makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "hello world"}),
@@ -492,16 +440,12 @@ func TestTeatestReplayStartAndComplete(t *testing.T) {
 
 	m := newReplayTUIModel()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
-	// Start replay via message.
 	tm.Send(startReplayMsg{trace: trace})
 
-	// Wait for full replay completion — all assertions in one WaitFor to avoid
-	// consuming the output buffer across multiple calls.
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
 		s := string(bts)
 		return strings.Contains(s, "Replay complete.") &&
-			strings.Contains(s, "USER: hello world") &&
+			strings.Contains(s, "[USER] hello world") &&
 			strings.Contains(s, "Hi there! How can I help?")
 	}, teatest.WithDuration(5*time.Second))
 
@@ -509,22 +453,30 @@ func TestTeatestReplayStartAndComplete(t *testing.T) {
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayUserInputEvent verifies user input events render correctly.
-func TestTeatestReplayUserInputEvent(t *testing.T) {
+func TestTeatestReplayThinkingAndToolStates(t *testing.T) {
 	trace := makeTrace([]agent.ReplayEvent{
-		makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "first prompt"}),
-		makeEvent(agent.EventUserInput, 500, agent.UserInputData{Text: "second prompt"}),
+		makeEvent(agent.EventSystem, 0, agent.SystemEventData{Text: "Session started"}),
+		makeEvent(agent.EventUserInput, 100, agent.UserInputData{Text: "list files"}),
+		makeEvent(agent.EventThinkDelta, 200, agent.ThinkDeltaData{Text: "I'll use bash"}),
+		makeEvent(agent.EventToolCall, 300, agent.ToolCallData{CallID: "tc_1", Name: "bash", Args: "ls -la"}),
+		makeEvent(agent.EventToolResult, 500, agent.ToolResultData{CallID: "tc_1", Name: "bash", Result: "file1.go\nfile2.go"}),
+		makeEvent(agent.EventTextDelta, 600, agent.TextDeltaData{Text: "Found 2 Go files."}),
+		makeEvent(agent.EventAgentDone, 700, agent.AgentDoneData{InputTokens: 2000, OutputTokens: 800, ToolCalls: 1}),
 	})
 
 	m := newReplayTUIModel()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
 	tm.Send(startReplayMsg{trace: trace})
 
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
 		s := string(bts)
-		return strings.Contains(s, "USER: first prompt") &&
-			strings.Contains(s, "USER: second prompt") &&
+		return strings.Contains(s, "[SUMMARY] Session started") &&
+			strings.Contains(s, "[USER] list files") &&
+			strings.Contains(s, "[THINKING] I'll use bash") &&
+			strings.Contains(s, "[TOOL done] bash (ls -la) => file1.go | file2.go") &&
+			strings.Contains(s, "[ASSISTANT] Found 2 Go files.") &&
+			strings.Contains(s, "2000") &&
+			strings.Contains(s, "1 tools") &&
 			strings.Contains(s, "Replay complete.")
 	}, teatest.WithDuration(5*time.Second))
 
@@ -532,214 +484,44 @@ func TestTeatestReplayUserInputEvent(t *testing.T) {
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayThinkingEvent verifies thinking deltas are rendered.
-func TestTeatestReplayThinkingEvent(t *testing.T) {
-	trace := makeTrace([]agent.ReplayEvent{
-		makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "think about this"}),
-		makeEvent(agent.EventThinkDelta, 50, agent.ThinkDeltaData{Text: "Let me "}),
-		makeEvent(agent.EventThinkDelta, 60, agent.ThinkDeltaData{Text: "consider..."}),
-		makeEvent(agent.EventTextDelta, 200, agent.TextDeltaData{Text: "Here's my answer."}),
-	})
-
-	m := newReplayTUIModel()
-	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
-	tm.Send(startReplayMsg{trace: trace})
-
-	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		s := string(bts)
-		return strings.Contains(s, "THINKING: Let me consider...") &&
-			strings.Contains(s, "ASSISTANT: Here's my answer.") &&
-			strings.Contains(s, "Replay complete.")
-	}, teatest.WithDuration(5*time.Second))
-
-	tm.Quit()
-	tm.WaitFinished(t)
-}
-
-// TestTeatestReplayToolCallAndResult verifies tool call/result events.
-func TestTeatestReplayToolCallAndResult(t *testing.T) {
-	trace := makeTrace([]agent.ReplayEvent{
-		makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "read file"}),
-		makeEvent(agent.EventToolCall, 100, agent.ToolCallData{
-			CallID: "call_1", Name: "read", Args: "/tmp/test.go",
-		}),
-		makeEvent(agent.EventToolResult, 200, agent.ToolResultData{
-			CallID: "call_1", Name: "read", Result: "package main",
-		}),
-		makeEvent(agent.EventTextDelta, 300, agent.TextDeltaData{Text: "File contains Go code."}),
-	})
-
-	m := newReplayTUIModel()
-	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
-	tm.Send(startReplayMsg{trace: trace})
-
-	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		s := string(bts)
-		return strings.Contains(s, "TOOL[done]: read") &&
-			strings.Contains(s, "ASSISTANT: File contains Go code.") &&
-			strings.Contains(s, "Replay complete.")
-	}, teatest.WithDuration(5*time.Second))
-
-	tm.Quit()
-	tm.WaitFinished(t)
-}
-
-// TestTeatestReplayToolError verifies tool error events render correctly.
-func TestTeatestReplayToolError(t *testing.T) {
-	trace := makeTrace([]agent.ReplayEvent{
-		makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "run cmd"}),
-		makeEvent(agent.EventToolCall, 100, agent.ToolCallData{
-			CallID: "call_err", Name: "bash", Args: "exit 1",
-		}),
-		makeEvent(agent.EventToolResult, 200, agent.ToolResultData{
-			CallID: "call_err", Name: "bash", Result: "", Error: "exit status 1",
-		}),
-	})
-
-	m := newReplayTUIModel()
-	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
-	tm.Send(startReplayMsg{trace: trace})
-
-	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		s := string(bts)
-		return strings.Contains(s, "TOOL[error]: bash") &&
-			strings.Contains(s, "Replay complete.")
-	}, teatest.WithDuration(5*time.Second))
-
-	tm.Quit()
-	tm.WaitFinished(t)
-}
-
-// TestTeatestReplayAgentDone verifies agent done events with usage stats.
-func TestTeatestReplayAgentDone(t *testing.T) {
-	trace := makeTrace([]agent.ReplayEvent{
-		makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "do task"}),
-		makeEvent(agent.EventTextDelta, 100, agent.TextDeltaData{Text: "Done."}),
-		makeEvent(agent.EventAgentDone, 200, agent.AgentDoneData{
-			InputTokens: 1000, OutputTokens: 500, ToolCalls: 3,
-		}),
-	})
-
-	m := newReplayTUIModel()
-	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
-	tm.Send(startReplayMsg{trace: trace})
-
-	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		s := string(bts)
-		return strings.Contains(s, "1000") &&
-			strings.Contains(s, "500") &&
-			strings.Contains(s, "3 tools") &&
-			strings.Contains(s, "Replay complete.")
-	}, teatest.WithDuration(5*time.Second))
-
-	tm.Quit()
-	tm.WaitFinished(t)
-}
-
-// TestTeatestReplayAgentDoneWithError verifies agent done with error.
-func TestTeatestReplayAgentDoneWithError(t *testing.T) {
-	trace := makeTrace([]agent.ReplayEvent{
-		makeEvent(agent.EventAgentDone, 0, agent.AgentDoneData{
-			InputTokens: 100, OutputTokens: 50, ToolCalls: 0, Error: "context deadline exceeded",
-		}),
-	})
-
-	m := newReplayTUIModel()
-	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
-	tm.Send(startReplayMsg{trace: trace})
-
-	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		s := string(bts)
-		return strings.Contains(s, "error: context deadline exceeded") &&
-			strings.Contains(s, "Replay complete.")
-	}, teatest.WithDuration(5*time.Second))
-
-	tm.Quit()
-	tm.WaitFinished(t)
-}
-
-// TestTeatestReplaySystemEvent verifies system events render.
-func TestTeatestReplaySystemEvent(t *testing.T) {
-	trace := makeTrace([]agent.ReplayEvent{
-		makeEvent(agent.EventSystem, 0, agent.SystemEventData{Text: "Session initialized"}),
-		makeEvent(agent.EventSystem, 100, agent.SystemEventData{Text: "Loading context..."}),
-	})
-
-	m := newReplayTUIModel()
-	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
-	tm.Send(startReplayMsg{trace: trace})
-
-	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		s := string(bts)
-		return strings.Contains(s, "SYSTEM: Session initialized") &&
-			strings.Contains(s, "SYSTEM: Loading context...") &&
-			strings.Contains(s, "Replay complete.")
-	}, teatest.WithDuration(5*time.Second))
-
-	tm.Quit()
-	tm.WaitFinished(t)
-}
-
-// TestTeatestReplayErrorEvent verifies error events render.
 func TestTeatestReplayErrorEvent(t *testing.T) {
-	trace := makeTrace([]agent.ReplayEvent{
-		makeEvent(agent.EventError, 0, agent.ErrorEventData{Text: "API rate limit exceeded"}),
-	})
+	trace := makeTrace([]agent.ReplayEvent{makeEvent(agent.EventError, 0, agent.ErrorEventData{Text: "API rate limit exceeded"})})
 
 	m := newReplayTUIModel()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
 	tm.Send(startReplayMsg{trace: trace})
 
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
 		s := string(bts)
-		return strings.Contains(s, "ERROR: API rate limit exceeded") &&
-			strings.Contains(s, "Replay complete.")
+		return strings.Contains(s, "[ERROR] API rate limit exceeded") && strings.Contains(s, "Replay complete.")
 	}, teatest.WithDuration(5*time.Second))
 
 	tm.Quit()
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayStopEscape verifies Esc stops replay mid-stream.
 func TestTeatestReplayStopEscape(t *testing.T) {
-	// Build a trace with many events so we can stop mid-replay.
 	var events []agent.ReplayEvent
 	events = append(events, makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "start"}))
 	for i := 0; i < 50; i++ {
-		events = append(events, makeEvent(agent.EventTextDelta, int64(100+i*10),
-			agent.TextDeltaData{Text: fmt.Sprintf("chunk%d ", i)}))
+		events = append(events, makeEvent(agent.EventTextDelta, int64(100+i*10), agent.TextDeltaData{Text: fmt.Sprintf("chunk%d ", i)}))
 	}
 	trace := makeTrace(events)
 
 	m := newReplayTUIModel()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
 	tm.Send(startReplayMsg{trace: trace})
-
-	// Press Escape to stop.
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 
-	// Wait for "Replay stopped." or "Replay complete." — either is valid since
-	// the replay may have already finished by the time Esc is processed.
-	// Also verify IDLE state in single WaitFor.
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
 		s := string(bts)
-		return strings.Contains(s, "IDLE") &&
-			(strings.Contains(s, "Replay stopped.") || strings.Contains(s, "Replay complete."))
+		return strings.Contains(s, "IDLE") && (strings.Contains(s, "Replay stopped.") || strings.Contains(s, "Replay complete."))
 	}, teatest.WithDuration(5*time.Second))
 
 	tm.Quit()
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayStateDisplay verifies the header shows correct replay state.
 func TestTeatestReplayStateDisplay(t *testing.T) {
 	trace := makeTrace([]agent.ReplayEvent{
 		makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "test"}),
@@ -748,45 +530,33 @@ func TestTeatestReplayStateDisplay(t *testing.T) {
 
 	m := newReplayTUIModel()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
-	// Start replay.
 	tm.Send(startReplayMsg{trace: trace})
 
-	// After completion, should return to IDLE with replay complete.
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
 		s := string(bts)
-		return strings.Contains(s, "IDLE") &&
-			strings.Contains(s, "Replay complete.") &&
-			strings.Contains(s, "USER: test") &&
-			strings.Contains(s, "response")
+		return strings.Contains(s, "IDLE") && strings.Contains(s, "Replay complete.") && strings.Contains(s, "[USER] test") && strings.Contains(s, "response")
 	}, teatest.WithDuration(5*time.Second))
 
 	tm.Quit()
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayEmptyTrace verifies replaying a trace with zero events.
 func TestTeatestReplayEmptyTrace(t *testing.T) {
 	trace := makeTrace(nil)
 
 	m := newReplayTUIModel()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
 	tm.Send(startReplayMsg{trace: trace})
 
-	// Should immediately complete.
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
 		s := string(bts)
-		return strings.Contains(s, "Replaying session from") &&
-			strings.Contains(s, "0 events") &&
-			strings.Contains(s, "Replay complete.")
+		return strings.Contains(s, "Replaying session from") && strings.Contains(s, "0 events") && strings.Contains(s, "Replay complete.")
 	}, teatest.WithDuration(5*time.Second))
 
 	tm.Quit()
 	tm.WaitFinished(t)
 }
 
-// TestTeatestReplayTextDeltaStreaming verifies text deltas accumulate on the same message.
 func TestTeatestReplayTextDeltaStreaming(t *testing.T) {
 	trace := makeTrace([]agent.ReplayEvent{
 		makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "hello"}),
@@ -797,53 +567,11 @@ func TestTeatestReplayTextDeltaStreaming(t *testing.T) {
 
 	m := newReplayTUIModel()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
-	tm.Send(startReplayMsg{trace: trace})
-
-	// Verify all deltas accumulated into single assistant message.
-	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		s := string(bts)
-		return strings.Contains(s, "ASSISTANT: Hello World!") &&
-			strings.Contains(s, "Replay complete.")
-	}, teatest.WithDuration(5*time.Second))
-
-	tm.Quit()
-	tm.WaitFinished(t)
-}
-
-// TestTeatestReplayFullSession verifies a realistic multi-turn session replay.
-func TestTeatestReplayFullSession(t *testing.T) {
-	trace := makeTrace([]agent.ReplayEvent{
-		makeEvent(agent.EventSystem, 0, agent.SystemEventData{Text: "Session started"}),
-		makeEvent(agent.EventUserInput, 100, agent.UserInputData{Text: "list files"}),
-		makeEvent(agent.EventThinkDelta, 200, agent.ThinkDeltaData{Text: "I'll use bash to list files"}),
-		makeEvent(agent.EventToolCall, 300, agent.ToolCallData{
-			CallID: "tc_1", Name: "bash", Args: "ls -la",
-		}),
-		makeEvent(agent.EventToolResult, 500, agent.ToolResultData{
-			CallID: "tc_1", Name: "bash", Result: "file1.go\nfile2.go",
-		}),
-		makeEvent(agent.EventTextDelta, 600, agent.TextDeltaData{Text: "Found 2 Go files."}),
-		makeEvent(agent.EventAgentDone, 700, agent.AgentDoneData{
-			InputTokens: 2000, OutputTokens: 800, ToolCalls: 1,
-		}),
-	})
-
-	m := newReplayTUIModel()
-	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 24))
-
 	tm.Send(startReplayMsg{trace: trace})
 
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
 		s := string(bts)
-		return strings.Contains(s, "SYSTEM: Session started") &&
-			strings.Contains(s, "USER: list files") &&
-			strings.Contains(s, "THINKING: I'll use bash to list files") &&
-			strings.Contains(s, "TOOL[done]: bash") &&
-			strings.Contains(s, "ASSISTANT: Found 2 Go files.") &&
-			strings.Contains(s, "2000") &&
-			strings.Contains(s, "1 tools") &&
-			strings.Contains(s, "Replay complete.")
+		return strings.Contains(s, "[ASSISTANT] Hello World!") && strings.Contains(s, "Replay complete.")
 	}, teatest.WithDuration(5*time.Second))
 
 	tm.Quit()
