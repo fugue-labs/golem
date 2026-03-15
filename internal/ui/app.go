@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -123,14 +125,18 @@ type Model struct {
 	activeSkills []skills.Skill
 
 	// State.
-	messages        []*chat.Message
-	history         []core.ModelMessage // gollem conversation history across turns
-	scroll          int
-	width           int
-	height          int
-	busy            bool
-	terminalFocused bool
-	usage           core.RunUsage
+	messages             []*chat.Message
+	history              []core.ModelMessage // gollem conversation history across turns
+	scroll               int
+	transcriptViewport   viewport.Model
+	transcriptSig        uint64
+	transcriptWidth      int
+	transcriptCompact    bool
+	width                int
+	height               int
+	busy                 bool
+	terminalFocused      bool
+	usage                core.RunUsage
 	startTime  time.Time
 	runID      int
 	hookRID    atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
@@ -253,25 +259,26 @@ func New(cfg *config.Config) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Model{
-		appCtx:         ctx,
-		appCancel:      cancel,
-		cfg:            cfg,
-		runtime:        agent.InitialRuntimeState(cfg),
-		input:          ti,
-		spinner:        sp,
-		askUserCh:      make(chan askUserRequest, 1),
-		askDone:        make(chan struct{}),
-		approvalCh:     make(chan toolApprovalRequest, 1),
-		approvalDone:   make(chan struct{}),
-		approvalAlways: make(map[string]bool),
-		approvalNever:  make(map[string]bool),
-		costTracker:    core.NewCostTracker(modelPricing()),
-		teamEventBus:   core.NewEventBus(),
-		checkpoints:     checkpoint.NewStore(cfg.WorkingDir),
-		historyIdx:      -1,
-		allSkills:       allSkills,
-		pace:            ps,
-		terminalFocused: true,
+		appCtx:             ctx,
+		appCancel:          cancel,
+		cfg:                cfg,
+		runtime:            agent.InitialRuntimeState(cfg),
+		input:              ti,
+		spinner:            sp,
+		askUserCh:          make(chan askUserRequest, 1),
+		askDone:            make(chan struct{}),
+		approvalCh:         make(chan toolApprovalRequest, 1),
+		approvalDone:       make(chan struct{}),
+		approvalAlways:     make(map[string]bool),
+		approvalNever:      make(map[string]bool),
+		costTracker:        core.NewCostTracker(modelPricing()),
+		teamEventBus:       core.NewEventBus(),
+		checkpoints:        checkpoint.NewStore(cfg.WorkingDir),
+		historyIdx:         -1,
+		allSkills:          allSkills,
+		pace:               ps,
+		terminalFocused:    true,
+		transcriptViewport: newTranscriptViewport(),
 	}
 }
 
@@ -375,30 +382,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sty = styles.New(nil)
 			m.spinner.Style = m.sty.SpinnerStyle
 		}
+		m.ensureTranscriptViewport(max(1, m.width), m.availableTranscriptHeight())
 
 		// Fire initial prompt on first window size (startup).
 		if m.initialPrompt != "" {
 			prompt := m.initialPrompt
 			m.initialPrompt = ""
 			userMsg := &chat.Message{Kind: chat.KindUser, Content: prompt}
-			m.messages = append(m.messages, userMsg)
+			m.appendMessage(userMsg, true)
 			m.inputHistory = append(m.inputHistory, prompt)
 			return m, m.beginRun(prompt, []*chat.Message{userMsg})
 		}
 		return m, nil
 
 	case tea.KeyPressMsg:
+		m.handleTranscriptViewportMsg(msg)
 		return m.handleKey(msg)
 
 	case tea.MouseWheelMsg:
-		switch msg.Mouse().Button {
-		case tea.MouseWheelUp:
-			m.scroll++
-		case tea.MouseWheelDown:
-			if m.scroll > 0 {
-				m.scroll--
-			}
-		}
+		m.handleTranscriptViewportMsg(msg)
 		return m, nil
 
 	case spinner.TickMsg:
@@ -1024,7 +1026,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.beginRun(text, []*chat.Message{userMsg})
 
 	case "up":
-		// Recall input history when idle; scroll when busy.
+		// Recall input history when idle; transcript scrolling is handled separately.
 		if !m.busy && len(m.inputHistory) > 0 {
 			if m.historyIdx == -1 {
 				m.historyIdx = len(m.inputHistory) - 1
@@ -1035,7 +1037,6 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.input.InsertString(m.inputHistory[m.historyIdx])
 			return m, nil
 		}
-		m.scroll++
 
 	case "down":
 		if !m.busy && m.historyIdx >= 0 {
@@ -1049,23 +1050,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.scroll > 0 {
-			m.scroll--
-		}
 
-	case "pgup":
-		m.scroll += 10
-
-	case "pgdown":
-		m.scroll = max(0, m.scroll-10)
-
-	case "home":
-		// Scroll to top.
-		m.scroll = 999999 // clamped in renderChat
-
-	case "end":
-		// Scroll to bottom.
-		m.scroll = 0
+	case "pgup", "pgdown", "home", "end":
+		// Transcript scrolling is handled by the viewport before this key handler.
 	}
 
 	// Forward unhandled keys to the textarea.
@@ -1129,7 +1116,7 @@ func (m *Model) clearSessionState() {
 	m.busy = false
 	m.messages = nil
 	m.history = nil
-	m.scroll = 0
+	m.invalidateTranscriptViewport()
 	m.usage = core.RunUsage{}
 	m.startTime = time.Time{}
 	m.runCtx = nil
@@ -1240,6 +1227,229 @@ func (m *Model) applyStyles(sty *styles.Styles) {
 	if sty != nil {
 		m.spinner.Style = sty.SpinnerStyle
 	}
+}
+
+func newTranscriptViewport() viewport.Model {
+	vp := viewport.New()
+	vp.KeyMap = viewport.KeyMap{}
+	vp.MouseWheelEnabled = true
+	vp.MouseWheelDelta = 1
+	vp.FillHeight = false
+	vp.SoftWrap = false
+	return vp
+}
+
+func transcriptBodyHeight(totalHeight int) (bodyHeight int, showChrome bool) {
+	if totalHeight <= 0 {
+		return 0, false
+	}
+	showChrome = totalHeight >= 4
+	bodyHeight = totalHeight
+	if showChrome {
+		bodyHeight -= 2
+	}
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+	return bodyHeight, showChrome
+}
+
+func (m *Model) setTranscriptViewportSize(width, bodyHeight int) {
+	m.transcriptViewport.SetWidth(max(1, width))
+	m.transcriptViewport.SetHeight(max(1, bodyHeight))
+}
+
+func transcriptMaxScroll(vp viewport.Model) int {
+	return max(0, vp.TotalLineCount()-vp.Height())
+}
+
+func (m *Model) syncTranscriptViewportOffset() {
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+	maxScroll := transcriptMaxScroll(m.transcriptViewport)
+	if m.scroll > maxScroll {
+		m.scroll = maxScroll
+	}
+	m.transcriptViewport.SetYOffset(maxScroll - m.scroll)
+	m.scroll = maxScroll - m.transcriptViewport.YOffset()
+}
+
+func (m *Model) pinTranscriptToBottom() {
+	m.transcriptViewport.GotoBottom()
+	m.scroll = 0
+}
+
+func (m *Model) invalidateTranscriptViewport() {
+	m.transcriptSig = 0
+	m.transcriptWidth = 0
+	m.transcriptCompact = false
+	m.transcriptViewport.SetContent("")
+	m.transcriptViewport.SetYOffset(0)
+	m.scroll = 0
+}
+
+func transcriptSignature(messages []*chat.Message, width int, compact bool) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(strconv.Itoa(width)))
+	if compact {
+		_, _ = h.Write([]byte{1})
+	}
+	for _, msg := range messages {
+		_, _ = h.Write([]byte{byte(msg.Kind), byte(msg.Status)})
+		if msg.Streaming {
+			_, _ = h.Write([]byte{1})
+		}
+		_, _ = h.Write([]byte(msg.CallID))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(msg.ToolName))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(msg.ToolArgs))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(msg.Content))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(strconv.FormatInt(msg.Duration.Nanoseconds(), 10)))
+		_, _ = h.Write([]byte{0})
+	}
+	return h.Sum64()
+}
+
+func transcriptSeparator(compact bool) string {
+	if compact {
+		return "\n"
+	}
+	return "\n\n"
+}
+
+func compactTranscriptText(rendered string) string {
+	return strings.Join(compactTranscriptBlock(splitRenderedMessageLines(rendered)), "\n")
+}
+
+func (m *Model) rebuildTranscriptViewport(width int, compactMode bool, stickBottom bool) {
+	width = max(1, width)
+	sig := transcriptSignature(m.messages, width, compactMode)
+	if sig == m.transcriptSig && width == m.transcriptWidth && compactMode == m.transcriptCompact {
+		if stickBottom {
+			m.pinTranscriptToBottom()
+		} else {
+			m.syncTranscriptViewportOffset()
+		}
+		return
+	}
+
+	var content string
+	if len(m.messages) == 0 {
+		content = m.renderWelcome(m.transcriptViewport.Height(), width)
+	} else {
+		blocks := make([]string, 0, len(m.messages))
+		for _, msg := range m.messages {
+			rendered := msg.Render(m.sty, width, m.messages)
+			if rendered == "" {
+				continue
+			}
+			if compactMode {
+				rendered = compactTranscriptText(rendered)
+			}
+			blocks = append(blocks, rendered)
+		}
+		content = strings.Join(blocks, transcriptSeparator(compactMode))
+	}
+
+	currentScroll := m.scroll
+	m.transcriptViewport.SetContent(content)
+	m.transcriptSig = sig
+	m.transcriptWidth = width
+	m.transcriptCompact = compactMode
+	if stickBottom {
+		m.pinTranscriptToBottom()
+		return
+	}
+	m.scroll = currentScroll
+	m.syncTranscriptViewportOffset()
+}
+
+func (m *Model) prepareTranscriptViewport(totalHeight, width int) (bodyHeight int, showChrome bool) {
+	bodyHeight, showChrome = transcriptBodyHeight(totalHeight)
+	if bodyHeight <= 0 {
+		return 0, showChrome
+	}
+	m.setTranscriptViewportSize(width, bodyHeight)
+	m.rebuildTranscriptViewport(width, bodyHeight <= 4, false)
+	return bodyHeight, showChrome
+}
+
+func (m *Model) availableTranscriptHeight() int {
+	if m.height > 0 {
+		return m.height
+	}
+	return 1
+}
+
+func (m *Model) handleTranscriptViewportMsg(msg tea.Msg) {
+	if m.approvalMode || m.askMode {
+		return
+	}
+	switch keyMsg := msg.(type) {
+	case tea.KeyPressMsg:
+		allow := false
+		switch keyMsg.Code {
+		case tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
+			allow = true
+		case tea.KeyUp, tea.KeyDown:
+			allow = m.busy
+		}
+		if !allow {
+			switch keyMsg.String() {
+			case "pgup", "pgdown", "home", "end":
+				allow = true
+			case "up", "down":
+				allow = m.busy
+			}
+		}
+		if !allow {
+			return
+		}
+	case tea.MouseWheelMsg:
+		// always allow transcript mouse scrolling
+	default:
+		return
+	}
+	m.transcriptViewport, _ = m.transcriptViewport.Update(msg)
+	m.scroll = transcriptMaxScroll(m.transcriptViewport) - m.transcriptViewport.YOffset()
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+}
+
+func (m *Model) appendMessage(msg *chat.Message, pinBottom bool) {
+	m.messages = append(m.messages, msg)
+	m.rebuildTranscriptViewport(m.transcriptViewport.Width(), m.transcriptCompact, pinBottom)
+}
+
+func (m *Model) appendMessages(msgs ...*chat.Message) {
+	for _, msg := range msgs {
+		m.messages = append(m.messages, msg)
+	}
+	m.rebuildTranscriptViewport(m.transcriptViewport.Width(), m.transcriptCompact, true)
+}
+
+func (m *Model) setTranscriptMessages(messages []*chat.Message) {
+	m.messages = messages
+	m.invalidateTranscriptViewport()
+	m.rebuildTranscriptViewport(m.transcriptViewport.Width(), m.transcriptCompact, true)
+}
+
+func (m *Model) refreshTranscriptViewport() {
+	m.rebuildTranscriptViewport(m.transcriptViewport.Width(), m.transcriptCompact, false)
+}
+
+func (m *Model) ensureTranscriptViewport(width, totalHeight int) {
+	bodyHeight, _ := transcriptBodyHeight(totalHeight)
+	if bodyHeight <= 0 {
+		return
+	}
+	m.setTranscriptViewportSize(width, bodyHeight)
+	m.rebuildTranscriptViewport(width, bodyHeight <= 4, false)
 }
 
 func (m *Model) ensureStyles() {
@@ -1734,27 +1944,11 @@ func (m *Model) renderChat(height, width int) string {
 		return ""
 	}
 
-	showChrome := height >= 4
-	bodyHeight := height
-	if showChrome {
-		bodyHeight = height - 2
+	bodyHeight, showChrome := m.prepareTranscriptViewport(height, width)
+	if bodyHeight <= 0 {
+		return ""
 	}
-	bodyHeight = max(1, bodyHeight)
-
-	visible := m.visibleChatLines(bodyHeight, width)
-	for len(visible) < bodyHeight {
-		visible = append([]string{""}, visible...)
-	}
-	if len(visible) > bodyHeight {
-		visible = visible[len(visible)-bodyHeight:]
-	}
-	for i, line := range visible {
-		if w := lipgloss.Width(line); w < width {
-			visible[i] = line + strings.Repeat(" ", width-w)
-		}
-	}
-
-	body := strings.Join(visible, "\n")
+	body := m.transcriptViewport.View()
 	if !showChrome {
 		return fitShellLines(strings.Split(body, "\n"), height, 0)
 	}
@@ -1765,54 +1959,9 @@ func (m *Model) visibleChatLines(bodyHeight, width int) []string {
 	if bodyHeight <= 0 {
 		return nil
 	}
-	if len(m.messages) == 0 {
-		return strings.Split(m.renderWelcome(bodyHeight, width), "\n")
-	}
-
-	compactMode := bodyHeight <= 4
-	allLines := make([]string, 0, len(m.messages)*4)
-	for i, msg := range m.messages {
-		rendered := msg.Render(m.sty, width, m.messages)
-		if rendered == "" {
-			continue
-		}
-		block := splitRenderedMessageLines(rendered)
-		if len(block) == 0 {
-			continue
-		}
-		if compactMode {
-			block = compactTranscriptBlock(block)
-		}
-		allLines = append(allLines, block...)
-		if !compactMode && i < len(m.messages)-1 {
-			allLines = append(allLines, "")
-		}
-	}
-	if len(allLines) == 0 {
-		return nil
-	}
-
-	maxScroll := max(0, len(allLines)-bodyHeight)
-	if m.scroll > maxScroll {
-		m.scroll = maxScroll
-	}
-	if m.scroll < 0 {
-		m.scroll = 0
-	}
-
-	end := len(allLines) - m.scroll
-	if end < 0 {
-		end = 0
-	}
-	start := end - bodyHeight
-	if start < 0 {
-		start = 0
-	}
-	if start > end {
-		start = end
-	}
-
-	return append([]string(nil), allLines[start:end]...)
+	m.setTranscriptViewportSize(width, bodyHeight)
+	m.rebuildTranscriptViewport(width, bodyHeight <= 4, false)
+	return strings.Split(m.transcriptViewport.View(), "\n")
 }
 
 func compactTranscriptBlock(lines []string) []string {

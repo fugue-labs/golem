@@ -19,6 +19,12 @@ import (
 	"github.com/fugue-labs/gollem/ext/codetool"
 )
 
+func fillTranscriptMessages(m *Model, count int) {
+	for i := 0; i < count; i++ {
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("message %03d %s", i+1, strings.Repeat("detail ", 4))})
+	}
+}
+
 func TestHandleRuntimePreparedReusesSessionAndPreparesFreshAgent(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", TeamMode: "auto"})
 	oldSession := &codetool.Session{}
@@ -246,9 +252,8 @@ func TestViewFocusAndMouseWheelUpdateMetadataAndScroll(t *testing.T) {
 	m.sty = styles.New(nil)
 	m.width = 100
 	m.height = 16
-	for i := 0; i < 8; i++ {
-		m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("message %d", i+1)})
-	}
+	fillTranscriptMessages(m, 24)
+	m.ensureTranscriptViewport(m.width, m.height)
 
 	updated, _ := m.Update(tea.BlurMsg{})
 	m = updated.(*Model)
@@ -520,15 +525,13 @@ func TestViewSwitchesToCompactLayoutWhenFullShellLeavesNoTranscriptSpace(t *test
 func TestVisibleChatLinesKeepsBottomWindowWithoutRenderingEntireTranscriptSlice(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.sty = styles.New(nil)
-	for i := 0; i < 6; i++ {
-		m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("message %d", i+1)})
-	}
+	fillTranscriptMessages(m, 40)
 
 	visible := stripANSI(strings.Join(m.visibleChatLines(4, 60), "\n"))
-	if strings.Contains(visible, "message 1") {
+	if strings.Contains(visible, "message 001") {
 		t.Fatalf("expected bottom-aligned transcript window, got\n%s", visible)
 	}
-	for _, want := range []string{"message 5", "message 6"} {
+	for _, want := range []string{"message 039", "message 040"} {
 		if !strings.Contains(visible, want) {
 			t.Fatalf("visible window missing %q\n%s", want, visible)
 		}
@@ -536,8 +539,39 @@ func TestVisibleChatLinesKeepsBottomWindowWithoutRenderingEntireTranscriptSlice(
 
 	m.scroll = 2
 	scrolled := stripANSI(strings.Join(m.visibleChatLines(4, 60), "\n"))
-	if !strings.Contains(scrolled, "message 4") {
+	if !strings.Contains(scrolled, "message 038") {
 		t.Fatalf("expected scrolled transcript to reveal earlier content\n%s", scrolled)
+	}
+}
+
+func TestTranscriptViewportTracksResizeWithoutResettingScroll(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.width = 96
+	m.height = 18
+	fillTranscriptMessages(m, 80)
+	rendered := m.renderChat(10, 96)
+	if !strings.Contains(stripANSI(rendered), "message") {
+		t.Fatalf("expected transcript render to include content\n%s", stripANSI(rendered))
+	}
+
+	m.handleTranscriptViewportMsg(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	if m.scroll == 0 {
+		t.Fatal("expected upward transcript scroll to move away from bottom")
+	}
+	before := m.scroll
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 72, Height: 12})
+	m = updated.(*Model)
+	if m.scroll == 0 {
+		t.Fatal("resize unexpectedly snapped transcript to bottom")
+	}
+	if m.scroll < before-6 {
+		t.Fatalf("resize should preserve most transcript scroll, got %d want >= %d", m.scroll, before-6)
+	}
+	view := stripANSI(m.renderChat(6, 72))
+	if !strings.Contains(view, "Transcript") || !strings.Contains(view, "message") {
+		t.Fatalf("resized transcript missing expected content\n%s", view)
 	}
 }
 
