@@ -79,6 +79,11 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 		DependencyEdges: len(deps),
 	}
 
+	planApproval := latestMissionPlanApproval(approvals)
+	if planApproval != nil {
+		summary.PlanApprovalStatus = planApproval.Status
+	}
+
 	for _, task := range tasks {
 		view := MissionTaskView{
 			ID:             task.ID,
@@ -144,6 +149,20 @@ func approvalDisplayTitle(approval *Approval, taskByID map[string]*Task) string 
 		return fmt.Sprintf("%s approval", approval.Kind)
 	}
 	return "Approval gate"
+}
+
+func latestMissionPlanApproval(approvals []*Approval) *Approval {
+	var latest *Approval
+	for _, approval := range approvals {
+		if approval == nil || approval.Kind != missionPlanApprovalKind {
+			continue
+		}
+		if latest == nil || approval.CreatedAt.After(latest.CreatedAt) || (approval.CreatedAt.Equal(latest.CreatedAt) && approval.ID > latest.ID) {
+			cp := *approval
+			latest = &cp
+		}
+	}
+	return latest
 }
 
 func selectMissionTaskView(tasks []*Task, depMap map[string][]string, statuses ...TaskStatus) *MissionTaskView {
@@ -229,7 +248,16 @@ func missionPhaseLabel(summary *MissionSummary) string {
 	case MissionPlanning:
 		return "Planning"
 	case MissionAwaitingApproval:
-		return "Awaiting approval"
+		switch {
+		case summary.HasApprovalGate():
+			return "Awaiting approval"
+		case summary.PlanApprovalStatus == ApprovalApproved:
+			return "Ready to start"
+		case summary.PlanApprovalStatus != "":
+			return "Awaiting plan resolution"
+		default:
+			return "Awaiting approval"
+		}
 	case MissionRunning:
 		if summary.TaskCounts.AwaitingReview > 0 {
 			return "Running · review"
@@ -270,6 +298,14 @@ func missionNextAction(summary *MissionSummary) string {
 		return "Generate a task DAG with /mission plan"
 	case MissionPlanning:
 		return "Wait for planning to finish, then review the DAG"
+	case MissionAwaitingApproval:
+		if summary.PlanApprovalStatus == ApprovalApproved {
+			return "Plan approved. Start mission execution with /mission start"
+		}
+		if summary.PlanApprovalStatus != "" {
+			return fmt.Sprintf("Mission plan approval is %s; resolve it before starting", summary.PlanApprovalStatus)
+		}
+		return "Mission is awaiting a durable plan approval record before it can start"
 	case MissionPaused:
 		return "Resume mission execution with /mission start"
 	case MissionBlocked:
@@ -317,6 +353,16 @@ func missionAttention(summary *MissionSummary) string {
 	}
 	if summary.HasApprovalGate() {
 		return "Mission plan is waiting for approval"
+	}
+	if summary.Mission.Status == MissionAwaitingApproval {
+		switch summary.PlanApprovalStatus {
+		case ApprovalApproved:
+			return "Plan approved and ready to start"
+		case "":
+			return "Mission is missing its durable plan approval record"
+		default:
+			return fmt.Sprintf("Mission plan approval is %s", summary.PlanApprovalStatus)
+		}
 	}
 	if summary.HasPendingApprovals() {
 		return fmt.Sprintf("%d approval gate(s) pending", summary.PendingApprovals)

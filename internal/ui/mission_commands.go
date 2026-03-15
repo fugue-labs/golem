@@ -376,6 +376,9 @@ func (m *Model) handleMissionApprove() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to approve mission: %v", err)}
 	}
 	if err := ctrl.StartMission(ctx, m.activeMissionID); err != nil {
+		if strings.Contains(err.Error(), "plan approval") {
+			return &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("Mission `%s` plan approved. %v", m.activeMissionID, err)}
+		}
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to start mission after approval: %v", err)}
 	}
 
@@ -398,10 +401,11 @@ func (m *Model) handleMissionStart() *chat.Message {
 	}
 
 	ctx := m.appCtx
-	ms, err := ctrl.GetMission(ctx, m.activeMissionID)
+	summary, err := ctrl.GetMissionSummary(ctx, m.activeMissionID)
 	if err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission: %v", err)}
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to get mission status: %v", err)}
 	}
+	ms := summary.Mission
 
 	switch ms.Status {
 	case mission.MissionDraft:
@@ -420,9 +424,37 @@ func (m *Model) handleMissionStart() *chat.Message {
 			Content: fmt.Sprintf("Mission `%s` is still being **planned**. Wait for planning to complete, then run `/mission approve`.", ms.ID),
 		}
 	case mission.MissionAwaitingApproval:
+		if summary.HasApprovalGate() {
+			return &chat.Message{
+				Kind:    chat.KindAssistant,
+				Content: fmt.Sprintf("Mission `%s` is waiting for plan approval. Run `/mission approve` to approve the plan and start execution.", ms.ID),
+			}
+		}
+		if summary.PlanApprovalStatus == mission.ApprovalApproved {
+			if summary.HasPendingApprovals() {
+				return &chat.Message{
+					Kind:    chat.KindAssistant,
+					Content: fmt.Sprintf("Mission `%s` plan is approved, but %d other approval(s) are still pending. Resolve them before starting.", ms.ID, summary.PendingApprovals),
+				}
+			}
+			if err := ctrl.StartMission(ctx, m.activeMissionID); err != nil {
+				return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to start mission: %v", err)}
+			}
+			m.startOrchestrator()
+			return &chat.Message{
+				Kind:    chat.KindAssistant,
+				Content: fmt.Sprintf("Mission `%s` started. Orchestrator resumed mission execution.", m.activeMissionID),
+			}
+		}
+		if summary.PlanApprovalStatus == "" {
+			return &chat.Message{
+				Kind:    chat.KindError,
+				Content: fmt.Sprintf("Mission `%s` is awaiting approval, but the durable plan approval record is missing. Re-apply or repair the mission plan before starting.", ms.ID),
+			}
+		}
 		return &chat.Message{
 			Kind:    chat.KindAssistant,
-			Content: fmt.Sprintf("Mission `%s` is waiting for plan approval. Run `/mission approve` to approve the plan and start execution.", ms.ID),
+			Content: fmt.Sprintf("Mission `%s` cannot start because the plan approval is %s. Resolve it before retrying `/mission start`.", ms.ID, summary.PlanApprovalStatus),
 		}
 	case mission.MissionRunning:
 		return &chat.Message{
