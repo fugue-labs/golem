@@ -511,10 +511,6 @@ func (layout dashboardLayout) visiblePanes() []pane {
 		return visible
 	}
 	visible := []pane{paneTasks, paneWorkers}
-	if layout.stateOnly {
-		visible = append(visible, paneEvidence, paneEvents)
-		return visible
-	}
 	if layout.evidenceEmbedded {
 		visible = append(visible, paneEvidence)
 	}
@@ -758,8 +754,8 @@ func (m *Model) renderHeader() []string {
 		}
 		lines = append(lines,
 			m.sty.Panel.EmptyTitle.Render("No active mission"),
-			m.sty.Panel.EmptyBody.Render("Create one with /mission new or run golem mission new."),
-			m.sty.Panel.EmptyBody.Render("The dashboard will attach as soon as durable mission state exists."),
+			m.sty.Panel.EmptyBody.Render("Start with /mission new so operators can watch live task, worker, evidence, and event state here."),
+			m.sty.Panel.EmptyBody.Render("Mission Control will attach automatically as soon as durable mission state exists."),
 		)
 		return lines
 	}
@@ -886,7 +882,7 @@ func (m *Model) renderHeaderSummaryLine(label, text string) string {
 func (m *Model) renderRefreshBanner(hasCachedData bool) string {
 	if m.lastErr == nil {
 		if m.refreshing && hasCachedData {
-			message := "Refreshing live mission data • operator view updating"
+			message := fmt.Sprintf("%s Refreshing live mission data • operator view updating", styles.SpinnerIcon)
 			return ansi.Truncate(m.sty.Panel.BannerInfo.Render(message), max(1, m.width), "…")
 		}
 		return ""
@@ -1189,30 +1185,65 @@ func (m *Model) renderFooter() string {
 	paneHint := "tab:switch pane"
 	scrollHint := "j/k:scroll"
 	jumpHint := visiblePaneJumpHint(visible)
+	compactJumpHint := compactVisiblePaneJumpHint(visible)
 	if layout.narrow {
 		mode = "narrow layout"
 		paneHint = "tab:next visible lane"
 		scrollHint = "j/k:scroll stacked lane"
 	}
 	status := "live"
+	if m.missionObj == nil {
+		status = "ready for a mission"
+	}
 	if m.refreshing {
 		status = "refreshing"
 	}
-	if m.lastErr != nil {
+	if m.lastErr != nil && !isNoMissionError(m.lastErr) {
 		status = "degraded"
 	}
-	keys := []string{
+	joiner := "  •  "
+	segments := []string{
 		m.renderMetric("Mission Control", status+" • "+mode),
 		"q:quit",
 		"r:refresh",
+	}
+	if m.missionObj == nil {
+		fullOptional := []string{}
+		if jumpHint != "" {
+			fullOptional = append(fullOptional, jumpHint)
+		}
+		fullOptional = append(fullOptional,
+			"/mission new:start live ops",
+			paneHint,
+			"shift+tab:back",
+			scrollHint,
+		)
+		fullSegments := fitFooterSegments(segments, fullOptional, max(1, m.width), joiner)
+		fullText := strings.Join(fullSegments, joiner)
+		if lipgloss.Width(fullText) <= max(1, m.width) {
+			return m.sty.Muted.Render(fullText)
+		}
+
+		compactOptional := []string{}
+		if compactJumpHint != "" {
+			compactOptional = append(compactOptional, compactJumpHint)
+		}
+		compactOptional = append(compactOptional, "/mission new:start live ops")
+		compactSegments := fitFooterSegments(segments, compactOptional, max(1, m.width), joiner)
+		return m.sty.Muted.Render(strings.Join(compactSegments, joiner))
+	}
+
+	segments = append(segments,
 		paneHint,
 		"shift+tab:back",
 		scrollHint,
-	}
+	)
+	optional := []string{}
 	if jumpHint != "" {
-		keys = append(keys, jumpHint)
+		optional = append(optional, jumpHint)
 	}
-	return m.sty.Muted.Render(ansi.Truncate(strings.Join(keys, "  •  "), max(1, m.width), "…"))
+	segments = fitFooterSegments(segments, optional, max(1, m.width), joiner)
+	return m.sty.Muted.Render(strings.Join(segments, joiner))
 }
 
 func (m *Model) renderSectionLabel(title string, count, width int) string {
@@ -1320,6 +1351,47 @@ func visiblePaneJumpHint(visible []pane) string {
 		return labels[0] + ":jump to pane"
 	}
 	return strings.Join(labels, "/") + ":jump to pane"
+}
+
+func compactVisiblePaneJumpHint(visible []pane) string {
+	full := visiblePaneJumpHint(visible)
+	if full == "" {
+		return ""
+	}
+	return strings.Replace(full, ":jump to pane", ":jump", 1)
+}
+
+func fitFooterSegments(required, optional []string, width int, joiner string) []string {
+	if width <= 0 {
+		width = 1
+	}
+	segments := append([]string{}, required...)
+	base := strings.Join(segments, joiner)
+	if lipgloss.Width(base) > width {
+		return []string{ansi.Truncate(base, width, "…")}
+	}
+	for _, segment := range optional {
+		candidate := strings.Join(append(append([]string{}, segments...), segment), joiner)
+		if lipgloss.Width(candidate) > width {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+	return segments
+}
+
+func replaceFooterSegment(segments []string, oldValue, newValue string) []string {
+	if oldValue == "" || newValue == "" {
+		return segments
+	}
+	updated := append([]string{}, segments...)
+	for i, segment := range updated {
+		if segment == oldValue {
+			updated[i] = newValue
+			break
+		}
+	}
+	return updated
 }
 
 func wrapSegments(segments []string, width int, joiner string) []string {

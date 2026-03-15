@@ -465,6 +465,21 @@ func TestRenderFooterReportsLayoutAndRefreshState(t *testing.T) {
 	}
 }
 
+func TestRenderFooterNoMissionUsesReadyCopy(t *testing.T) {
+	m := New("")
+	m.width = 160
+	m.height = 24
+	plain := stripANSITest(m.renderFooter())
+	for _, want := range []string{"Mission Control ready for a mission • wide layout", "/mission new:start live ops"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected %q in no-mission footer, got %q", want, plain)
+		}
+	}
+	if strings.Contains(plain, "degraded") {
+		t.Fatalf("expected no-mission footer to avoid degraded status, got %q", plain)
+	}
+}
+
 func TestRenderFooterUsesVisiblePaneJumpHints(t *testing.T) {
 	m := New("")
 	m.width = 80

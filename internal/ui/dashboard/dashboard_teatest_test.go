@@ -1144,3 +1144,58 @@ func TestTeatestNoMissionDashboardStillShowsFocusablePanes(t *testing.T) {
 		t.Fatalf("expected workers header focus indicator after tab, got %q", view)
 	}
 }
+
+func TestTeatestWideNoMissionMediumHeightOnlyCyclesRenderedPanes(t *testing.T) {
+	m, _ := setupTeatestModel(t, 120, 18)
+	view := stripANSI(viewString(m))
+	for _, want := range []string{"▸ [1] Tasks", "[2] Workers", "[4] Events", "No active mission"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected medium-height no-mission dashboard to contain %q, got %q", want, view)
+		}
+	}
+
+	layout := m.computeLayout()
+	visible := layout.visiblePanes()
+	if layout.narrow {
+		t.Fatalf("expected wide layout, got %+v", layout)
+	}
+	if len(visible) != 3 || visible[0] != paneTasks || visible[1] != paneWorkers || visible[2] != paneEvents {
+		t.Fatalf("expected tasks/workers/events visible, got %v", visible)
+	}
+	if hint := visiblePaneJumpHint(visible); hint != "1/2/4:jump to pane" {
+		t.Fatalf("expected visible-pane jump hint, got %q", hint)
+	}
+	footer := stripANSI(m.renderFooter())
+	for _, want := range []string{"Mission Control ready for a mission • wide layout", "1/2/4:jump"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("expected medium-height no-mission footer to contain %q, got %q", want, footer)
+		}
+	}
+	if strings.Contains(view, "[3] Evidence") {
+		t.Fatalf("expected evidence pane to be omitted in medium-height wide no-mission view, got %q", view)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(*Model)
+	if m.focusPane != paneWorkers {
+		t.Fatalf("expected tab to move focus to workers, got %d", m.focusPane)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '3'})
+	m = updated.(*Model)
+	if m.focusPane != paneWorkers {
+		t.Fatalf("expected hidden evidence pane to stay unfocusable, got %d", m.focusPane)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(*Model)
+	if m.focusPane != paneEvents {
+		t.Fatalf("expected next visible pane to be events, got %d", m.focusPane)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(*Model)
+	if m.focusPane != paneTasks {
+		t.Fatalf("expected focus to wrap back to tasks, got %d", m.focusPane)
+	}
+}

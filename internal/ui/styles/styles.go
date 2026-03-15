@@ -351,7 +351,7 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Panel.HeaderInactive = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.bgSubtle).Padding(0, 1)
 	s.Panel.HeaderMeta = lipgloss.NewStyle().Foreground(palette.fgMuted)
 	s.Panel.HeaderKey = lipgloss.NewStyle().Foreground(palette.blue).Bold(true)
-	s.Panel.BannerInfo = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.surface).Padding(0, 1)
+	s.Panel.BannerInfo = lipgloss.NewStyle().Foreground(readableText(palette.info)).Background(palette.info).Padding(0, 1).Bold(true)
 	s.Panel.BannerWarning = lipgloss.NewStyle().Foreground(readableText(palette.warn)).Background(palette.warn).Padding(0, 1).Bold(true)
 	s.Panel.BannerError = lipgloss.NewStyle().Foreground(readableText(palette.errColor)).Background(palette.errColor).Padding(0, 1).Bold(true)
 	s.Panel.EmptyTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
