@@ -144,6 +144,14 @@ type Styles struct {
 		IconInProgress lipgloss.Style
 		IconCompleted  lipgloss.Style
 		IconBlocked    lipgloss.Style
+		HeaderActive   lipgloss.Style
+		HeaderInactive lipgloss.Style
+		HeaderMeta     lipgloss.Style
+		HeaderKey      lipgloss.Style
+		EmptyTitle     lipgloss.Style
+		EmptyBody      lipgloss.Style
+		MetricKey      lipgloss.Style
+		MetricValue    lipgloss.Style
 	}
 
 	// Spinner.
@@ -338,6 +346,14 @@ func New(_ color.Color) *Styles {
 	s.Panel.IconInProgress = lipgloss.NewStyle().Foreground(yellow).Bold(true)
 	s.Panel.IconCompleted = lipgloss.NewStyle().Foreground(green).Bold(true)
 	s.Panel.IconBlocked = lipgloss.NewStyle().Foreground(red).Bold(true)
+	s.Panel.HeaderActive = lipgloss.NewStyle().Foreground(bgBase).Background(primary).Padding(0, 1).Bold(true)
+	s.Panel.HeaderInactive = lipgloss.NewStyle().Foreground(fgStrong).Background(bgSubtle).Padding(0, 1)
+	s.Panel.HeaderMeta = lipgloss.NewStyle().Foreground(fgMuted)
+	s.Panel.HeaderKey = lipgloss.NewStyle().Foreground(blue).Bold(true)
+	s.Panel.EmptyTitle = lipgloss.NewStyle().Foreground(fgStrong).Bold(true)
+	s.Panel.EmptyBody = lipgloss.NewStyle().Foreground(fgHalf)
+	s.Panel.MetricKey = lipgloss.NewStyle().Foreground(fgHalf)
+	s.Panel.MetricValue = lipgloss.NewStyle().Foreground(fgStrong).Bold(true)
 
 	// Spinner.
 	s.SpinnerStyle = lipgloss.NewStyle().Foreground(primary)

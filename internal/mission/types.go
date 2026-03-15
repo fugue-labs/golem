@@ -402,3 +402,20 @@ func (s *MissionSummary) PrimaryReadyTask() *MissionTaskView {
 	}
 	return &s.ReadyTasks[0]
 }
+
+// FillDisplayDefaults populates derived display fields when a summary was
+// loaded directly from a store implementation that does not compute them.
+func (s *MissionSummary) FillDisplayDefaults() {
+	if s == nil {
+		return
+	}
+	if s.PhaseLabel == "" {
+		s.PhaseLabel = missionPhaseLabel(s)
+	}
+	if s.NextAction == "" {
+		s.NextAction = missionNextAction(s)
+	}
+	if s.Attention == "" {
+		s.Attention = missionAttention(s)
+	}
+}

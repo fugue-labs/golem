@@ -48,6 +48,7 @@ type Model struct {
 	runs       []*mission.Run
 	events     []*mission.Event
 	approvals  []*mission.Approval
+	artifacts  []*mission.Artifact
 
 	// Focus and scrolling.
 	focusPane pane
@@ -112,7 +113,7 @@ func (m *Model) doRefresh() tea.Msg {
 		if err != nil {
 			return refreshDoneMsg{err: err}
 		}
-		// Prefer running > paused > blocked > awaiting_approval > planning > draft.
+		// Prefer running > blocked > paused > awaiting_approval > planning > draft.
 		var best *mission.Mission
 		for _, ms := range missions {
 			if ms.Status.IsTerminal() {
@@ -131,6 +132,14 @@ func (m *Model) doRefresh() tea.Msg {
 	}
 
 	if m.missionID == "" {
+		m.missionObj = nil
+		m.summary = nil
+		m.tasks = nil
+		m.deps = nil
+		m.runs = nil
+		m.events = nil
+		m.approvals = nil
+		m.artifacts = nil
 		return refreshDoneMsg{err: fmt.Errorf("no missions found")}
 	}
 
@@ -175,6 +184,12 @@ func (m *Model) doRefresh() tea.Msg {
 		return refreshDoneMsg{err: err}
 	}
 	m.approvals = approvals
+
+	artifacts, err := m.ctrl.Store().ListArtifacts(ctx, m.missionID)
+	if err != nil {
+		return refreshDoneMsg{err: err}
+	}
+	m.artifacts = artifacts
 
 	return refreshDoneMsg{}
 }
@@ -247,14 +262,12 @@ func (m *Model) View() tea.View {
 		return tea.NewView("Loading...")
 	}
 
-	if m.lastErr != nil && m.missionObj == nil {
+	if m.lastErr != nil && m.missionObj == nil && !isNoMissionError(m.lastErr) {
 		return tea.NewView(fmt.Sprintf("Dashboard error: %v\n\nPress q to quit.", m.lastErr))
 	}
 
 	var lines []string
-
-	headerLines := m.renderHeader()
-	lines = append(lines, headerLines...)
+	lines = append(lines, m.renderHeader()...)
 	lines = append(lines, m.renderSeparator())
 
 	eventHeight := 2
@@ -313,26 +326,27 @@ func (m *Model) View() tea.View {
 // renderHeader renders the mission header.
 func (m *Model) renderHeader() []string {
 	if m.missionObj == nil {
-		return []string{m.sty.Panel.Title.Render("Mission Control — No active mission")}
+		titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("idle", "No mission")
+		return []string{
+			titleLine,
+			m.sty.Panel.EmptyTitle.Render("No active mission"),
+			m.sty.Panel.EmptyBody.Render("Create one with /mission new or run golem mission new."),
+			m.sty.Panel.EmptyBody.Render("The dashboard will attach as soon as durable mission state exists."),
+		}
 	}
 
 	ms := m.missionObj
 	tc := m.summary.TaskCounts
-	activeRuns := 0
-	for _, r := range m.runs {
-		if r.Status == mission.RunRunning || r.Status == mission.RunQueued {
-			activeRuns++
+	activeRuns := m.summary.ActiveRuns
+	if activeRuns == 0 {
+		for _, r := range m.runs {
+			if r.Status == mission.RunRunning || r.Status == mission.RunQueued {
+				activeRuns++
+			}
 		}
 	}
 
-	statusChip := lipgloss.NewStyle().
-		Foreground(m.sty.FgBase).
-		Background(m.sty.BgSubtle).
-		Bold(true).
-		Padding(0, 1).
-		Render(fmt.Sprintf("%s %s", missionStatusIcon(ms.Status), ms.Status))
-
-	titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + statusChip
+	titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip(string(ms.Status), fmt.Sprintf("%s %s", missionStatusIcon(ms.Status), ms.Status))
 
 	missionTitle := strings.TrimSpace(ms.Title)
 	if missionTitle == "" {
@@ -341,27 +355,61 @@ func (m *Model) renderHeader() []string {
 	missionLine := m.sty.Bold.Render(ansi.Truncate(missionTitle, max(1, m.width), "…"))
 
 	done := tc.Done + tc.Integrated + tc.Accepted
-	parts := []string{fmt.Sprintf("Tasks %d/%d", done, tc.Total)}
+	blocked := tc.Blocked + tc.Failed
+	metricSegments := []string{
+		m.renderMetric("Tasks", fmt.Sprintf("%d/%d complete", done, tc.Total)),
+		m.renderMetric("Workers", fmt.Sprintf("%d active", activeRuns)),
+	}
 	if tc.Running > 0 {
-		parts = append(parts, fmt.Sprintf("Running %d", tc.Running))
+		metricSegments = append(metricSegments, m.renderMetric("Running", fmt.Sprintf("%d now", tc.Running)))
 	}
 	if tc.Ready > 0 {
-		parts = append(parts, fmt.Sprintf("Ready %d", tc.Ready))
+		metricSegments = append(metricSegments, m.renderMetric("Ready", fmt.Sprintf("%d queued", tc.Ready)))
 	}
-	if tc.Blocked > 0 {
-		parts = append(parts, fmt.Sprintf("Blocked %d", tc.Blocked))
+	if tc.AwaitingReview > 0 {
+		metricSegments = append(metricSegments, m.renderMetric("Review", fmt.Sprintf("%d waiting", tc.AwaitingReview)))
 	}
-	parts = append(parts, fmt.Sprintf("Workers %d", activeRuns))
+	if blocked > 0 {
+		metricSegments = append(metricSegments, m.renderMetric("Blocked", fmt.Sprintf("%d stalled", blocked)))
+	}
+	if m.summary.PendingApprovals > 0 {
+		metricSegments = append(metricSegments, m.renderMetric("Approvals", fmt.Sprintf("%d pending", m.summary.PendingApprovals)))
+	}
+	if len(m.artifacts) > 0 {
+		metricSegments = append(metricSegments, m.renderMetric("Evidence", fmt.Sprintf("%d items", len(m.artifacts))))
+	}
 	if ms.StartedAt != nil {
-		parts = append(parts, fmt.Sprintf("Elapsed %s", time.Since(*ms.StartedAt).Truncate(time.Second)))
+		metricSegments = append(metricSegments, m.renderMetric("Elapsed", time.Since(*ms.StartedAt).Truncate(time.Second).String()))
 	}
-	metricsLine := m.sty.Panel.Progress.Render(strings.Join(parts, " │ "))
 
-	goalPrefix := m.sty.Muted.Render("Goal ")
-	goalText := ansi.Truncate(ms.Goal, max(1, m.width-lipgloss.Width(goalPrefix)), "…")
-	goalLine := goalPrefix + m.sty.HalfMuted.Render(goalText)
+	repoName := filepath.Base(strings.TrimSpace(ms.RepoRoot))
+	if repoName == "." || repoName == string(filepath.Separator) {
+		repoName = ""
+	}
+	metaSegments := []string{}
+	if ms.ID != "" {
+		metaSegments = append(metaSegments, m.renderMetric("Mission", shortenID(ms.ID, 12)))
+	}
+	if repoName != "" {
+		metaSegments = append(metaSegments, m.renderMetric("Repo", repoName))
+	}
+	if ms.BaseBranch != "" {
+		metaSegments = append(metaSegments, m.renderMetric("Branch", ms.BaseBranch))
+	}
+	if ms.Budget.MaxConcurrentWorkers > 0 {
+		metaSegments = append(metaSegments, m.renderMetric("Budget", fmt.Sprintf("%d workers", ms.Budget.MaxConcurrentWorkers)))
+	}
 
-	return []string{titleLine, missionLine, metricsLine, goalLine}
+	lines := []string{titleLine, missionLine}
+	lines = append(lines, wrapSegments(metricSegments, max(1, m.width), m.sty.Panel.Separator.Render(" • "))...)
+	if len(metaSegments) > 0 {
+		lines = append(lines, wrapSegments(metaSegments, max(1, m.width), m.sty.Panel.Separator.Render(" • "))...)
+	}
+
+	goalLabel := m.sty.Panel.MetricKey.Render("Goal")
+	goalText := ansi.Truncate(ms.Goal, max(1, m.width-lipgloss.Width(goalLabel)-1), "…")
+	lines = append(lines, goalLabel+" "+m.sty.HalfMuted.Render(goalText))
+	return lines
 }
 
 // renderTaskPane renders the task DAG view.
@@ -371,7 +419,7 @@ func (m *Model) renderTaskPane(height, width int) []string {
 	budget := height - 1
 
 	if len(m.tasks) == 0 {
-		lines = append(lines, m.sty.Muted.Render(" No tasks yet"))
+		lines = append(lines, m.renderEmptyState(width, "No tasks yet", "Plan the mission to populate the task graph and operator queue.")...)
 		for len(lines) < height {
 			lines = append(lines, "")
 		}
@@ -463,7 +511,7 @@ func (m *Model) renderWorkerPane(height, width int) []string {
 	}
 
 	if len(activeRuns) == 0 {
-		lines = append(lines, m.sty.Muted.Render(" No active workers"))
+		lines = append(lines, m.renderEmptyState(width, "No active workers", "Mission Control is idle. Start the mission to see workers, reviews, and queued work.")...)
 		for len(lines) < height {
 			lines = append(lines, "")
 		}
@@ -606,8 +654,26 @@ func (m *Model) renderEvidencePane(height, width int) []string {
 		allItems = append(allItems, failureLines...)
 	}
 
+	var artifactLines []string
+	for _, a := range m.artifacts {
+		label := a.Type
+		if label == "" {
+			label = "artifact"
+		}
+		target := a.RelativePath
+		if target == "" {
+			target = shortenID(a.ID, 12)
+		}
+		line := fmt.Sprintf(" %s %s: %s", styles.ResultPrefix, label, ansi.Truncate(target, max(1, width-16), "…"))
+		artifactLines = append(artifactLines, m.sty.Panel.TaskText.Render(ansi.Truncate(line, max(1, width-2), "…")))
+	}
+	if len(artifactLines) > 0 {
+		allItems = append(allItems, m.renderSectionLabel("Artifacts", len(artifactLines), width))
+		allItems = append(allItems, artifactLines...)
+	}
+
 	if len(allItems) == 0 {
-		allItems = append(allItems, m.sty.Muted.Render(" No evidence yet"))
+		allItems = append(allItems, m.renderEmptyState(width, "No evidence yet", "Reviews, approvals, failures, and artifacts will collect here as the mission runs.")...)
 	}
 
 	if offset > len(allItems) {
@@ -644,7 +710,7 @@ func (m *Model) renderEventPane(height, width int) []string {
 		allItems = append(allItems, m.sty.Muted.Render(ansi.Truncate(line, max(1, width-2), "…")))
 	}
 	if len(allItems) == 0 {
-		allItems = append(allItems, m.sty.Muted.Render(" No events"))
+		allItems = append(allItems, m.renderEmptyState(width, "No events yet", "Mission lifecycle, scheduling, and approval events will stream here.")...)
 	}
 	if offset > len(allItems) {
 		offset = len(allItems)
@@ -662,31 +728,21 @@ func (m *Model) renderEventPane(height, width int) []string {
 	return lines[:height]
 }
 
-// renderPaneHeader renders a pane title with focus indicator.
-func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
-	indicator := " "
-	prefixStyle := m.sty.Muted
-	titleStyle := m.sty.Panel.Progress
-	metaStyle := m.sty.Muted
-	meta := "tab"
-	if focused {
-		indicator = "▸"
-		prefixStyle = m.sty.Emphasis
-		titleStyle = m.sty.Panel.Title
-		metaStyle = m.sty.HalfMuted
-		meta = "j/k scroll"
-	}
-	line := fmt.Sprintf("%s %s %s", prefixStyle.Render(indicator+" "+paneShortcut(title)), titleStyle.Render(title), metaStyle.Render(meta))
-	return ansi.Truncate(line, max(1, width), "…")
-}
-
 func (m *Model) renderSeparator() string {
 	return m.sty.Panel.Separator.Render(strings.Repeat(styles.Separator, max(1, m.width)))
 }
 
 func (m *Model) renderFooter() string {
-	keys := "Command center • q:quit  r:refresh  tab:switch pane  shift+tab:back  j/k:scroll  1-4:jump to pane"
-	return m.sty.Muted.Render(ansi.Truncate(keys, max(1, m.width), "…"))
+	keys := []string{
+		m.renderMetric("Command center", "operator view"),
+		"q:quit",
+		"r:refresh",
+		"tab:switch pane",
+		"shift+tab:back",
+		"j/k:scroll",
+		"1-4:jump to pane",
+	}
+	return m.sty.Muted.Render(ansi.Truncate(strings.Join(keys, "  •  "), max(1, m.width), "…"))
 }
 
 func (m *Model) renderSectionLabel(title string, count, width int) string {
@@ -697,7 +753,123 @@ func (m *Model) renderSectionLabel(title string, count, width int) string {
 	return m.sty.Panel.Progress.Render(ansi.Truncate(label, max(1, width), "…"))
 }
 
-// Helper functions.
+// renderPaneHeader renders a pane title with focus indicator.
+func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
+	indicator := "○"
+	headStyle := m.sty.Panel.HeaderInactive
+	metaStyle := m.sty.Panel.HeaderMeta
+	meta := "tab to focus"
+	if focused {
+		indicator = "▸"
+		headStyle = m.sty.Panel.HeaderActive
+		metaStyle = m.sty.Panel.HeaderMeta.Bold(true)
+		meta = "ACTIVE • j/k scroll"
+	}
+	label := fmt.Sprintf("%s %s %s", indicator, paneShortcut(title), title)
+	line := headStyle.Render(label) + " " + metaStyle.Render(meta)
+	return ansi.Truncate(line, max(1, width), "…")
+}
+
+func (m *Model) renderMetric(key, value string) string {
+	return lipgloss.JoinHorizontal(lipgloss.Left,
+		m.sty.Panel.MetricKey.Render(key),
+		" ",
+		m.sty.Panel.MetricValue.Render(value),
+	)
+}
+
+func (m *Model) renderStatusChip(kind, text string) string {
+	style := lipgloss.NewStyle().
+		Foreground(m.sty.FgBase).
+		Background(m.sty.BgSubtle).
+		Bold(true).
+		Padding(0, 1)
+	lower := strings.ToLower(kind)
+	switch {
+	case strings.Contains(lower, "run") || strings.Contains(lower, "active"):
+		style = style.Background(m.sty.Blue)
+	case strings.Contains(lower, "await") || strings.Contains(lower, "review"):
+		style = style.Background(m.sty.Yellow)
+	case strings.Contains(lower, "block") || strings.Contains(lower, "fail") || strings.Contains(lower, "error"):
+		style = style.Background(m.sty.Red)
+	case strings.Contains(lower, "done") || strings.Contains(lower, "complete") || strings.Contains(lower, "success"):
+		style = style.Background(m.sty.Green)
+	case strings.Contains(lower, "idle") || strings.Contains(lower, "draft") || strings.Contains(lower, "pause"):
+		style = style.Background(m.sty.BgSubtle)
+	default:
+		style = style.Background(m.sty.Primary)
+	}
+	return style.Render(text)
+}
+
+func (m *Model) renderEmptyState(width int, title, body string) []string {
+	lines := []string{m.sty.Panel.EmptyTitle.Render(" " + title)}
+	wrapped := wrapPlainText(body, max(1, width-2))
+	for _, line := range wrapped {
+		lines = append(lines, m.sty.Panel.EmptyBody.Render(" "+line))
+	}
+	return lines
+}
+
+func wrapSegments(segments []string, width int, joiner string) []string {
+	if len(segments) == 0 {
+		return nil
+	}
+	if width <= 0 {
+		width = 1
+	}
+	var lines []string
+	current := segments[0]
+	for _, segment := range segments[1:] {
+		candidate := current + joiner + segment
+		if lipgloss.Width(candidate) <= width {
+			current = candidate
+			continue
+		}
+		lines = append(lines, ansi.Truncate(current, width, "…"))
+		current = segment
+	}
+	lines = append(lines, ansi.Truncate(current, width, "…"))
+	return lines
+}
+
+func wrapPlainText(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	var lines []string
+	current := words[0]
+	for _, word := range words[1:] {
+		candidate := current + " " + word
+		if lipgloss.Width(candidate) <= width {
+			current = candidate
+			continue
+		}
+		lines = append(lines, current)
+		current = word
+	}
+	lines = append(lines, current)
+	return lines
+}
+
+func shortenID(id string, width int) string {
+	if width <= 0 {
+		return id
+	}
+	return ansi.Truncate(id, width, "…")
+}
+
+func isNoMissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "no missions") || strings.Contains(lower, "no active mission")
+}
 
 func missionStatusIcon(s mission.MissionStatus) string {
 	switch s {

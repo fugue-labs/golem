@@ -197,6 +197,7 @@ type Model struct {
 	approvalArgs   string
 	approvalRespCh chan<- bool
 	approvalAlways map[string]bool // tools the user has permanently allowed this session
+	approvalNever  map[string]bool // tools the user has permanently denied this session
 
 	// Application-scoped context (cancelled on quit).
 	appCtx    context.Context
@@ -261,6 +262,7 @@ func New(cfg *config.Config) *Model {
 		approvalCh:     make(chan toolApprovalRequest, 1),
 		approvalDone:   make(chan struct{}),
 		approvalAlways: make(map[string]bool),
+		approvalNever:  make(map[string]bool),
 		costTracker:    core.NewCostTracker(modelPricing()),
 		teamEventBus:   core.NewEventBus(),
 		checkpoints:    checkpoint.NewStore(cfg.WorkingDir),
@@ -396,15 +398,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, m.waitForToolApproval()
 		}
-		// Auto-approve if user previously chose "always" for this tool.
-		if m.approvalAlways[msg.toolName] {
-			if msg.response != nil {
+		// Auto-resolve if user previously chose a session-wide decision.
+		if msg.response != nil {
+			switch {
+			case m.approvalAlways[msg.toolName]:
 				select {
 				case msg.response <- true:
 				default:
 				}
+				return m, m.waitForToolApproval()
+			case m.approvalNever[msg.toolName]:
+				select {
+				case msg.response <- false:
+				default:
+				}
+				return m, m.waitForToolApproval()
 			}
-			return m, m.waitForToolApproval()
 		}
 		m.beginApprovalMode(msg)
 		return m, m.waitForToolApproval()
@@ -1324,7 +1333,10 @@ func (m *Model) renderCompactStatusBar() string {
 		statusText = "Working"
 	}
 	meta := statusText + " · " + m.cfg.Model
-	if m.busy {
+	switch {
+	case m.approvalMode:
+		meta = "Approval · [y]/[n]/[a]/[d]"
+	case m.busy:
 		meta = statusText + " · Esc cancels"
 	}
 	content := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-9)))
@@ -1379,7 +1391,7 @@ func (m *Model) renderTranscriptMeta() string {
 func (m *Model) renderInputMeta() string {
 	switch {
 	case m.approvalMode:
-		return "y allow · n deny · a always allow"
+		return "[y] allow · [n] deny · [a] always allow · [d] always deny"
 	case m.askMode:
 		return "Enter answer · Esc cancel"
 	case m.busy:
@@ -1553,7 +1565,7 @@ func (m *Model) currentActivitySummary() string {
 		if tool == "" {
 			tool = "tool"
 		}
-		return "Approval required · " + tool + " · y allow · n deny · a always"
+		return "Approval required · " + tool + " · [y] allow · [n] deny · [a] always allow · [d] always deny"
 	case m.askMode:
 		total := len(m.askQuestions)
 		if total == 0 {
@@ -1591,7 +1603,7 @@ func (m *Model) renderChat(height, width int) string {
 		return ""
 	}
 
-	showChrome := height >= 3
+	showChrome := height >= 4
 	bodyHeight := height
 	if showChrome {
 		bodyHeight = height - 2
@@ -1626,74 +1638,57 @@ func (m *Model) visibleChatLines(bodyHeight, width int) []string {
 		return strings.Split(m.renderWelcome(bodyHeight, width), "\n")
 	}
 
-	totalLines := 0
-	blockHeights := make([]int, len(m.messages))
+	compactMode := bodyHeight <= 4
+	allLines := make([]string, 0, len(m.messages)*4)
 	for i, msg := range m.messages {
 		rendered := msg.Render(m.sty, width, m.messages)
 		if rendered == "" {
 			continue
 		}
-		height := msg.Lines()
-		if height <= 0 {
-			height = len(splitRenderedMessageLines(rendered))
-		}
-		if height <= 0 {
-			continue
-		}
-		if i < len(m.messages)-1 {
-			height++
-		}
-		blockHeights[i] = height
-		totalLines += height
-	}
-
-	maxScroll := max(0, totalLines-bodyHeight)
-	if m.scroll > maxScroll {
-		m.scroll = maxScroll
-	}
-	requestedScroll := max(0, m.scroll)
-	remaining := bodyHeight
-	lines := make([]string, 0, bodyHeight)
-
-	for i := len(m.messages) - 1; i >= 0 && remaining > 0; i-- {
-		blockHeight := blockHeights[i]
-		if blockHeight == 0 {
-			continue
-		}
-		if requestedScroll >= blockHeight {
-			requestedScroll -= blockHeight
-			continue
-		}
-
-		block := splitRenderedMessageLines(m.messages[i].Render(m.sty, width, m.messages))
+		block := splitRenderedMessageLines(rendered)
 		if len(block) == 0 {
 			continue
 		}
-		if i < len(m.messages)-1 {
-			block = append(block, "")
+		if compactMode {
+			block = compactTranscriptBlock(block)
 		}
-		if requestedScroll > 0 {
-			block = block[:len(block)-requestedScroll]
-			requestedScroll = 0
+		allLines = append(allLines, block...)
+		if !compactMode && i < len(m.messages)-1 {
+			allLines = append(allLines, "")
 		}
-		if len(block) > remaining {
-			trimmed := block
-			for len(trimmed) > 0 && strings.TrimSpace(trimmed[len(trimmed)-1]) == "" {
-				trimmed = trimmed[:len(trimmed)-1]
-			}
-			if len(trimmed) == 0 {
-				trimmed = block
-			}
-			if len(trimmed) > remaining {
-				trimmed = trimmed[len(trimmed)-remaining:]
-			}
-			block = trimmed
-		}
-		lines = append(block, lines...)
-		remaining = bodyHeight - len(lines)
+	}
+	if len(allLines) == 0 {
+		return nil
 	}
 
-	return lines
+	maxScroll := max(0, len(allLines)-bodyHeight)
+	if m.scroll > maxScroll {
+		m.scroll = maxScroll
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+
+	end := len(allLines) - m.scroll
+	if end < 0 {
+		end = 0
+	}
+	start := end - bodyHeight
+	if start < 0 {
+		start = 0
+	}
+	if start > end {
+		start = end
+	}
+
+	return append([]string(nil), allLines[start:end]...)
+}
+
+func compactTranscriptBlock(lines []string) []string {
+	if len(lines) <= 2 {
+		return lines
+	}
+	return []string{lines[0], lines[1]}
 }
 
 func splitRenderedMessageLines(rendered string) []string {

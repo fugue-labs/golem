@@ -133,6 +133,7 @@ func (m *Model) handleMissionStatus() *chat.Message {
 }
 
 func renderMissionSummaryMessage(summary *mission.MissionSummary) *chat.Message {
+	summary.FillDisplayDefaults()
 	m := summary.Mission
 	tc := summary.TaskCounts
 

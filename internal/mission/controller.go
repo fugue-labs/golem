@@ -59,7 +59,14 @@ func (c *Controller) GetMission(ctx context.Context, id string) (*Mission, error
 
 // GetMissionSummary returns an aggregate view of mission state.
 func (c *Controller) GetMissionSummary(ctx context.Context, id string) (*MissionSummary, error) {
-	return BuildMissionSummary(ctx, c.store, id)
+	summary, err := BuildMissionSummary(ctx, c.store, id)
+	if err != nil {
+		return nil, err
+	}
+	if summary != nil {
+		summary.FillDisplayDefaults()
+	}
+	return summary, nil
 }
 
 // ApplyPlan applies a planning result to a draft/planning mission, creating

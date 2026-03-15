@@ -47,6 +47,10 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 	if err != nil {
 		return []string{m.sty.Panel.Progress.Render("Mission: error")}
 	}
+	if summary == nil {
+		return nil
+	}
+	summary.FillDisplayDefaults()
 
 	ms := summary.Mission
 	tasks, _ := ctrl.Store().ListTasks(ctx, m.activeMissionID)
@@ -133,6 +137,10 @@ func (m *Model) missionPanelSummary() string {
 	if err != nil {
 		return ""
 	}
+	if summary == nil {
+		return ""
+	}
+	summary.FillDisplayDefaults()
 
 	tc := summary.TaskCounts
 	done := tc.Completed()
