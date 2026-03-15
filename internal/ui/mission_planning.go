@@ -65,7 +65,7 @@ func (m *Model) completeMissionPlanRun(runErr error, messages []core.ModelMessag
 
 	m.messages = append(m.messages, &chat.Message{
 		Kind: chat.KindAssistant,
-		Content: fmt.Sprintf("Mission plan applied for `%s` with %d tasks and %d dependencies. Run `/mission approve` to start execution.",
+		Content: fmt.Sprintf("Mission plan applied for `%s` with %d tasks and %d dependencies. Approval gate opened; run `/mission approve` to start execution.",
 			planRun.MissionID, len(plan.Tasks), len(plan.Dependencies)),
 	})
 }

@@ -417,7 +417,7 @@ func TestMissionStatusDisplayWithTasks(t *testing.T) {
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant message, got %v", msg.Kind)
 	}
-	for _, want := range []string{"Test mission", "running", "Tasks", "Done", "Running", "Blocked"} {
+	for _, want := range []string{"Test mission", "running", "Phase", "Next action", "Task DAG", "Done", "Running", "Blocked"} {
 		if !strings.Contains(msg.Content, want) {
 			t.Fatalf("status missing %q\n%s", want, msg.Content)
 		}
@@ -569,7 +569,7 @@ func TestMissionPhaseHeaderDisplayAllStatuses(t *testing.T) {
 			if !strings.Contains(header, expectedIcon) {
 				t.Fatalf("header for %s missing icon %q: %q", status, expectedIcon, header)
 			}
-			if !strings.Contains(header, string(status)) {
+			if !strings.Contains(header, strings.ToLower(string(status))) {
 				t.Fatalf("header for %s missing status text: %q", status, header)
 			}
 		})
