@@ -220,12 +220,12 @@ func toolStatusLine(msg *Message, sty *styles.Styles) string {
 	case ToolRunning:
 		elapsed := ""
 		if !msg.StartedAt.IsZero() {
-			elapsed = " · " + sty.Chat.Running.Render(formatDuration(time.Since(msg.StartedAt)) + " elapsed")
+			elapsed = " · " + sty.Chat.Running.Render(formatDuration(time.Since(msg.StartedAt))+" elapsed")
 		}
 		return "    " + sty.Tool.StateRunning.Render("Working… result will appear inline") + elapsed
 	case ToolSuccess:
 		if msg.Duration > 0 {
-			return "    " + sty.Tool.StateSuccess.Render("Completed inline in " + formatDuration(msg.Duration))
+			return "    " + sty.Tool.StateSuccess.Render("Completed inline in "+formatDuration(msg.Duration))
 		}
 	case ToolError:
 		if strings.TrimSpace(msg.Content) == "" {
@@ -874,8 +874,13 @@ func renderError(msg *Message, sty *styles.Styles, width int) string {
 }
 
 func renderRoleBlock(tag, body, indent string, extras ...string) string {
+	if tag == "" && strings.TrimSpace(body) == "" && len(extras) == 0 {
+		return ""
+	}
 	var rendered []string
-	rendered = append(rendered, indent+tag)
+	if tag != "" {
+		rendered = append(rendered, indent+tag)
+	}
 	if strings.TrimSpace(body) != "" {
 		for _, line := range strings.Split(body, "\n") {
 			rendered = append(rendered, indent+"  "+line)
@@ -896,7 +901,13 @@ func renderPlainBlock(style lipgloss.Style, content string, width int) string {
 	if width <= 0 {
 		width = 20
 	}
-	return style.Width(width - 4).Render(content)
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	if width > 4 {
+		width -= 4
+	}
+	return style.Width(width).Render(content)
 }
 
 func classifySystemMessage(content string) string {
