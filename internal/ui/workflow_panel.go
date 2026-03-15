@@ -300,7 +300,11 @@ func workflowPanelSummary(m *Model) string {
 		parts = append(parts, missionSummary)
 	}
 	if m.specState.IsActive() {
-		parts = append(parts, "spec "+strings.ToLower(m.specState.Headline()))
+		if gate := m.specState.WaitingGateName(); gate != "" {
+			parts = append(parts, "spec approval")
+		} else {
+			parts = append(parts, "spec "+strings.ToLower(m.specState.Headline()))
+		}
 	}
 	if focus := m.planState.Focus(); focus != nil {
 		switch focus.Status {
@@ -511,7 +515,7 @@ func (m *Model) renderInvariantPanelLines(limit, width int) []string {
 		}
 	}
 	if len(lines) < limit {
-		lines = append(lines, m.workflowProgressLine(fmt.Sprintf("Hard %d/%d pass · %d fail", hardPass, max(1, hardTotal), hardFail), width))
+		lines = append(lines, m.workflowProgressLine(m.invariantState.Summary(), width))
 	}
 	for i := range m.invariantState.Items {
 		if len(lines) >= limit {
@@ -593,8 +597,7 @@ func (m *Model) renderVerificationPanelLines(limit, width int) []string {
 		}
 	}
 	if len(lines) < limit {
-		counts := fmt.Sprintf("Pass %d · Fail %d · Running %d · Stale %d", pass, fail, inProgress, stale)
-		lines = append(lines, m.workflowProgressLine(counts, width))
+		lines = append(lines, m.workflowProgressLine(m.verificationState.Summary(), width))
 	}
 	for i := range m.verificationState.Entries {
 		if len(lines) >= limit {

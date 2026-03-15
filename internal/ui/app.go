@@ -1166,11 +1166,11 @@ func (m *Model) advanceSpecPhase() {
 			}
 		}
 	case spec.PhaseImplementing:
-		// When all tasks are completed, move to reviewing.
+		// When all tasks are completed, hand off to reviewing but keep the
+		// final diff review gate pending until the user explicitly approves it.
 		if m.planState.HasTasks() {
 			completed, total := m.planState.Progress()
 			if total > 0 && completed == total {
-				m.specState.AdvanceGate("Final Diff Review")
 				m.specState.SetPhase(spec.PhaseReviewing)
 			}
 		}

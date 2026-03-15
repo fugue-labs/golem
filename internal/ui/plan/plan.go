@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/fugue-labs/gollem/ext/deep"
@@ -69,20 +70,39 @@ func (s *State) Counts() (completed, inProgress, blocked, pending int) {
 	return
 }
 
+// Summary returns an active-work-first summary for the workflow rail.
+func (s *State) Summary() string {
+	completed, total := s.Progress()
+	_, inProgress, blocked, pending := s.Counts()
+	focus := s.Focus()
+	switch {
+	case focus != nil && normalizeTaskStatus(focus.Status) == "blocked":
+		return fmt.Sprintf("%d blocked · %d active · %d ready", blocked, inProgress, pending)
+	case focus != nil && normalizeTaskStatus(focus.Status) == "in_progress":
+		return fmt.Sprintf("%d active · %d ready · %d/%d done", inProgress, pending, completed, total)
+	case total > 0 && completed == total:
+		return fmt.Sprintf("%d/%d done", completed, total)
+	case total > 0:
+		return fmt.Sprintf("%d ready · %d/%d done", pending, completed, total)
+	default:
+		return ""
+	}
+}
+
 // Focus returns the highest-priority task to surface in the rail.
 func (s *State) Focus() *Task {
 	for i := range s.Tasks {
-		if s.Tasks[i].Status == "blocked" {
+		if normalizeTaskStatus(s.Tasks[i].Status) == "blocked" {
 			return &s.Tasks[i]
 		}
 	}
 	for i := range s.Tasks {
-		if s.Tasks[i].Status == "in_progress" {
+		if normalizeTaskStatus(s.Tasks[i].Status) == "in_progress" {
 			return &s.Tasks[i]
 		}
 	}
 	for i := range s.Tasks {
-		if s.Tasks[i].Status != "completed" {
+		if normalizeTaskStatus(s.Tasks[i].Status) != "completed" {
 			return &s.Tasks[i]
 		}
 	}
@@ -95,7 +115,7 @@ func (s *State) Focus() *Task {
 // Next returns the next actionable non-complete task after the focus item.
 func (s *State) Next() *Task {
 	for i := range s.Tasks {
-		status := s.Tasks[i].Status
+		status := normalizeTaskStatus(s.Tasks[i].Status)
 		if status == "blocked" || status == "in_progress" || status == "completed" {
 			continue
 		}

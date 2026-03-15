@@ -99,6 +99,16 @@ func (s *State) pendingGate(name string) string {
 	return ""
 }
 
+func (s *State) setGateStatus(name, status string) bool {
+	for i := range s.Gates {
+		if strings.EqualFold(s.Gates[i].Name, name) {
+			s.Gates[i].Status = status
+			return true
+		}
+	}
+	return false
+}
+
 // WaitingGateName returns the approval gate that is actively blocking the phase.
 func (s *State) WaitingGateName() string {
 	switch s.Phase {
@@ -202,18 +212,15 @@ func (s *State) FileLabel() string {
 
 // AdvanceGate marks the named gate as passed and advances the phase.
 func (s *State) AdvanceGate(name string) bool {
-	for i := range s.Gates {
-		if strings.EqualFold(s.Gates[i].Name, name) {
-			s.Gates[i].Status = "passed"
-			return true
-		}
-	}
-	return false
+	return s.setGateStatus(name, "passed")
 }
 
 // SetPhase updates the workflow phase.
 func (s *State) SetPhase(phase Phase) {
 	s.Phase = phase
+	if phase == PhaseReviewing {
+		s.setGateStatus("Final Diff Review", "pending")
+	}
 }
 
 // SetTaskProgress updates the task count and completed count.

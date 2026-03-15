@@ -1,6 +1,7 @@
 package invariants
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/fugue-labs/gollem/ext/codetool"
@@ -40,9 +41,9 @@ func (s *State) HasItems() bool { return s.Extracted || len(s.Items) > 0 }
 // Counts returns hard/soft invariant summary counts.
 func (s *State) Counts() (hardTotal, hardPass, hardFail, hardUnresolved, softTotal, softPass, softFail int) {
 	for _, item := range s.Items {
-		if item.Kind == "soft" {
+		if normalizeKind(item.Kind) == "soft" {
 			softTotal++
-			switch item.Status {
+			switch normalizeStatus(item.Status) {
 			case "pass":
 				softPass++
 			case "fail":
@@ -51,7 +52,7 @@ func (s *State) Counts() (hardTotal, hardPass, hardFail, hardUnresolved, softTot
 			continue
 		}
 		hardTotal++
-		switch item.Status {
+		switch normalizeStatus(item.Status) {
 		case "pass":
 			hardPass++
 		case "fail":
@@ -62,20 +63,36 @@ func (s *State) Counts() (hardTotal, hardPass, hardFail, hardUnresolved, softTot
 	return
 }
 
+// Summary returns a bottleneck-first summary for the workflow rail.
+func (s *State) Summary() string {
+	hardTotal, hardPass, hardFail, hardUnresolved, _, _, _ := s.Counts()
+	if hardTotal == 0 {
+		return "Hard 0/0 pass"
+	}
+	switch {
+	case hardFail > 0:
+		return fmt.Sprintf("Hard %d fail · %d open · %d/%d pass", hardFail, hardUnresolved, hardPass, hardTotal)
+	case hardUnresolved > 0:
+		return fmt.Sprintf("Hard %d open · %d/%d pass", hardUnresolved, hardPass, hardTotal)
+	default:
+		return fmt.Sprintf("Hard %d/%d pass", hardPass, hardTotal)
+	}
+}
+
 // Focus returns the first blocking or in-progress invariant that needs attention.
 func (s *State) Focus() *Item {
 	for i := range s.Items {
-		if s.Items[i].Status == "fail" {
+		if normalizeStatus(s.Items[i].Status) == "fail" {
 			return &s.Items[i]
 		}
 	}
 	for i := range s.Items {
-		if s.Items[i].Status == "in_progress" {
+		if normalizeStatus(s.Items[i].Status) == "in_progress" {
 			return &s.Items[i]
 		}
 	}
 	for i := range s.Items {
-		if s.Items[i].Status != "pass" {
+		if normalizeStatus(s.Items[i].Status) != "pass" {
 			return &s.Items[i]
 		}
 	}
@@ -88,12 +105,12 @@ func (s *State) Focus() *Item {
 // Next returns the next unresolved invariant after the focused one.
 func (s *State) Next() *Item {
 	for i := range s.Items {
-		if s.Items[i].Status == "unknown" {
+		if normalizeStatus(s.Items[i].Status) == "unknown" {
 			return &s.Items[i]
 		}
 	}
 	for i := range s.Items {
-		if s.Items[i].Status == "in_progress" {
+		if normalizeStatus(s.Items[i].Status) == "in_progress" {
 			return &s.Items[i]
 		}
 	}
