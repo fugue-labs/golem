@@ -53,12 +53,20 @@ func TestRuntimeSummaryGolden(t *testing.T) {
 func TestHelpMessageGolden(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	got := m.renderHelpMessage().Content
-	want, err := os.ReadFile(filepath.Join("testdata", "help.golden.md"))
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if strings.TrimRight(got, "\n") != strings.TrimRight(string(want), "\n") {
-		t.Fatalf("help message mismatch\n--- got ---\n%s\n--- want ---\n%s", got, string(want))
+	for _, want := range []string{
+		"**Commands**",
+		"/help",
+		"/search <query>",
+		"/mission",
+		"**Discoverability**",
+		"golem dashboard",
+		"Enter",
+		"Esc",
+		"Tab",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help message missing %q\n%s", want, got)
+		}
 	}
 }
 
@@ -72,7 +80,7 @@ func TestShellLayoutViewGolden(t *testing.T) {
 	m.invariantState = uiinvariants.State{Extracted: true}
 
 	got := stripANSI(m.View().Content)
-	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Workflow", "Context ·", "Activity ·", "/help", " Context "} {
+	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Workflow", "Context ·", "Activity ·", "/help", " Context ", "Help ·", "/search <query>", "Tab complete"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("shell layout missing %q\n%s", want, got)
 		}

@@ -471,11 +471,12 @@ func (m *Model) renderHeader() []string {
 			m.sty.Panel.EmptyTitle.Render("No active mission"),
 			m.sty.Panel.EmptyBody.Render("Create one with /mission new or run golem mission new."),
 			m.sty.Panel.EmptyBody.Render("The dashboard will attach as soon as durable mission state exists."),
+			m.sty.Panel.EmptyBody.Render(ansi.Truncate("Help · /mission new in shell · Tab switch panes · 1-4 jump · j/k scroll · r refresh · q quit", max(1, m.width), "…")),
 		}
 	}
 
 	ms := m.missionObj
-	tc := m.summary.TaskCounts
+	c := m.summary.TaskCounts
 	activeRuns := m.summary.ActiveRuns
 	if activeRuns == 0 {
 		for _, r := range m.runs {
@@ -493,20 +494,20 @@ func (m *Model) renderHeader() []string {
 	}
 	missionLine := m.sty.Bold.Render(ansi.Truncate(missionTitle, max(1, m.width), "…"))
 
-	done := tc.Done + tc.Integrated + tc.Accepted
-	blocked := tc.Blocked + tc.Failed
+	done := c.Done + c.Integrated + c.Accepted
+	blocked := c.Blocked + c.Failed
 	metricSegments := []string{
-		m.renderMetric("Tasks", fmt.Sprintf("%d/%d complete", done, tc.Total)),
+		m.renderMetric("Tasks", fmt.Sprintf("%d/%d complete", done, c.Total)),
 		m.renderMetric("Workers", fmt.Sprintf("%d active", activeRuns)),
 	}
-	if tc.Running > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Running", fmt.Sprintf("%d now", tc.Running)))
+	if c.Running > 0 {
+		metricSegments = append(metricSegments, m.renderMetric("Running", fmt.Sprintf("%d now", c.Running)))
 	}
-	if tc.Ready > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Ready", fmt.Sprintf("%d queued", tc.Ready)))
+	if c.Ready > 0 {
+		metricSegments = append(metricSegments, m.renderMetric("Ready", fmt.Sprintf("%d queued", c.Ready)))
 	}
-	if tc.AwaitingReview > 0 {
-		metricSegments = append(metricSegments, m.renderMetric("Review", fmt.Sprintf("%d waiting", tc.AwaitingReview)))
+	if c.AwaitingReview > 0 {
+		metricSegments = append(metricSegments, m.renderMetric("Review", fmt.Sprintf("%d waiting", c.AwaitingReview)))
 	}
 	if blocked > 0 {
 		metricSegments = append(metricSegments, m.renderMetric("Blocked", fmt.Sprintf("%d stalled", blocked)))
@@ -548,6 +549,7 @@ func (m *Model) renderHeader() []string {
 	goalLabel := m.sty.Panel.MetricKey.Render("Goal")
 	goalText := ansi.Truncate(ms.Goal, max(1, m.width-lipgloss.Width(goalLabel)-1), "…")
 	lines = append(lines, goalLabel+" "+m.sty.HalfMuted.Render(goalText))
+	lines = append(lines, m.sty.Panel.EmptyBody.Render(ansi.Truncate("Help · /mission status in shell · Tab switch panes · 1-4 jump · j/k scroll · r refresh · q quit", max(1, m.width), "…")))
 	return lines
 }
 
@@ -873,14 +875,18 @@ func (m *Model) renderSeparator() string {
 
 func (m *Model) renderFooter() string {
 	keys := []string{
-		m.renderMetric("Command center", "operator view"),
 		"q:quit",
 		"r:refresh",
 		"tab:switch pane",
-		"shift+tab:back",
 		"j/k:scroll",
-		"1-4:jump to pane",
+		"1-4:jump",
 	}
+	if m.missionObj != nil {
+		keys = append(keys, "/mission status:shell")
+	} else {
+		keys = append(keys, "/mission new:shell")
+	}
+	keys = append(keys, "operator view")
 	return m.sty.Muted.Render(ansi.Truncate(strings.Join(keys, "  •  "), max(1, m.width), "…"))
 }
 
@@ -897,12 +903,12 @@ func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
 	indicator := "○"
 	headStyle := m.sty.Panel.HeaderInactive
 	metaStyle := m.sty.Panel.HeaderMeta
-	meta := "tab to focus"
+	meta := "Tab focus • 1-4 jump"
 	if focused {
 		indicator = "▸"
 		headStyle = m.sty.Panel.HeaderActive
 		metaStyle = m.sty.Panel.HeaderMeta.Bold(true)
-		meta = "ACTIVE • j/k scroll"
+		meta = "ACTIVE • j/k scroll • Tab next"
 	}
 	label := fmt.Sprintf("%s %s %s", indicator, paneShortcut(title), title)
 	line := headStyle.Render(label) + " " + metaStyle.Render(meta)
