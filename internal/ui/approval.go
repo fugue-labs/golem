@@ -152,7 +152,7 @@ func (m *Model) renderApproval() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(m.sty.Subtle.Render("  [y]es  [n]o  [a]lways allow  [d]always deny"))
+	b.WriteString(m.sty.Subtle.Render("  [y]es  [n]o  [a]lways allow  [d] always deny"))
 	return b.String()
 }
 

@@ -262,6 +262,7 @@ func New(cfg *config.Config) *Model {
 		approvalCh:     make(chan toolApprovalRequest, 1),
 		approvalDone:   make(chan struct{}),
 		approvalAlways: make(map[string]bool),
+		approvalNever:  make(map[string]bool),
 		costTracker:    core.NewCostTracker(modelPricing()),
 		teamEventBus:   core.NewEventBus(),
 		checkpoints:    checkpoint.NewStore(cfg.WorkingDir),
@@ -1332,7 +1333,10 @@ func (m *Model) renderCompactStatusBar() string {
 		statusText = "Working"
 	}
 	meta := statusText + " · " + m.cfg.Model
-	if m.busy {
+	switch {
+	case m.approvalMode:
+		meta = "Approval · [y]/[n]/[a]/[d]"
+	case m.busy:
 		meta = statusText + " · Esc cancels"
 	}
 	content := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-9)))
@@ -1387,7 +1391,7 @@ func (m *Model) renderTranscriptMeta() string {
 func (m *Model) renderInputMeta() string {
 	switch {
 	case m.approvalMode:
-		return "y allow · n deny · a always allow"
+		return "[y] allow · [n] deny · [a] always allow · [d] always deny"
 	case m.askMode:
 		return "Enter answer · Esc cancel"
 	case m.busy:
@@ -1561,7 +1565,7 @@ func (m *Model) currentActivitySummary() string {
 		if tool == "" {
 			tool = "tool"
 		}
-		return "Approval required · " + tool + " · y allow · n deny · a always"
+		return "Approval required · " + tool + " · [y] allow · [n] deny · [a] always allow · [d] always deny"
 	case m.askMode:
 		total := len(m.askQuestions)
 		if total == 0 {

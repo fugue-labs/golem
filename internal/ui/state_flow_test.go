@@ -120,6 +120,59 @@ func TestViewShowsWorkflowPanelForInvariantOnlyState(t *testing.T) {
 	}
 }
 
+func TestNewInitializesApprovalDecisionMaps(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	if m.approvalAlways == nil {
+		t.Fatal("expected approvalAlways to be initialized")
+	}
+	if m.approvalNever == nil {
+		t.Fatal("expected approvalNever to be initialized")
+	}
+}
+
+func TestToolApprovalRequestAutoDeniesRememberedTool(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.runID = 7
+	m.approvalNever["bash"] = true
+	resp := make(chan bool, 1)
+
+	updated, cmd := m.Update(toolApprovalRequest{runID: 7, toolName: "bash", response: resp})
+	model := updated.(*Model)
+
+	select {
+	case approved := <-resp:
+		if approved {
+			t.Fatal("expected remembered deny to reject tool")
+		}
+	default:
+		t.Fatal("expected remembered deny to resolve approval immediately")
+	}
+	if model.approvalMode {
+		t.Fatal("expected approval UI to stay closed for remembered deny")
+	}
+	if cmd == nil {
+		t.Fatal("expected approval loop to keep waiting after auto-deny")
+	}
+}
+
+func TestRenderApprovalHintsAdvertiseAlwaysDeny(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.width = 100
+	m.beginApprovalMode(toolApprovalRequest{toolName: "bash", argsJSON: `{"command":"go test ./..."}`})
+
+	rendered := stripANSI(m.renderApproval())
+	if !strings.Contains(rendered, "[d] always deny") {
+		t.Fatalf("expected approval prompt to advertise always deny, got %q", rendered)
+	}
+	if got := m.renderInputMeta(); !strings.Contains(got, "[d] always deny") {
+		t.Fatalf("expected input meta to advertise always deny, got %q", got)
+	}
+	if got := m.currentActivitySummary(); !strings.Contains(got, "[d] always deny") {
+		t.Fatalf("expected activity summary to advertise always deny, got %q", got)
+	}
+}
+
 func TestRenderRuntimeSummaryMessageListsToolSurfaces(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", APIKey: "test-key", Timeout: time.Minute, TeamMode: "auto", RouterModel: "router-mini"})
 	m.runtime.CodeModeStatus = "on"
