@@ -502,7 +502,7 @@ func TestMissionHelpCommand(t *testing.T) {
 	if msg.Kind != chat.KindAssistant {
 		t.Fatalf("expected assistant, got %v", msg.Kind)
 	}
-	for _, want := range []string{"/mission new", "/mission status", "/mission tasks", "/mission plan", "/mission approve"} {
+	for _, want := range []string{"/mission new", "/mission status", "/mission tasks", "/mission plan", "/mission approve", "/mission list"} {
 		if !strings.Contains(msg.Content, want) {
 			t.Fatalf("help missing %q\n%s", want, msg.Content)
 		}
