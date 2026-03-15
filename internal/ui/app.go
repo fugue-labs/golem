@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/eval"
@@ -1343,22 +1344,7 @@ func (m *Model) renderCompactInput() string {
 
 func (m *Model) renderCompactStatusBar() string {
 	shellWidth := m.shellWidth()
-	statusText := "Ready"
-	switch {
-	case m.approvalMode:
-		statusText = "Approval"
-	case m.askMode:
-		statusText = "Need input"
-	case m.busy:
-		statusText = "Working"
-	}
-	meta := statusText + " · " + m.cfg.Model
-	switch {
-	case m.approvalMode:
-		meta = "Approval · [y]/[n]/[a]/[d]"
-	case m.busy:
-		meta = statusText + " · Esc cancels"
-	}
+	meta := m.compactStatusMeta(shellWidth)
 	content := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-9)))
 	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
@@ -1387,8 +1373,10 @@ func (m *Model) belowMinimumShellSize() bool {
 
 func (m *Model) renderMinimumSizeView() tea.View {
 	shellWidth := max(1, m.shellWidth())
+	lineWidth := max(1, shellWidth)
 	recovery := "Resize the terminal to restore transcript, workflow, and input."
 	sizeLine := fmt.Sprintf("Current %dx%d · need at least %dx%d", max(0, m.width), max(0, m.height), minShellWidth, minShellHeight)
+	helpLine := "/help when resized · Esc cancel · Ctrl+L clear"
 	switch {
 	case m.width > 0 && m.width < minShellWidth && m.height > 0 && m.height < minShellHeight:
 		recovery = "Resize wider and taller to restore transcript, workflow, and input."
@@ -1398,10 +1386,10 @@ func (m *Model) renderMinimumSizeView() tea.View {
 		recovery = "Resize taller to restore transcript, workflow, and input."
 	}
 	lines := []string{
-		m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.Bold.Render("Terminal too small"),
-		m.sty.Muted.Render(truncateText(recovery, max(16, shellWidth))),
-		m.sty.Muted.Render(truncateText(sizeLine, max(16, shellWidth))),
-		m.sty.Muted.Render(truncateText("/help when resized · Esc cancel · Ctrl+L clear", max(16, shellWidth))),
+		ansi.Truncate(m.sty.StatusBar.Accent.Render(" GOLEM ")+" "+m.sty.Bold.Render("Terminal too small"), lineWidth, "…"),
+		m.sty.Muted.Render(ansi.Truncate(recovery, lineWidth, "…")),
+		m.sty.Muted.Render(ansi.Truncate(sizeLine, lineWidth, "…")),
+		m.sty.Muted.Render(ansi.Truncate(helpLine, lineWidth, "…")),
 	}
 	body := fitShellLines(lines, m.height, max(0, (m.height-len(lines))/2))
 	v := tea.NewView(body)
@@ -1463,6 +1451,9 @@ func (m *Model) renderInputMeta() string {
 func (m *Model) renderStatusMeta() string {
 	if m.busy {
 		return "Runtime state"
+	}
+	if m.shouldShowWorkflowStatusSummary() {
+		return "Usage, workflow, summary, and key hints"
 	}
 	return "Usage, workflow, and key hints"
 }
@@ -1655,6 +1646,26 @@ func (m *Model) currentActivitySummary() string {
 	default:
 		return "Ready · /help for commands · /search <query>"
 	}
+}
+
+func (m *Model) compactStatusMeta(width int) string {
+	statusText := "Ready"
+	switch {
+	case m.approvalMode:
+		return "Approval · [y]/[n]/[a]/[d]"
+	case m.askMode:
+		return "Need input · Enter answer · Esc cancel"
+	case m.busy:
+		return "Working · Esc cancels"
+	}
+	if summary := m.workflowCompactSummary(max(1, width-len(statusText)-3)); summary != "" {
+		return statusText + " · " + summary
+	}
+	return statusText + " · " + m.cfg.Model
+}
+
+func (m *Model) shouldShowWorkflowStatusSummary() bool {
+	return m.hasWorkflowPanel() && m.width >= workflowPanelStackMinWidth && m.width < workflowPanelWideMinWidth && m.height <= minShellHeight+1
 }
 
 func (m *Model) renderChat(height, width int) string {

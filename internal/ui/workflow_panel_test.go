@@ -281,6 +281,23 @@ func TestWorkflowPanelSummaryTruncatesAtProductionWidth(t *testing.T) {
 	}
 }
 
+func TestWorkflowCompactSummaryIncludesMidWidthFallbackState(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "verify tests", Status: "in_progress"}}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "no TODOs", Kind: "hard", Status: "unknown"}}}
+
+	summary := m.workflowCompactSummary(28)
+	for _, want := range []string{"workflow", "plan active"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("compact summary missing %q: %q", want, summary)
+		}
+	}
+	if got := len([]rune(summary)); got > 28 {
+		t.Fatalf("compact summary width=%d exceeds max 28: %q", got, summary)
+	}
+}
+
 func TestActiveTeamMembersFiltersStoppedMembers(t *testing.T) {
 	members := []team.TeammateInfo{{Name: "leader", State: team.TeammateRunning}, {Name: "worker-1", State: team.TeammateRunning}, {Name: "worker-2", State: team.TeammateStopped}, {Name: "worker-3", State: team.TeammateIdle}}
 	active := activeTeamMembers(members)

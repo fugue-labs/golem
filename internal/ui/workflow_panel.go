@@ -384,6 +384,17 @@ func workflowPanelSummary(m *Model) string {
 	return strings.Join(parts, " · ")
 }
 
+func (m *Model) workflowCompactSummary(maxWidth int) string {
+	if maxWidth <= 0 || !m.hasWorkflowPanel() {
+		return ""
+	}
+	summary := workflowPanelSummary(m)
+	if summary == "" {
+		summary = "workflow state active"
+	}
+	return ansi.Truncate("workflow "+summary, maxWidth, "…")
+}
+
 func (m *Model) renderTeamPanelLines(limit, width int) []string {
 	if limit <= 0 || !m.hasTeamMembers() {
 		return nil
