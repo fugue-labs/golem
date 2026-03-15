@@ -125,22 +125,23 @@ type Model struct {
 	activeSkills []skills.Skill
 
 	// State.
-	messages             []*chat.Message
-	history              []core.ModelMessage // gollem conversation history across turns
-	scroll               int
-	transcriptViewport   viewport.Model
-	transcriptSig        uint64
-	transcriptWidth      int
-	transcriptCompact    bool
-	width                int
-	height               int
-	busy                 bool
-	terminalFocused      bool
-	usage                core.RunUsage
-	startTime  time.Time
-	runID      int
-	hookRID    atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
-	lastPrompt string
+	messages           []*chat.Message
+	history            []core.ModelMessage // gollem conversation history across turns
+	scroll             int
+	transcriptViewport viewport.Model
+	transcriptSig      uint64
+	transcriptWidth    int
+	transcriptHeight   int
+	transcriptCompact  bool
+	width              int
+	height             int
+	busy               bool
+	terminalFocused    bool
+	usage              core.RunUsage
+	startTime          time.Time
+	runID              int
+	hookRID            atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
+	lastPrompt         string
 
 	// Plan/invariant/verification/spec state — mirrored from tool messages.
 	planState          plan.State
@@ -539,24 +540,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		stickBottom := m.transcriptAtBottom()
 		m.recordEvent(agent.EventTextDelta, agent.TextDeltaData{Text: msg.text})
 		m.appendOrUpdateAssistant(msg.text)
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 		return m, nil
 
 	case thinkingDeltaMsg:
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		stickBottom := m.transcriptAtBottom()
 		m.recordEvent(agent.EventThinkDelta, agent.ThinkDeltaData{Text: msg.text})
 		m.appendOrUpdateThinking(msg.text)
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 		return m, nil
 
 	case toolCallMsg:
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		stickBottom := m.transcriptAtBottom()
 		m.recordEvent(agent.EventToolCall, agent.ToolCallData{
 			CallID:  msg.callID,
 			Name:    msg.name,
@@ -576,13 +580,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentRunMessages = append(m.currentRunMessages, toolMsg)
 		m.activeToolName = msg.name
 		m.activeToolArgs = extractMainParam(msg.args)
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 		return m, nil
 
 	case toolResultMsg:
 		if msg.runID != m.runID {
 			return m, nil
 		}
+		stickBottom := m.transcriptAtBottom()
 		m.recordEvent(agent.EventToolResult, agent.ToolResultData{
 			CallID: msg.callID,
 			Name:   msg.name,
@@ -605,7 +610,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Auto-advance spec phase based on tool state changes.
 		m.advanceSpecPhase()
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 		return m, nil
 
 	case runtimePreparedMsg:
@@ -1227,6 +1232,8 @@ func (m *Model) applyStyles(sty *styles.Styles) {
 	if sty != nil {
 		m.spinner.Style = sty.SpinnerStyle
 	}
+	chat.InvalidateRenderCaches(m.messages)
+	m.invalidateTranscriptViewport()
 }
 
 func newTranscriptViewport() viewport.Model {
@@ -1259,6 +1266,10 @@ func (m *Model) setTranscriptViewportSize(width, bodyHeight int) {
 	m.transcriptViewport.SetHeight(max(1, bodyHeight))
 }
 
+func (m *Model) transcriptAtBottom() bool {
+	return m.scroll == 0 || m.transcriptViewport.AtBottom()
+}
+
 func transcriptMaxScroll(vp viewport.Model) int {
 	return max(0, vp.TotalLineCount()-vp.Height())
 }
@@ -1283,6 +1294,7 @@ func (m *Model) pinTranscriptToBottom() {
 func (m *Model) invalidateTranscriptViewport() {
 	m.transcriptSig = 0
 	m.transcriptWidth = 0
+	m.transcriptHeight = 0
 	m.transcriptCompact = false
 	m.transcriptViewport.SetContent("")
 	m.transcriptViewport.SetYOffset(0)
@@ -1326,9 +1338,11 @@ func compactTranscriptText(rendered string) string {
 }
 
 func (m *Model) rebuildTranscriptViewport(width int, compactMode bool, stickBottom bool) {
+	m.ensureStyles()
 	width = max(1, width)
+	height := max(1, m.transcriptViewport.Height())
 	sig := transcriptSignature(m.messages, width, compactMode)
-	if sig == m.transcriptSig && width == m.transcriptWidth && compactMode == m.transcriptCompact {
+	if sig == m.transcriptSig && width == m.transcriptWidth && compactMode == m.transcriptCompact && (len(m.messages) > 0 || height == m.transcriptHeight) {
 		if stickBottom {
 			m.pinTranscriptToBottom()
 		} else {
@@ -1339,7 +1353,7 @@ func (m *Model) rebuildTranscriptViewport(width int, compactMode bool, stickBott
 
 	var content string
 	if len(m.messages) == 0 {
-		content = m.renderWelcome(m.transcriptViewport.Height(), width)
+		content = m.renderWelcome(height, width)
 	} else {
 		blocks := make([]string, 0, len(m.messages))
 		for _, msg := range m.messages {
@@ -1359,6 +1373,7 @@ func (m *Model) rebuildTranscriptViewport(width int, compactMode bool, stickBott
 	m.transcriptViewport.SetContent(content)
 	m.transcriptSig = sig
 	m.transcriptWidth = width
+	m.transcriptHeight = height
 	m.transcriptCompact = compactMode
 	if stickBottom {
 		m.pinTranscriptToBottom()
@@ -1366,6 +1381,10 @@ func (m *Model) rebuildTranscriptViewport(width int, compactMode bool, stickBott
 	}
 	m.scroll = currentScroll
 	m.syncTranscriptViewportOffset()
+}
+
+func (m *Model) noteTranscriptMutation(stickBottom bool) {
+	m.rebuildTranscriptViewport(m.transcriptViewport.Width(), m.transcriptCompact, stickBottom)
 }
 
 func (m *Model) prepareTranscriptViewport(totalHeight, width int) (bodyHeight int, showChrome bool) {
@@ -1987,10 +2006,14 @@ func splitRenderedMessageLines(rendered string) []string {
 
 func (m *Model) renderWelcome(height, width int) string {
 	bodyWidth := max(20, width-4)
+	modelName := "unknown"
+	if m.cfg != nil && strings.TrimSpace(m.cfg.Model) != "" {
+		modelName = m.cfg.Model
+	}
 	lines := []string{
 		"",
 		m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.Bold.Render("Purpose-built for steady repo work"),
-		m.sty.Muted.Render("  " + truncateText("Model "+m.cfg.Model+" · "+m.currentActivitySummary(), bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("Model "+modelName+" · "+m.currentActivitySummary(), bodyWidth)),
 		"",
 		m.sty.Bold.Render("  Start here"),
 		m.sty.Muted.Render("  " + truncateText("/help — browse commands and keybindings", bodyWidth)),

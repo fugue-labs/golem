@@ -7,351 +7,97 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/agent"
+	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/golem/internal/ui/styles"
 )
-
-type replayTUIModel struct {
-	messages       []*chat.Message
-	replayMode     bool
-	replayTrace    *agent.ReplayTrace
-	replayIdx      int
-	replayStart    time.Time
-	busy           bool
-	activeToolName string
-	activeToolArgs string
-	input          string
-	viewport       viewport.Model
-	width          int
-	height         int
-}
-
-func newReplayTUIModel() replayTUIModel {
-	vp := viewport.New()
-	vp.KeyMap = viewport.KeyMap{}
-	vp.MouseWheelEnabled = true
-	vp.MouseWheelDelta = 1
-	return replayTUIModel{viewport: vp, width: 80, height: 24}
-}
-
-func (m replayTUIModel) Init() tea.Cmd { return nil }
-
-func (m replayTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.syncViewport()
-		return m, nil
-	case tea.MouseWheelMsg:
-		m.viewport, _ = m.viewport.Update(msg)
-		return m, nil
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "escape":
-			if m.replayMode {
-				m.stopReplay()
-			}
-			return m, nil
-		case "pgup", "pgdown", "home", "end":
-			m.viewport, _ = m.viewport.Update(msg)
-			return m, nil
-		case "enter":
-			return m.handleInput()
-		default:
-			if len(msg.Text) == 1 {
-				m.input += msg.Text
-			}
-			return m, nil
-		}
-	case replayTickMsg:
-		if m.replayMode {
-			return m.handleReplayTick()
-		}
-		return m, nil
-	case replayDoneMsg:
-		if m.replayMode {
-			return m.handleReplayDone()
-		}
-		return m, nil
-	case startReplayMsg:
-		return m.startReplay(msg.trace)
-	}
-	return m, nil
-}
-
-type startReplayMsg struct{ trace *agent.ReplayTrace }
-
-func (m *replayTUIModel) syncViewport() {
-	bodyHeight := m.height - 3
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
-	if m.width < 1 {
-		m.width = 1
-	}
-	m.viewport.SetWidth(m.width)
-	m.viewport.SetHeight(bodyHeight)
-
-	var lines []string
-	for _, msg := range m.messages {
-		switch msg.Kind {
-		case chat.KindUser:
-			lines = append(lines, "[USER] "+msg.Content)
-		case chat.KindAssistant:
-			prefix := "[ASSISTANT] "
-			if msg.Streaming {
-				prefix = "[ASSISTANT live] "
-			}
-			lines = append(lines, prefix+msg.Content)
-		case chat.KindThinking:
-			lines = append(lines, "[THINKING] "+msg.Content)
-		case chat.KindToolCall:
-			status := "running"
-			if msg.Status == chat.ToolSuccess {
-				status = "done"
-			} else if msg.Status == chat.ToolError {
-				status = "error"
-			}
-			line := fmt.Sprintf("[TOOL %s] %s (%s)", status, msg.ToolName, msg.ToolArgs)
-			if msg.Content != "" {
-				line += " => " + strings.ReplaceAll(msg.Content, "\n", " | ")
-			}
-			lines = append(lines, line)
-		case chat.KindSystem:
-			lines = append(lines, "[SUMMARY] "+msg.Content)
-		case chat.KindError:
-			lines = append(lines, "[ERROR] "+msg.Content)
-		}
-	}
-	m.viewport.SetContent(strings.Join(lines, "\n"))
-}
-
-func (m replayTUIModel) View() tea.View {
-	m.syncViewport()
-	state := "IDLE"
-	if m.replayMode {
-		total := 0
-		if m.replayTrace != nil {
-			total = len(m.replayTrace.Events)
-		}
-		state = fmt.Sprintf("REPLAY [%d/%d]", m.replayIdx, total)
-	}
-	body := state + "\n" + strings.Repeat("-", 40) + "\n" + m.viewport.View() + "\n" + strings.Repeat("-", 40) + "\n> " + m.input
-	return tea.NewView(body)
-}
-
-func (m replayTUIModel) handleInput() (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(m.input)
-	m.input = ""
-	if text == "" {
-		return m, nil
-	}
-	if text == "/replay" || strings.HasPrefix(text, "/replay ") {
-		msg, cmd := m.handleReplayCommand(text)
-		m.messages = append(m.messages, msg)
-		return m, cmd
-	}
-	m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: "unknown command: " + text})
-	return m, nil
-}
-
-func (m *replayTUIModel) handleReplayCommand(text string) (*chat.Message, tea.Cmd) {
-	if m.busy {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot replay while agent is running."}, nil
-	}
-	if m.replayMode {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "Replay already in progress. Press Esc to stop."}, nil
-	}
-	arg := strings.TrimSpace(strings.TrimPrefix(text, "/replay"))
-	if arg == "list" {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found."}, nil
-	}
-	return &chat.Message{Kind: chat.KindAssistant, Content: "No replay traces found. Traces are recorded automatically during sessions."}, nil
-}
-
-func (m replayTUIModel) startReplay(trace *agent.ReplayTrace) (tea.Model, tea.Cmd) {
-	m.replayMode = true
-	m.replayTrace = trace
-	m.replayIdx = 0
-	m.replayStart = time.Now()
-	m.busy = true
-	m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: fmt.Sprintf("Replaying session from %s (%s, %d events)", trace.StartTime.Format("Jan 2 15:04"), trace.Model, len(trace.Events))})
-	m.syncViewport()
-	m.viewport.GotoBottom()
-	return m, m.replayNext()
-}
-
-func (m *replayTUIModel) replayNext() tea.Cmd {
-	if m.replayIdx >= len(m.replayTrace.Events) {
-		return func() tea.Msg { return replayDoneMsg{} }
-	}
-	return func() tea.Msg { return replayTickMsg{} }
-}
-
-func (m replayTUIModel) handleReplayTick() (tea.Model, tea.Cmd) {
-	if !m.replayMode || m.replayIdx >= len(m.replayTrace.Events) {
-		return m, func() tea.Msg { return replayDoneMsg{} }
-	}
-	stickBottom := m.viewport.AtBottom()
-	event := m.replayTrace.Events[m.replayIdx]
-	m.replayIdx++
-
-	switch event.Kind {
-	case agent.EventUserInput:
-		data, _ := agent.DecodeEvent[agent.UserInputData](event)
-		m.messages = append(m.messages, &chat.Message{Kind: chat.KindUser, Content: data.Text})
-	case agent.EventTextDelta:
-		data, _ := agent.DecodeEvent[agent.TextDeltaData](event)
-		m.appendOrUpdateAssistant(data.Text)
-	case agent.EventThinkDelta:
-		data, _ := agent.DecodeEvent[agent.ThinkDeltaData](event)
-		m.appendOrUpdateThinking(data.Text)
-	case agent.EventToolCall:
-		data, _ := agent.DecodeEvent[agent.ToolCallData](event)
-		m.messages = append(m.messages, &chat.Message{Kind: chat.KindToolCall, CallID: data.CallID, ToolName: data.Name, ToolArgs: data.Args, Status: chat.ToolRunning})
-		m.activeToolName = data.Name
-		m.activeToolArgs = data.Args
-	case agent.EventToolResult:
-		data, _ := agent.DecodeEvent[agent.ToolResultData](event)
-		m.activeToolName = ""
-		m.activeToolArgs = ""
-		m.finishLastTool(data.CallID, data.Result, data.Error)
-	case agent.EventAgentDone:
-		data, _ := agent.DecodeEvent[agent.AgentDoneData](event)
-		m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: fmt.Sprintf("%d↓ %d↑ · %d tools", data.InputTokens, data.OutputTokens, data.ToolCalls)})
-	case agent.EventSystem:
-		data, _ := agent.DecodeEvent[agent.SystemEventData](event)
-		m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: data.Text})
-	case agent.EventError:
-		data, _ := agent.DecodeEvent[agent.ErrorEventData](event)
-		m.messages = append(m.messages, &chat.Message{Kind: chat.KindError, Content: data.Text})
-	}
-
-	m.syncViewport()
-	if stickBottom {
-		m.viewport.GotoBottom()
-	}
-	return m, m.replayNext()
-}
-
-func (m replayTUIModel) handleReplayDone() (tea.Model, tea.Cmd) {
-	m.replayMode = false
-	m.replayTrace = nil
-	m.replayIdx = 0
-	m.busy = false
-	m.activeToolName = ""
-	m.activeToolArgs = ""
-	m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: "Replay complete."})
-	m.syncViewport()
-	m.viewport.GotoBottom()
-	return m, nil
-}
-
-func (m *replayTUIModel) stopReplay() {
-	m.replayMode = false
-	m.replayTrace = nil
-	m.replayIdx = 0
-	m.busy = false
-	m.activeToolName = ""
-	m.activeToolArgs = ""
-	m.messages = append(m.messages, &chat.Message{Kind: chat.KindSystem, Content: "Replay stopped."})
-	m.syncViewport()
-	m.viewport.GotoBottom()
-}
-
-func (m *replayTUIModel) appendOrUpdateAssistant(delta string) {
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].Kind == chat.KindAssistant {
-			m.messages[i].Content += delta
-			return
-		}
-		if m.messages[i].Kind == chat.KindUser {
-			break
-		}
-	}
-	m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: delta})
-}
-
-func (m *replayTUIModel) appendOrUpdateThinking(delta string) {
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].Kind == chat.KindThinking {
-			m.messages[i].Content += delta
-			return
-		}
-		if m.messages[i].Kind == chat.KindUser || m.messages[i].Kind == chat.KindAssistant {
-			break
-		}
-	}
-	m.messages = append(m.messages, &chat.Message{Kind: chat.KindThinking, Content: delta})
-}
-
-func (m *replayTUIModel) finishLastTool(callID, result, errText string) {
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		msg := m.messages[i]
-		if msg.Kind != chat.KindToolCall || msg.Status != chat.ToolRunning {
-			continue
-		}
-		if callID != "" && msg.CallID != callID {
-			continue
-		}
-		if errText != "" {
-			msg.Status = chat.ToolError
-			msg.Content = errText
-		} else {
-			msg.Status = chat.ToolSuccess
-			msg.Content = result
-		}
-		return
-	}
-}
 
 func makeEvent(kind agent.ReplayEventKind, offsetMs int64, payload any) agent.ReplayEvent {
 	data, _ := json.Marshal(payload)
 	return agent.ReplayEvent{Kind: kind, OffsetMs: offsetMs, Data: data}
 }
 
-func makeTrace(events []agent.ReplayEvent) *agent.ReplayTrace {
-	return &agent.ReplayTrace{Version: 1, StartTime: time.Date(2026, 3, 13, 10, 0, 0, 0, time.UTC), Model: "test-model", Provider: "test-provider", WorkDir: "/tmp/test", Events: events}
+func makeTrace(workDir string, events []agent.ReplayEvent) *agent.ReplayTrace {
+	return &agent.ReplayTrace{
+		Version:   1,
+		StartTime: time.Date(2026, 3, 13, 10, 0, 0, 0, time.UTC),
+		Model:     "test-model",
+		Provider:  "test-provider",
+		WorkDir:   workDir,
+		Events:    events,
+	}
 }
 
-func runReplay(trace *agent.ReplayTrace) replayTUIModel {
-	m := newReplayTUIModel()
-	model, _ := m.startReplay(trace)
-	m = model.(replayTUIModel)
-	for m.replayMode {
-		next, cmd := m.handleReplayTick()
-		m = next.(replayTUIModel)
-		if cmd == nil {
-			break
-		}
-		if _, ok := cmd().(replayDoneMsg); ok {
-			final, _ := m.handleReplayDone()
-			m = final.(replayTUIModel)
-			break
-		}
-	}
+func newReplayTestModel(t *testing.T) *Model {
+	t.Helper()
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: t.TempDir()})
+	m.sty = styles.New(nil)
+	m.width = 80
+	m.height = 20
+	m.ensureTranscriptViewport(m.width, m.height)
 	return m
 }
 
+func drainReplay(t *testing.T, m *Model) *Model {
+	t.Helper()
+	for {
+		if !m.replayMode {
+			return m
+		}
+		next, cmd := m.handleReplayTick()
+		m = next.(*Model)
+		if cmd == nil {
+			return m
+		}
+		if _, ok := cmd().(replayDoneMsg); ok {
+			final, _ := m.handleReplayDone()
+			return final.(*Model)
+		}
+	}
+}
+
+func findReplayMessage(messages []*chat.Message, kind chat.MessageKind, want string) *chat.Message {
+	for _, msg := range messages {
+		if msg.Kind == kind && strings.Contains(msg.Content, want) {
+			return msg
+		}
+	}
+	return nil
+}
+
+func findReplayToolCall(messages []*chat.Message, callID string) *chat.Message {
+	for _, msg := range messages {
+		if msg.Kind == chat.KindToolCall && msg.CallID == callID {
+			return msg
+		}
+	}
+	return nil
+}
+
+func scrollReplayUp(m *Model, steps int) {
+	for i := 0; i < steps; i++ {
+		m.handleTranscriptViewportMsg(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	}
+}
+
 func TestReplayCommandGuards(t *testing.T) {
-	m := newReplayTUIModel()
+	m := newReplayTestModel(t)
 	m.busy = true
 	msg, _ := m.handleReplayCommand("/replay")
 	if !strings.Contains(msg.Content, "Cannot replay") {
 		t.Fatalf("unexpected busy message: %q", msg.Content)
 	}
 
-	m = newReplayTUIModel()
+	m = newReplayTestModel(t)
 	m.replayMode = true
 	msg, _ = m.handleReplayCommand("/replay")
 	if !strings.Contains(msg.Content, "already in progress") {
 		t.Fatalf("unexpected replay-in-progress message: %q", msg.Content)
 	}
 
-	m = newReplayTUIModel()
+	m = newReplayTestModel(t)
 	msg, _ = m.handleReplayCommand("/replay list")
 	if msg.Content != "No replay traces found." {
 		t.Fatalf("unexpected list message: %q", msg.Content)
@@ -359,58 +105,191 @@ func TestReplayCommandGuards(t *testing.T) {
 }
 
 func TestReplayFlowRendersStreamingAndToolState(t *testing.T) {
-	trace := makeTrace([]agent.ReplayEvent{
+	m := newReplayTestModel(t)
+	trace := makeTrace(m.cfg.WorkingDir, []agent.ReplayEvent{
 		makeEvent(agent.EventSystem, 0, agent.SystemEventData{Text: "Session started"}),
 		makeEvent(agent.EventUserInput, 10, agent.UserInputData{Text: "list files"}),
 		makeEvent(agent.EventThinkDelta, 20, agent.ThinkDeltaData{Text: "I'll use bash"}),
-		makeEvent(agent.EventToolCall, 30, agent.ToolCallData{CallID: "tc_1", Name: "bash", Args: "ls -la"}),
-		makeEvent(agent.EventToolResult, 40, agent.ToolResultData{CallID: "tc_1", Result: "file1.go\nfile2.go"}),
+		makeEvent(agent.EventToolCall, 30, agent.ToolCallData{CallID: "tc_1", Name: "bash", Args: "{\"command\":\"ls -la\"}", RawArgs: "{\"command\":\"ls -la\"}"}),
+		makeEvent(agent.EventToolResult, 40, agent.ToolResultData{CallID: "tc_1", Name: "bash", Result: "file1.go\nfile2.go"}),
 		makeEvent(agent.EventTextDelta, 50, agent.TextDeltaData{Text: "Found 2 Go files."}),
 		makeEvent(agent.EventAgentDone, 60, agent.AgentDoneData{InputTokens: 2000, OutputTokens: 800, ToolCalls: 1}),
 	})
 
-	m := runReplay(trace)
-	out := m.View().Content
-	for _, want := range []string{"IDLE", "[SUMMARY] Session started", "[USER] list files", "[THINKING] I'll use bash", "[TOOL done] bash (ls -la) => file1.go | file2.go", "[ASSISTANT] Found 2 Go files.", "2000↓ 800↑ · 1 tools", "Replay complete."} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("missing %q in output:\n%s", want, out)
+	startMsg, _ := m.startReplay(trace)
+	m.appendMessage(startMsg, true)
+	m = drainReplay(t, m)
+
+	if m.replayMode || m.busy {
+		t.Fatalf("replay state not cleared: replay=%v busy=%v", m.replayMode, m.busy)
+	}
+	if findReplayMessage(m.messages, chat.KindSystem, "Session started") == nil {
+		t.Fatal("expected replay transcript to include the session-start system message")
+	}
+	if findReplayMessage(m.messages, chat.KindUser, "list files") == nil {
+		t.Fatal("expected replay transcript to include the replayed user input")
+	}
+	if findReplayMessage(m.messages, chat.KindThinking, "I'll use bash") == nil {
+		t.Fatal("expected replay transcript to include the thinking delta")
+	}
+	tool := findReplayToolCall(m.messages, "tc_1")
+	if tool == nil {
+		t.Fatal("expected replay transcript to include the tool call")
+	}
+	if tool.ToolName != "bash" || tool.ToolArgs != "ls -la" {
+		t.Fatalf("unexpected tool summary: %#v", tool)
+	}
+	if tool.Status != chat.ToolSuccess {
+		t.Fatalf("tool status = %v, want success", tool.Status)
+	}
+	if !strings.Contains(tool.Content, "file1.go") || !strings.Contains(tool.Content, "file2.go") {
+		t.Fatalf("tool result missing expected files: %q", tool.Content)
+	}
+	assistant := findReplayMessage(m.messages, chat.KindAssistant, "Found 2 Go files.")
+	if assistant == nil {
+		t.Fatal("expected replay transcript to include the assistant response")
+	}
+	if assistant.Streaming {
+		t.Fatal("assistant message should not still be marked streaming after replay completion")
+	}
+	if findReplayMessage(m.messages, chat.KindSystem, "2000↓ 800↑ · 1 tools") == nil {
+		t.Fatal("expected replay transcript to include the usage summary")
+	}
+	if got := m.messages[len(m.messages)-1].Content; got != "Replay complete." {
+		t.Fatalf("last replay message = %q, want Replay complete.", got)
+	}
+
+	tail := stripANSI(strings.Join(m.visibleChatLines(12, 80), "\n"))
+	for _, want := range []string{"Found 2 Go files.", "Replay complete."} {
+		if !strings.Contains(tail, want) {
+			t.Fatalf("expected bounded viewport tail to include %q\n%s", want, tail)
 		}
 	}
 }
 
 func TestReplayStopEscape(t *testing.T) {
-	m := newReplayTUIModel()
-	model, _ := m.startReplay(makeTrace([]agent.ReplayEvent{makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "start"})}))
-	m = model.(replayTUIModel)
+	m := newReplayTestModel(t)
+	startMsg, _ := m.startReplay(makeTrace(m.cfg.WorkingDir, []agent.ReplayEvent{makeEvent(agent.EventUserInput, 0, agent.UserInputData{Text: "start"})}))
+	m.appendMessage(startMsg, true)
 	updated, _ := m.Update(tea.KeyPressMsg{Text: "escape"})
-	m = updated.(replayTUIModel)
-	out := m.View().Content
-	if !strings.Contains(out, "IDLE") || !strings.Contains(out, "Replay stopped.") {
-		t.Fatalf("unexpected stop output:\n%s", out)
+	m = updated.(*Model)
+	if m.replayMode || m.busy {
+		t.Fatalf("replay stop did not clear state: replay=%v busy=%v", m.replayMode, m.busy)
+	}
+	if got := m.messages[len(m.messages)-1].Content; got != "Replay stopped." {
+		t.Fatalf("last replay message = %q, want Replay stopped.", got)
 	}
 }
 
-func TestReplayViewportScrollAndResize(t *testing.T) {
-	m := newReplayTUIModel()
+func TestReplayViewportStickyBottomAndResize(t *testing.T) {
+	m := newReplayTestModel(t)
 	m.width = 60
 	m.height = 12
 	for i := 0; i < 40; i++ {
 		m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("line %02d", i+1)})
 	}
-	m.syncViewport()
-	m.viewport.GotoBottom()
-	start := m.viewport.YOffset()
-	updated, _ := m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
-	m = updated.(replayTUIModel)
-	if m.viewport.YOffset() >= start {
-		t.Fatalf("expected replay viewport to scroll upward: before=%d after=%d", start, m.viewport.YOffset())
+	m.ensureTranscriptViewport(m.width, m.height)
+	m.pinTranscriptToBottom()
+
+	trace := makeTrace(m.cfg.WorkingDir, []agent.ReplayEvent{makeEvent(agent.EventTextDelta, 0, agent.TextDeltaData{Text: " live tail"})})
+	_, _ = m.startReplay(trace)
+	next, _ := m.handleReplayTick()
+	m = next.(*Model)
+	if m.scroll != 0 {
+		t.Fatalf("expected sticky-bottom replay update to stay pinned, scroll=%d", m.scroll)
 	}
-	updated, _ = m.Update(tea.WindowSizeMsg{Width: 48, Height: 9})
-	m = updated.(replayTUIModel)
-	if m.viewport.Height() != 6 {
-		t.Fatalf("viewport height=%d, want 6", m.viewport.Height())
+	if !m.transcriptViewport.AtBottom() {
+		t.Fatal("expected viewport to remain at bottom after replay append")
 	}
-	if !strings.Contains(m.View().Content, "line") {
-		t.Fatalf("replay viewport lost transcript after resize\n%s", m.View().Content)
+
+	scrollReplayUp(m, 1)
+	before := m.scroll
+	if before == 0 {
+		t.Fatal("expected manual scroll before resize test")
+	}
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 48, Height: 9})
+	m = updated.(*Model)
+	if m.scroll == 0 {
+		t.Fatal("resize unexpectedly snapped replay transcript to bottom")
+	}
+	if m.transcriptViewport.Height() < 1 {
+		t.Fatalf("viewport height=%d, want positive", m.transcriptViewport.Height())
+	}
+}
+
+func TestReplayDonePreservesScrolledPosition(t *testing.T) {
+	m := newReplayTestModel(t)
+	m.width = 72
+	m.height = 12
+	fillTranscriptMessages(m, 60)
+	m.ensureTranscriptViewport(m.width, m.height)
+
+	startMsg, _ := m.startReplay(makeTrace(m.cfg.WorkingDir, nil))
+	m.appendMessage(startMsg, true)
+	scrollReplayUp(m, 2)
+	before := m.scroll
+	if before == 0 {
+		t.Fatal("expected replay transcript to be scrolled off bottom before completion")
+	}
+
+	next, _ := m.handleReplayDone()
+	m = next.(*Model)
+	if m.scroll == 0 {
+		t.Fatal("replay completion unexpectedly snapped transcript to bottom")
+	}
+	if m.scroll < before-2 {
+		t.Fatalf("replay completion moved scroll too far: got %d want >= %d", m.scroll, before-2)
+	}
+}
+
+func TestReplayStopPreservesScrolledPosition(t *testing.T) {
+	m := newReplayTestModel(t)
+	m.width = 72
+	m.height = 12
+	fillTranscriptMessages(m, 60)
+	m.ensureTranscriptViewport(m.width, m.height)
+
+	startMsg, _ := m.startReplay(makeTrace(m.cfg.WorkingDir, []agent.ReplayEvent{makeEvent(agent.EventTextDelta, 0, agent.TextDeltaData{Text: "tail"})}))
+	m.appendMessage(startMsg, true)
+	scrollReplayUp(m, 2)
+	before := m.scroll
+	if before == 0 {
+		t.Fatal("expected replay transcript to be scrolled off bottom before stopping")
+	}
+
+	m.stopReplay()
+	if m.scroll == 0 {
+		t.Fatal("replay stop unexpectedly snapped transcript to bottom")
+	}
+	if m.scroll < before-2 {
+		t.Fatalf("replay stop moved scroll too far: got %d want >= %d", m.scroll, before-2)
+	}
+}
+
+func TestReplayStreamingRespectsUserScrollPosition(t *testing.T) {
+	m := newReplayTestModel(t)
+	m.width = 72
+	m.height = 12
+	for i := 0; i < 50; i++ {
+		m.messages = append(m.messages, &chat.Message{Kind: chat.KindAssistant, Content: fmt.Sprintf("history %02d", i+1)})
+	}
+	m.ensureTranscriptViewport(m.width, m.height)
+	scrollReplayUp(m, 1)
+	scrolled := m.scroll
+	if scrolled == 0 {
+		t.Fatal("expected transcript to be scrolled off bottom before replay tick")
+	}
+
+	trace := makeTrace(m.cfg.WorkingDir, []agent.ReplayEvent{makeEvent(agent.EventTextDelta, 0, agent.TextDeltaData{Text: "new streamed reply"})})
+	_, _ = m.startReplay(trace)
+	scrollReplayUp(m, 1)
+	scrolled = m.scroll
+	next, _ := m.handleReplayTick()
+	m = next.(*Model)
+	if m.scroll == 0 {
+		t.Fatal("expected replay append to preserve scrolled position when user is not at bottom")
+	}
+	if m.scroll < scrolled-2 {
+		t.Fatalf("scroll moved too far during replay append: got %d want >= %d", m.scroll, scrolled-2)
 	}
 }

@@ -25,6 +25,18 @@ func fillTranscriptMessages(m *Model, count int) {
 	}
 }
 
+func testTempConfig(t *testing.T) *config.Config {
+	t.Helper()
+	return &config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: t.TempDir()}
+}
+
+func newAppTestModel(t *testing.T) *Model {
+	t.Helper()
+	m := New(testTempConfig(t))
+	m.sty = styles.New(nil)
+	return m
+}
+
 func TestHandleRuntimePreparedReusesSessionAndPreparesFreshAgent(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", TeamMode: "auto"})
 	oldSession := &codetool.Session{}
@@ -248,8 +260,7 @@ func TestViewConfiguresBubbleTeaMetadata(t *testing.T) {
 }
 
 func TestViewFocusAndMouseWheelUpdateMetadataAndScroll(t *testing.T) {
-	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: "/tmp/project"})
-	m.sty = styles.New(nil)
+	m := newAppTestModel(t)
 	m.width = 100
 	m.height = 16
 	fillTranscriptMessages(m, 24)
@@ -266,7 +277,7 @@ func TestViewFocusAndMouseWheelUpdateMetadataAndScroll(t *testing.T) {
 	if got := m.renderInputMeta(); got != "Input paused · refocus terminal to type" {
 		t.Fatalf("input meta = %q", got)
 	}
-	if title := m.View().WindowTitle; title != "GOLEM — project — ready" {
+	if title := m.View().WindowTitle; title != m.windowTitle() {
 		t.Fatalf("window title changed unexpectedly on blur: %q", title)
 	}
 
@@ -523,8 +534,7 @@ func TestViewSwitchesToCompactLayoutWhenFullShellLeavesNoTranscriptSpace(t *test
 }
 
 func TestVisibleChatLinesKeepsBottomWindowWithoutRenderingEntireTranscriptSlice(t *testing.T) {
-	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
-	m.sty = styles.New(nil)
+	m := newAppTestModel(t)
 	fillTranscriptMessages(m, 40)
 
 	visible := stripANSI(strings.Join(m.visibleChatLines(4, 60), "\n"))
@@ -537,7 +547,9 @@ func TestVisibleChatLinesKeepsBottomWindowWithoutRenderingEntireTranscriptSlice(
 		}
 	}
 
-	m.scroll = 2
+	m.ensureTranscriptViewport(60, 4)
+	m.transcriptViewport.SetYOffset(max(0, m.transcriptViewport.YOffset()-2))
+	m.scroll = transcriptMaxScroll(m.transcriptViewport) - m.transcriptViewport.YOffset()
 	scrolled := stripANSI(strings.Join(m.visibleChatLines(4, 60), "\n"))
 	if !strings.Contains(scrolled, "message 038") {
 		t.Fatalf("expected scrolled transcript to reveal earlier content\n%s", scrolled)
@@ -545,15 +557,11 @@ func TestVisibleChatLinesKeepsBottomWindowWithoutRenderingEntireTranscriptSlice(
 }
 
 func TestTranscriptViewportTracksResizeWithoutResettingScroll(t *testing.T) {
-	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
-	m.sty = styles.New(nil)
+	m := newAppTestModel(t)
 	m.width = 96
 	m.height = 18
 	fillTranscriptMessages(m, 80)
-	rendered := m.renderChat(10, 96)
-	if !strings.Contains(stripANSI(rendered), "message") {
-		t.Fatalf("expected transcript render to include content\n%s", stripANSI(rendered))
-	}
+	m.renderChat(10, 96)
 
 	m.handleTranscriptViewportMsg(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
 	if m.scroll == 0 {

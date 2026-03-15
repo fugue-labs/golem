@@ -78,6 +78,26 @@ func (msg *Message) Render(sty *styles.Styles, width int, allMessages []*Message
 	return rendered
 }
 
+// InvalidateRenderCache clears any cached rendering for this message.
+func (msg *Message) InvalidateRenderCache() {
+	msg.cachedRender = ""
+	msg.cachedWidth = 0
+	msg.cachedContent = ""
+	msg.cachedStatus = ToolPending
+	msg.cachedDuration = 0
+	msg.cachedStreaming = false
+	msg.cachedLines = 0
+}
+
+// InvalidateRenderCaches clears cached rendering for a transcript slice.
+func InvalidateRenderCaches(messages []*Message) {
+	for _, msg := range messages {
+		if msg != nil {
+			msg.InvalidateRenderCache()
+		}
+	}
+}
+
 // Lines returns the cached line count for this message.
 // Must call Render first.
 func (msg *Message) Lines() int {

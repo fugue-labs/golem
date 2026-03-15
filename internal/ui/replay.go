@@ -140,6 +140,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return replayDoneMsg{} }
 	}
 
+	stickBottom := m.transcriptAtBottom()
 	event := m.replayTrace.Events[m.replayIdx]
 	m.replayIdx++
 
@@ -153,7 +154,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 			Kind:    chat.KindUser,
 			Content: data.Text,
 		})
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 
 	case agent.EventTextDelta:
 		data, err := agent.DecodeEvent[agent.TextDeltaData](event)
@@ -161,7 +162,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 			break
 		}
 		m.appendOrUpdateAssistant(data.Text)
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 
 	case agent.EventThinkDelta:
 		data, err := agent.DecodeEvent[agent.ThinkDeltaData](event)
@@ -169,7 +170,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 			break
 		}
 		m.appendOrUpdateThinking(data.Text)
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 
 	case agent.EventToolCall:
 		data, err := agent.DecodeEvent[agent.ToolCallData](event)
@@ -188,7 +189,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, toolMsg)
 		m.activeToolName = data.Name
 		m.activeToolArgs = extractMainParam(data.Args)
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 
 	case agent.EventToolResult:
 		data, err := agent.DecodeEvent[agent.ToolResultData](event)
@@ -198,7 +199,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 		m.activeToolName = ""
 		m.activeToolArgs = ""
 		m.finishLastTool(data.CallID, data.Name, data.Result, data.Error)
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 
 	case agent.EventAgentDone:
 		data, err := agent.DecodeEvent[agent.AgentDoneData](event)
@@ -216,7 +217,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 			Kind:    chat.KindSystem,
 			Content: strings.Join(usageParts, " · "),
 		})
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 
 	case agent.EventSystem:
 		data, err := agent.DecodeEvent[agent.SystemEventData](event)
@@ -227,7 +228,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 			Kind:    chat.KindSystem,
 			Content: data.Text,
 		})
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 
 	case agent.EventError:
 		data, err := agent.DecodeEvent[agent.ErrorEventData](event)
@@ -238,7 +239,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 			Kind:    chat.KindError,
 			Content: data.Text,
 		})
-		m.scroll = 0
+		m.noteTranscriptMutation(stickBottom)
 	}
 
 	return m, m.replayNext()
@@ -246,6 +247,7 @@ func (m *Model) handleReplayTick() (tea.Model, tea.Cmd) {
 
 // handleReplayDone finalizes replay mode.
 func (m *Model) handleReplayDone() (tea.Model, tea.Cmd) {
+	stickBottom := m.transcriptAtBottom()
 	m.replayMode = false
 	m.replayTrace = nil
 	m.replayIdx = 0
@@ -257,12 +259,13 @@ func (m *Model) handleReplayDone() (tea.Model, tea.Cmd) {
 		Kind:    chat.KindSystem,
 		Content: "Replay complete.",
 	})
-	m.scroll = 0
+	m.noteTranscriptMutation(stickBottom)
 	return m, m.input.Focus()
 }
 
 // stopReplay cancels an active replay.
 func (m *Model) stopReplay() {
+	stickBottom := m.transcriptAtBottom()
 	m.replayMode = false
 	m.replayTrace = nil
 	m.replayIdx = 0
@@ -274,7 +277,7 @@ func (m *Model) stopReplay() {
 		Kind:    chat.KindSystem,
 		Content: "Replay stopped.",
 	})
-	m.scroll = 0
+	m.noteTranscriptMutation(stickBottom)
 }
 
 // recordEvent records a single event to the active trace if recording.
@@ -298,4 +301,3 @@ func (m *Model) flushTrace() {
 	}
 	m.trace = nil
 }
-
