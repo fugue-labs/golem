@@ -235,8 +235,8 @@ func New(_ color.Color) *Styles {
 	s.Header.Keystroke = meta.Italic(true)
 
 	// Shell framing.
-	s.Shell.SectionLabel = lipgloss.NewStyle().Foreground(fgStrong).Bold(true)
-	s.Shell.SectionMeta = halfMuted
+	s.Shell.SectionLabel = lipgloss.NewStyle().Foreground(primary).Bold(true)
+	s.Shell.SectionMeta = lipgloss.NewStyle().Foreground(fgHalf).Italic(true)
 	s.Shell.Rule = lipgloss.NewStyle().Foreground(border)
 
 	// Status bar.

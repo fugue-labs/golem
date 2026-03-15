@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
+	"github.com/fugue-labs/golem/internal/ui/chat"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
@@ -73,6 +75,24 @@ func TestShellLayoutViewGolden(t *testing.T) {
 	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Workflow", "Context ·", "Activity ·", "/help"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("shell layout missing %q\n%s", want, got)
+		}
+	}
+}
+
+func TestShellLayoutShortWindowGolden(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.width = 72
+	m.height = 6
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "short window response"}}
+
+	got := stripANSI(m.View().Content)
+	if gotHeight := lipgloss.Height(got); gotHeight > m.height {
+		t.Fatalf("short shell layout height=%d exceeds terminal height=%d\n%s", gotHeight, m.height, got)
+	}
+	for _, want := range []string{"GOLEM", "short window response", "❯", "Ready"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("short shell layout missing %q\n%s", want, got)
 		}
 	}
 }

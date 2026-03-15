@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/ui/chat"
@@ -248,5 +249,42 @@ func TestViewWorkflowPanelGatesByWidth(t *testing.T) {
 	wide := stripANSI(m.View().Content)
 	if !strings.Contains(wide, "Workflow") {
 		t.Fatalf("workflow panel should appear at gating width\n%s", wide)
+	}
+}
+
+func TestRenderChatRespectsVerySmallHeights(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "one\ntwo\nthree"}}
+
+	for _, height := range []int{1, 2} {
+		t.Run(fmt.Sprintf("height-%d", height), func(t *testing.T) {
+			rendered := m.renderChat(height, 40)
+			if got := lipgloss.Height(rendered); got > height {
+				t.Fatalf("renderChat height=%d produced %d lines\n%s", height, got, stripANSI(rendered))
+			}
+			if strings.Contains(stripANSI(rendered), "Transcript") {
+				t.Fatalf("renderChat should skip transcript chrome at height=%d\n%s", height, stripANSI(rendered))
+			}
+		})
+	}
+}
+
+func TestViewShortWindowDoesNotExceedTerminalHeight(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.width = 72
+	m.height = 6
+	m.invariantState.Extracted = true
+	m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "brief response"}}
+
+	rendered := stripANSI(m.View().Content)
+	if got := lipgloss.Height(rendered); got > m.height {
+		t.Fatalf("view height=%d produced %d lines\n%s", m.height, got, rendered)
+	}
+	for _, want := range []string{"GOLEM", "brief response", "❯", "Ready"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("short view missing %q\n%s", want, rendered)
+		}
 	}
 }

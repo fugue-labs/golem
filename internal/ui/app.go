@@ -1207,17 +1207,58 @@ func (m *Model) View() tea.View {
 	if m.sty == nil {
 		return tea.NewView("Loading...")
 	}
+	if m.height <= 0 {
+		v := tea.NewView("")
+		v.AltScreen = true
+		return v
+	}
 
 	header := m.renderHeader()
 	input := m.renderInput()
 	status := m.renderStatusBar()
+	fixedHeight := lipgloss.Height(header) + lipgloss.Height(input) + lipgloss.Height(status)
+	if fixedHeight > m.height {
+		return m.renderCompactView()
+	}
 
-	headerHeight := lipgloss.Height(header)
-	inputHeight := lipgloss.Height(input)
-	statusHeight := lipgloss.Height(status)
-	chatHeight := m.height - headerHeight - inputHeight - statusHeight
-	if chatHeight < 1 {
-		chatHeight = 1
+	sections := []string{header}
+	if chatHeight := m.height - fixedHeight; chatHeight > 0 {
+		sections = append(sections, m.renderChatRegion(chatHeight))
+	}
+	sections = append(sections, input, status)
+
+	v := tea.NewView(strings.Join(sections, "\n"))
+	v.AltScreen = true
+	return v
+}
+
+func (m *Model) renderCompactView() tea.View {
+	sections := make([]string, 0, 4)
+	switch {
+	case m.height <= 0:
+		return tea.NewView("")
+	case m.height == 1:
+		sections = append(sections, m.renderCompactInput())
+	case m.height == 2:
+		sections = append(sections, m.renderCompactInput(), m.renderCompactStatusBar())
+	default:
+		header := m.renderCompactHeader()
+		input := m.renderCompactInput()
+		status := m.renderCompactStatusBar()
+		sections = append(sections, header)
+		if chatHeight := m.height - 3; chatHeight > 0 {
+			sections = append(sections, m.renderChatRegion(chatHeight))
+		}
+		sections = append(sections, input, status)
+	}
+	v := tea.NewView(strings.Join(sections, "\n"))
+	v.AltScreen = true
+	return v
+}
+
+func (m *Model) renderChatRegion(height int) string {
+	if height <= 0 {
+		return ""
 	}
 
 	const panelWidth = 38
@@ -1229,29 +1270,64 @@ func (m *Model) View() tea.View {
 		chatWidth = max(1, m.width-panelWidth)
 	}
 
-	chatSection := m.renderChat(chatHeight, chatWidth)
-	if showPanel {
-		// Both sides have exact dimensions — join line-by-line.
-		chatLines := strings.Split(chatSection, "\n")
-		panelLines := strings.Split(m.renderWorkflowPanel(chatHeight, panelWidth), "\n")
-		combined := make([]string, chatHeight)
-		for i := range combined {
-			cl, pl := "", ""
-			if i < len(chatLines) {
-				cl = chatLines[i]
-			}
-			if i < len(panelLines) {
-				pl = panelLines[i]
-			}
-			combined[i] = cl + pl
-		}
-		chatSection = strings.Join(combined, "\n")
+	chatSection := m.renderChat(height, chatWidth)
+	if !showPanel {
+		return chatSection
 	}
 
-	sections := []string{header, chatSection, input, status}
-	v := tea.NewView(strings.Join(sections, "\n"))
-	v.AltScreen = true
-	return v
+	chatLines := strings.Split(chatSection, "\n")
+	panelLines := strings.Split(m.renderWorkflowPanel(height, panelWidth), "\n")
+	combined := make([]string, height)
+	for i := range combined {
+		cl, pl := "", ""
+		if i < len(chatLines) {
+			cl = chatLines[i]
+		}
+		if i < len(panelLines) {
+			pl = panelLines[i]
+		}
+		combined[i] = cl + pl
+	}
+	return strings.Join(combined, "\n")
+}
+
+func (m *Model) renderCompactHeader() string {
+	shellWidth := m.shellWidth()
+	left := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.renderHeaderStateBadge()
+	right := m.sty.Header.Model.Render(styles.ModelIcon + " " + truncateText(m.cfg.Model, max(8, shellWidth/3)))
+	return lipgloss.NewStyle().Width(shellWidth).MaxWidth(shellWidth).Render(joinShellLine(left, right, shellWidth))
+}
+
+func (m *Model) renderCompactInput() string {
+	shellWidth := m.shellWidth()
+	value := m.input.Value()
+	if value == "" {
+		value = m.input.Placeholder
+	}
+	value = strings.ReplaceAll(value, "\n", " ↵ ")
+	prompt := m.sty.Input.Prompt.Render(styles.PromptIcon + " ")
+	available := max(1, shellWidth-lipgloss.Width(prompt))
+	content := m.sty.Base.Render(truncateText(value, available))
+	return lipgloss.NewStyle().Width(shellWidth).MaxWidth(shellWidth).Render(prompt + content)
+}
+
+func (m *Model) renderCompactStatusBar() string {
+	shellWidth := m.shellWidth()
+	statusText := "Ready"
+	switch {
+	case m.approvalMode:
+		statusText = "Approval"
+	case m.askMode:
+		statusText = "Need input"
+	case m.busy:
+		statusText = "Working"
+	}
+	meta := statusText + " · " + m.cfg.Model
+	if m.busy {
+		meta = statusText + " · Esc cancels"
+	}
+	content := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-9)))
+	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
 
 func (m *Model) shellWidth() int {
@@ -1509,31 +1585,35 @@ func (m *Model) currentActivitySummary() string {
 }
 
 func (m *Model) renderChat(height, width int) string {
-	sectionMeta := m.renderTranscriptMeta()
-	bodyHeight := max(1, height-2)
-	body := ""
+	if height <= 0 {
+		return ""
+	}
+
+	showChrome := height >= 3
+	bodyHeight := height
+	if showChrome {
+		bodyHeight = height - 2
+	}
+	bodyHeight = max(1, bodyHeight)
+
+	var visible []string
 	if len(m.messages) == 0 {
-		body = m.renderWelcome(bodyHeight, width)
+		visible = strings.Split(m.renderWelcome(bodyHeight, width), "\n")
 	} else {
-		// Phase 1: Compute line counts per message using cached renders.
-		// This is cheap because unchanged messages hit the render cache.
-		type msgInfo struct {
-			lines int // lines including trailing gap line
-		}
-		infos := make([]msgInfo, len(m.messages))
-		totalLines := 0
+		allLines := make([]string, 0, len(m.messages)*2)
 		for i, msg := range m.messages {
-			msg.Render(m.sty, width, m.messages)
-			n := msg.Lines()
-			if n > 0 {
-				n++ // gap line between messages
+			rendered := msg.Render(m.sty, width, m.messages)
+			msgLines := splitRenderedMessageLines(rendered)
+			if len(msgLines) == 0 {
+				continue
 			}
-			infos[i] = msgInfo{lines: n}
-			totalLines += n
+			allLines = append(allLines, msgLines...)
+			if i < len(m.messages)-1 {
+				allLines = append(allLines, "")
+			}
 		}
 
-		// Phase 2: Clamp scroll.
-		maxScroll := totalLines - bodyHeight
+		maxScroll := len(allLines) - bodyHeight
 		if maxScroll < 0 {
 			maxScroll = 0
 		}
@@ -1541,63 +1621,48 @@ func (m *Model) renderChat(height, width int) string {
 			m.scroll = maxScroll
 		}
 
-		// Phase 3: Find which messages are visible.
-		// We show lines [totalLines - m.scroll - bodyHeight, totalLines - m.scroll).
-		endLine := totalLines - m.scroll
-		startLine := endLine - bodyHeight
-		if startLine < 0 {
-			startLine = 0
+		end := len(allLines) - m.scroll
+		if end < 0 {
+			end = 0
 		}
-
-		// Walk messages to find visible range.
-		var visible []string
-		linePos := 0
-		for i, info := range infos {
-			msgEnd := linePos + info.lines
-			if linePos >= endLine {
-				break // past viewport
-			}
-			if msgEnd <= startLine {
-				linePos = msgEnd
-				continue // before viewport
-			}
-
-			// This message is (partially) visible — use cached render.
-			rendered := m.messages[i].Render(m.sty, width, m.messages)
-			if rendered == "" {
-				linePos = msgEnd
-				continue
-			}
-			msgLines := strings.Split(rendered, "\n")
-			msgLines = append(msgLines, "") // gap line
-
-			// Determine which lines of this message are visible.
-			for j, line := range msgLines {
-				globalLine := linePos + j
-				if globalLine >= startLine && globalLine < endLine {
-					visible = append(visible, line)
-				}
-			}
-			linePos = msgEnd
+		start := end - bodyHeight
+		if start < 0 {
+			start = 0
 		}
-
-		// Pad to fill viewport height.
-		for len(visible) < bodyHeight {
-			visible = append([]string{""}, visible...)
-		}
-
-		// Pad every line to exact width so JoinHorizontal places the
-		// panel at a fixed column regardless of which messages are visible.
-		for i, line := range visible {
-			if w := lipgloss.Width(line); w < width {
-				visible[i] = line + strings.Repeat(" ", width-w)
-			}
-		}
-
-		body = strings.Join(visible, "\n")
+		visible = append(visible, allLines[start:end]...)
 	}
 
-	return m.renderShellRegion("Transcript", sectionMeta, width, strings.Split(body, "\n"))
+	for len(visible) < bodyHeight {
+		visible = append([]string{""}, visible...)
+	}
+	if len(visible) > bodyHeight {
+		visible = visible[len(visible)-bodyHeight:]
+	}
+	for i, line := range visible {
+		if w := lipgloss.Width(line); w < width {
+			visible[i] = line + strings.Repeat(" ", width-w)
+		}
+	}
+
+	body := strings.Join(visible, "\n")
+	if !showChrome {
+		return fitShellLines(strings.Split(body, "\n"), height, 0)
+	}
+	return m.renderShellRegion("Transcript", m.renderTranscriptMeta(), width, strings.Split(body, "\n"))
+}
+
+func splitRenderedMessageLines(rendered string) []string {
+	if rendered == "" {
+		return nil
+	}
+	lines := strings.Split(rendered, "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
 }
 
 func (m *Model) renderWelcome(height, width int) string {
