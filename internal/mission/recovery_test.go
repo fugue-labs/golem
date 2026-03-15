@@ -286,6 +286,26 @@ func TestRequestReplan_UnlimitedBudget(t *testing.T) {
 	}
 }
 
+func TestResolveNewlyReady_AcceptedDependencyDoesNotPromotePendingTask(t *testing.T) {
+	store := newRecoveryMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskAccepted}
+	store.tasks["t2"] = &Task{ID: "t2", MissionID: "m1", Status: TaskPending}
+	store.deps = []TaskDependency{{TaskID: "t2", DependsOnID: "t1"}}
+
+	rm := NewMissionRecoveryManager(store, nil, nil)
+	promoted, err := rm.resolveNewlyReady(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promoted != 0 {
+		t.Fatalf("expected accepted dependency to keep task pending, promoted=%d", promoted)
+	}
+	if got := store.tasks["t2"].Status; got != TaskPending {
+		t.Fatalf("task status = %s, want %s", got, TaskPending)
+	}
+}
+
 func TestApplyReplan_AddsTasks(t *testing.T) {
 	store := newRecoveryMockStore()
 	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}

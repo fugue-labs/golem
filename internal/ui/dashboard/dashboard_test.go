@@ -289,6 +289,7 @@ func TestMissionPriority(t *testing.T) {
 		{mission.MissionBlocked, 5},
 		{mission.MissionPaused, 4},
 		{mission.MissionAwaitingApproval, 3},
+		{mission.MissionPlanning, 2},
 		{mission.MissionDraft, 1},
 		{mission.MissionCompleted, 0},
 	}
