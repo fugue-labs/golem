@@ -97,20 +97,22 @@ func (m *Model) listTraces() *chat.Message {
 
 	var b strings.Builder
 	b.WriteString("**Saved replay traces**\n\n")
-	for _, t := range traces {
+	for i, t := range traces {
 		provider := strings.TrimSpace(t.Provider)
 		if provider == "" {
 			provider = "unknown provider"
 		}
-		fmt.Fprintf(&b, "- `%s` — %s · %s via %s · %d events\n",
-			t.Filename,
-			t.Timestamp.Format("Jan 2 15:04"),
-			t.Model,
-			provider,
-			t.Events,
-		)
+		traceSummary := fmt.Sprintf("%s · %s via %s · %d events", t.Timestamp.Format("Jan 2 15:04"), t.Model, provider, t.Events)
+		if t.Events == 0 {
+			traceSummary += " · empty trace"
+		}
+		label := "saved"
+		if i == len(traces)-1 {
+			label = "latest"
+		}
+		fmt.Fprintf(&b, "- `%s` — %s · %s\n", t.Filename, traceSummary, label)
 	}
-	b.WriteString("\nUse `/replay <filename>` to replay a specific trace, `/replay` for the latest trace, or `/resume` to restore the last saved session state.")
+	b.WriteString("\nUse `/replay <filename>` to replay a specific trace, `/replay` for the latest trace, or `/resume` to restore the latest saved session state.")
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
 

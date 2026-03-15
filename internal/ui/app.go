@@ -1651,45 +1651,6 @@ func (m *Model) restoreSessionState(session *agent.SessionData, msgs []core.Mode
 	return nil
 }
 
-func (m *Model) resumeSession() *chat.Message {
-	if m.busy {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot resume while agent is running."}
-	}
-	if len(m.history) > 0 {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "Session already has history. Use `/clear` first to resume a previous session."}
-	}
-	session, err := agent.LoadLatestSession(m.cfg.WorkingDir)
-	if err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to load session: %v", err)}
-	}
-	if session == nil {
-		return &chat.Message{Kind: chat.KindAssistant, Content: "No previous session found for this project."}
-	}
-	msgs, err := session.RestoreMessages()
-	if err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to restore messages: %v", err)}
-	}
-	if err := m.restoreSessionState(session, msgs); err != nil {
-		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to restore session state: %v", err)}
-	}
-	return &chat.Message{
-		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Resumed session from %s (%d messages, %d requests). Prompt: %q. Restored conversation history, transcript state, and saved workflow data.", session.Timestamp.Format("Jan 2 15:04"), len(msgs), session.Usage.Requests, summarizePromptPreview(session.Prompt)),
-	}
-}
-
-func summarizePromptPreview(prompt string) string {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return "(no saved prompt)"
-	}
-	runes := []rune(prompt)
-	if len(runes) <= 80 {
-		return prompt
-	}
-	return string(runes[:79]) + "…"
-}
-
 func (m *Model) compactContext() tea.Cmd {
 	history := m.history
 	return func() tea.Msg {

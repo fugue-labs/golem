@@ -76,7 +76,16 @@ func outputContainsReplayEmptyState(bts []byte, includeListHint bool) bool {
 }
 
 func outputContainsReplayStartSummary(bts []byte, trace *agent.ReplayTrace) bool {
-	return outputContainsLines(bts, replayStartSummary(trace))
+	want := replayStartSummary(trace)
+	for _, line := range strings.Split(strings.ReplaceAll(want, "\r\n", "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.Contains(normalizeTeatestOutput(bts), line) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m replayTUIModel) Init() tea.Cmd { return nil }

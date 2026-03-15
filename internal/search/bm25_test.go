@@ -193,6 +193,8 @@ func TestSearchSessionsPrefersTranscriptSnippet(t *testing.T) {
 		"timestamp":  time.Now().UTC().Format(time.RFC3339),
 		"prompt":     "Authentication bug",
 		"model":      "gpt-5.4",
+		"provider":   "openai",
+		"usage":      map[string]any{"requests": 2},
 	}
 	raw, err := json.Marshal(session)
 	if err != nil {
@@ -208,6 +210,12 @@ func TestSearchSessionsPrefersTranscriptSnippet(t *testing.T) {
 	}
 	if len(results) != 1 {
 		t.Fatalf("results=%d, want 1", len(results))
+	}
+	if !strings.Contains(results[0].Summary, "gpt-5.4 via openai") {
+		t.Fatalf("summary=%q, want model/provider context", results[0].Summary)
+	}
+	if !strings.Contains(results[0].Summary, "2 requests") {
+		t.Fatalf("summary=%q, want request count", results[0].Summary)
 	}
 	if !strings.Contains(results[0].Snippet, "Assistant: Found the authentication fix") {
 		t.Fatalf("snippet=%q, want transcript-aware assistant line", results[0].Snippet)

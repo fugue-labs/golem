@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -56,11 +57,11 @@ func (s *SessionData) Summary() SessionSummary {
 		Model:           strings.TrimSpace(s.Model),
 		Provider:        strings.TrimSpace(s.Provider),
 		Requests:        s.Usage.Requests,
-		HasTranscript:   len(s.Transcript) > 0,
-		HasPlan:         len(s.PlanState) > 0,
-		HasInvariants:   len(s.InvariantState) > 0,
-		HasVerification: len(s.VerificationState) > 0,
-		HasSpec:         len(s.SpecState) > 0,
+		HasTranscript:   hasStoredSessionPayload(s.Transcript),
+		HasPlan:         hasStoredSessionPayload(s.PlanState),
+		HasInvariants:   hasStoredSessionPayload(s.InvariantState),
+		HasVerification: hasStoredSessionPayload(s.VerificationState),
+		HasSpec:         hasStoredSessionPayload(s.SpecState),
 	}
 }
 
@@ -125,6 +126,44 @@ func joinSummaryParts(parts []string) string {
 		return parts[0] + " and " + parts[1]
 	default:
 		return strings.Join(parts[:len(parts)-1], ", ") + ", and " + parts[len(parts)-1]
+	}
+}
+
+func hasStoredSessionPayload(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false
+	}
+
+	var decoded any
+	if err := json.Unmarshal(trimmed, &decoded); err != nil {
+		return true
+	}
+	return hasMeaningfulSessionValue(decoded)
+}
+
+func hasMeaningfulSessionValue(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(x) != ""
+	case []any:
+		for _, item := range x {
+			if hasMeaningfulSessionValue(item) {
+				return true
+			}
+		}
+		return false
+	case map[string]any:
+		for _, item := range x {
+			if hasMeaningfulSessionValue(item) {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
 	}
 }
 

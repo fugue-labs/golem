@@ -18,6 +18,8 @@ type SessionResult struct {
 	ProjectDir  string    // original working directory of the session
 	Timestamp   time.Time // when the session was saved
 	Prompt      string    // the user's prompt for this session
+	Model       string    // model used for the saved session
+	Summary     string    // compact session summary for display
 	Score       float64   // BM25 relevance score
 	Snippet     string    // text snippet around the match
 }
@@ -30,6 +32,8 @@ type sessionData struct {
 	Timestamp  time.Time       `json:"timestamp"`
 	Prompt     string          `json:"prompt,omitempty"`
 	Model      string          `json:"model"`
+	Provider   string          `json:"provider,omitempty"`
+	Usage      core.RunUsage   `json:"usage,omitempty"`
 }
 
 // messageContent is a minimal struct for extracting text from legacy messages.
@@ -51,6 +55,7 @@ type sessionMeta struct {
 	workDir   string
 	timestamp time.Time
 	prompt    string
+	model     string
 	session   *sessionData
 }
 
@@ -108,6 +113,7 @@ func SearchSessions(query string, projectDir string, maxResults int) ([]SessionR
 				workDir:   sd.WorkDir,
 				timestamp: sd.Timestamp,
 				prompt:    sd.Prompt,
+				model:     sd.Model,
 				session:   sd,
 			}
 		}
@@ -125,6 +131,8 @@ func SearchSessions(query string, projectDir string, maxResults int) ([]SessionR
 			ProjectDir:  meta.workDir,
 			Timestamp:   meta.timestamp,
 			Prompt:      meta.prompt,
+			Model:       meta.model,
+			Summary:     formatSessionSummary(meta),
 			Score:       r.Score,
 			Snippet:     extractSessionSnippet(meta.session, r.Doc.Text, query, 280),
 		})
@@ -196,6 +204,39 @@ func loadSessionData(path string) (*sessionData, error) {
 		return nil, err
 	}
 	return &sd, nil
+}
+
+func formatSessionSummary(meta sessionMeta) string {
+	parts := make([]string, 0, 5)
+	if !meta.timestamp.IsZero() {
+		parts = append(parts, meta.timestamp.Format("Jan 2 15:04"))
+	}
+	model := strings.TrimSpace(meta.model)
+	if model != "" {
+		provider := ""
+		requests := 0
+		hasTranscript := false
+		if meta.session != nil {
+			provider = strings.TrimSpace(meta.session.Provider)
+			requests = meta.session.Usage.Requests
+			hasTranscript = len(transcriptDisplayLines(meta.session.Transcript)) > 0
+		}
+		if provider != "" {
+			parts = append(parts, model+" via "+provider)
+		} else {
+			parts = append(parts, model)
+		}
+		if requests > 0 {
+			parts = append(parts, fmt.Sprintf("%d requests", requests))
+		}
+		if hasTranscript {
+			parts = append(parts, "transcript")
+		}
+	}
+	if len(parts) == 0 {
+		return "Saved session"
+	}
+	return strings.Join(parts, " · ")
 }
 
 // extractSessionText extracts searchable text from a session.

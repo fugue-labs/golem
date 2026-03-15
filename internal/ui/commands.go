@@ -575,7 +575,7 @@ func (m *Model) handleSearchCommand(text string) *chat.Message {
 	if query == "" {
 		return &chat.Message{
 			Kind:    chat.KindAssistant,
-			Content: "Usage: `/search <query>` — search across all saved sessions with readable context.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`\n\nResults include the saved prompt, project, and nearby transcript lines when available.",
+			Content: "Usage: `/search <query>` — search across all saved sessions with readable context.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`\n\nResults include the saved prompt, model/time summary, project, and nearby transcript lines when available.",
 		}
 	}
 
@@ -587,38 +587,92 @@ func (m *Model) handleSearchCommand(text string) *chat.Message {
 	if len(results) == 0 {
 		return &chat.Message{
 			Kind:    chat.KindAssistant,
-			Content: fmt.Sprintf("No sessions found matching %q.", query),
+			Content: fmt.Sprintf("No sessions found matching %q. Saved sessions become searchable after successful runs.", query),
 		}
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**Search results for** %q — %d match(es)\n\n", query, len(results))
 	for i, r := range results {
-		fmt.Fprintf(&sb, "**%d.** ", i+1)
-		if r.Prompt != "" {
-			prompt := r.Prompt
-			if len(prompt) > 120 {
-				prompt = prompt[:120] + "…"
+		title := strings.TrimSpace(r.Prompt)
+		if title == "" {
+			if r.Model != "" {
+				title = fmt.Sprintf("Saved session with %s", r.Model)
+			} else {
+				title = fmt.Sprintf("Session from %s", r.Timestamp.Format("Jan 2, 2006 15:04"))
 			}
-			fmt.Fprintf(&sb, "%s\n", prompt)
-		} else {
-			fmt.Fprintf(&sb, "Session from %s\n", r.Timestamp.Format("Jan 2, 2006 15:04"))
 		}
-		fmt.Fprintf(&sb, "   %s", r.Timestamp.Format("Jan 2, 2006 15:04"))
+		if len([]rune(title)) > 120 {
+			title = string([]rune(title)[:119]) + "…"
+		}
+		fmt.Fprintf(&sb, "**%d.** %s\n", i+1, title)
+
+		metaParts := make([]string, 0, 4)
+		if r.Summary != "" {
+			metaParts = append(metaParts, r.Summary)
+		} else if !r.Timestamp.IsZero() {
+			metaParts = append(metaParts, r.Timestamp.Format("Jan 2, 2006 15:04"))
+		}
 		if r.ProjectDir != "" {
-			fmt.Fprintf(&sb, " · `%s`", r.ProjectDir)
+			metaParts = append(metaParts, fmt.Sprintf("`%s`", r.ProjectDir))
 		}
-		fmt.Fprintf(&sb, " · score %.1f\n", r.Score)
+		metaParts = append(metaParts, fmt.Sprintf("score %.1f", r.Score))
+		fmt.Fprintf(&sb, "   %s\n", strings.Join(metaParts, " · "))
+
 		if r.Snippet != "" {
 			snippet := r.Snippet
-			if len(snippet) > 300 {
-				snippet = snippet[:300] + "…"
+			if len([]rune(snippet)) > 320 {
+				snippet = string([]rune(snippet)[:319]) + "…"
 			}
-			fmt.Fprintf(&sb, "   > %s\n", snippet)
+			for _, line := range strings.Split(snippet, "\n") {
+				fmt.Fprintf(&sb, "   > %s\n", line)
+			}
 		}
 		sb.WriteString("\n")
 	}
 	return &chat.Message{Kind: chat.KindAssistant, Content: sb.String()}
+}
+
+func (m *Model) resumeSession() *chat.Message {
+	if m.busy {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Cannot resume while agent is running."}
+	}
+	if len(m.history) > 0 {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "Session already has history. Use `/clear` first to resume a previous session."}
+	}
+	session, err := agent.LoadLatestSession(m.cfg.WorkingDir)
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to load session: %v", err)}
+	}
+	if session == nil {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No previous session found for this project."}
+	}
+	msgs, err := session.RestoreMessages()
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to restore messages: %v", err)}
+	}
+	if err := m.restoreSessionState(session, msgs); err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to restore session state: %v", err)}
+	}
+	summary := session.Summary()
+	content := fmt.Sprintf("Resumed session from %s (%d messages, %d requests).", session.Timestamp.Format("Jan 2 15:04"), len(msgs), session.Usage.Requests)
+	if summary.PromptPreview != "" {
+		content += fmt.Sprintf(" Prompt: %q.", summary.PromptPreview)
+	}
+	content += fmt.Sprintf(" Restored %s.", summary.RestorableStateDescription())
+	return &chat.Message{Kind: chat.KindAssistant, Content: content}
+}
+
+func summarizePromptPreview(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return "(no saved prompt)"
+	}
+	runes := []rune(prompt)
+	if len(runes) <= 80 {
+		return prompt
+	}
+	return string(runes[:79]) + "…"
 }
 
 func (m *Model) renderConfigMessage() *chat.Message {
