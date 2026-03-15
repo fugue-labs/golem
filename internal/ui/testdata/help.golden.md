@@ -26,6 +26,12 @@
 - `/spec [file]` — start or show spec-driven development
 - `/quit` or `/exit` — quit the app
 
+**Discoverability**
+
+- Input help stays visible while you work so the shell keeps teaching next actions
+- Try `/help`, `/search <query>`, or `/doctor` from the main shell
+- Open Mission Control with `golem dashboard` and use `Tab`, `Shift+Tab`, `1-4`, and `j/k` to navigate panes
+
 **Keys**
 
 - `Enter` — send

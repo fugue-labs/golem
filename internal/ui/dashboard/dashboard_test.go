@@ -398,7 +398,7 @@ func TestRenderPaneHeaderFocusedCopy(t *testing.T) {
 	if !containsAny(plain, "▸ [2] Workers", "▸ [2] Workers ACTIVE") {
 		t.Fatalf("expected focused workers header, got %q", plain)
 	}
-	if !containsAny(plain, "ACTIVE", "j/k scroll") {
+	if !containsAny(plain, "ACTIVE", "j/k scroll", "Shift+Tab") {
 		t.Fatalf("expected active navigation hint, got %q", plain)
 	}
 }
@@ -411,7 +411,7 @@ func TestRenderHeaderNoMissionShowsReadableIdleState(t *testing.T) {
 	if !containsAny(joined, "Mission Control", "No mission") {
 		t.Fatalf("expected Mission Control no-mission header, got %q", joined)
 	}
-	if !containsAny(joined, "No active mission", "/mission new") {
+	if !containsAny(joined, "No active mission", "/mission new", "Shift+Tab reverse") {
 		t.Fatalf("expected no-mission guidance, got %q", joined)
 	}
 }

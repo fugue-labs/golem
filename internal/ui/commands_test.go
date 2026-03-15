@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/chat"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
+	"github.com/fugue-labs/golem/internal/ui/styles"
 	uiverification "github.com/fugue-labs/golem/internal/ui/verification"
 )
 
@@ -48,9 +51,23 @@ func TestCommandHelp(t *testing.T) {
 	if content == "" {
 		t.Fatal("expected non-empty help output")
 	}
-	for _, want := range []string{"/help", "/clear", "/plan", "Enter"} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("help output missing %q", want)
+	want, err := os.ReadFile(filepath.Join("testdata", "help.golden.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if strings.TrimRight(content, "\n") != strings.TrimRight(string(want), "\n") {
+		t.Fatalf("help output mismatch\n--- got ---\n%s\n--- want ---\n%s", content, string(want))
+	}
+}
+
+func TestContextualHelpIdle(t *testing.T) {
+	m := newTestModel()
+	m.sty = styles.New(nil)
+	m.width = 100
+	got := stripANSI(m.renderContextualHelpLine(m.width))
+	for _, want := range []string{"Help ·", "Try /help", "/search <query>", "/doctor", "Enter send", "Tab complete", "Esc cancel"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("contextual help missing %q in %q", want, got)
 		}
 	}
 }

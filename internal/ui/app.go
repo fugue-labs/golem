@@ -131,10 +131,10 @@ type Model struct {
 	busy            bool
 	terminalFocused bool
 	usage           core.RunUsage
-	startTime  time.Time
-	runID      int
-	hookRID    atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
-	lastPrompt string
+	startTime       time.Time
+	runID           int
+	hookRID         atomic.Int64 // hook-visible runID; read atomically by hooks from agent goroutine
+	lastPrompt      string
 
 	// Plan/invariant/verification/spec state — mirrored from tool messages.
 	planState          plan.State
@@ -253,20 +253,20 @@ func New(cfg *config.Config) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Model{
-		appCtx:         ctx,
-		appCancel:      cancel,
-		cfg:            cfg,
-		runtime:        agent.InitialRuntimeState(cfg),
-		input:          ti,
-		spinner:        sp,
-		askUserCh:      make(chan askUserRequest, 1),
-		askDone:        make(chan struct{}),
-		approvalCh:     make(chan toolApprovalRequest, 1),
-		approvalDone:   make(chan struct{}),
-		approvalAlways: make(map[string]bool),
-		approvalNever:  make(map[string]bool),
-		costTracker:    core.NewCostTracker(modelPricing()),
-		teamEventBus:   core.NewEventBus(),
+		appCtx:          ctx,
+		appCancel:       cancel,
+		cfg:             cfg,
+		runtime:         agent.InitialRuntimeState(cfg),
+		input:           ti,
+		spinner:         sp,
+		askUserCh:       make(chan askUserRequest, 1),
+		askDone:         make(chan struct{}),
+		approvalCh:      make(chan toolApprovalRequest, 1),
+		approvalDone:    make(chan struct{}),
+		approvalAlways:  make(map[string]bool),
+		approvalNever:   make(map[string]bool),
+		costTracker:     core.NewCostTracker(modelPricing()),
+		teamEventBus:    core.NewEventBus(),
 		checkpoints:     checkpoint.NewStore(cfg.WorkingDir),
 		historyIdx:      -1,
 		allSkills:       allSkills,
@@ -1847,12 +1847,13 @@ func (m *Model) renderWelcome(height, width int) string {
 		m.sty.Muted.Render("  " + truncateText("/help — browse commands and keybindings", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("/search <query> — search across all saved sessions", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("/doctor — inspect local setup before a long run", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("Input help stays visible so commands and keys remain discoverable", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("Describe the change you want and press Enter to start", bodyWidth)),
 		"",
 		m.sty.Bold.Render("  Shell regions"),
 		m.sty.Muted.Render("  " + truncateText("Header: model, repo context, and current activity", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("Transcript: conversation, tool activity, and command output", bodyWidth)),
-		m.sty.Muted.Render("  " + truncateText("Input: multiline drafting, command completion, and steering while busy", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("Input: multiline drafting plus contextual command and key hints", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("Status: usage, workflow state, paging, and key hints", bodyWidth)),
 		"",
 		m.sty.Bold.Render("  Keys"),
@@ -1875,7 +1876,75 @@ func (m *Model) renderInput() string {
 	default:
 		body = m.renderInputBusyOrIdle()
 	}
-	return m.renderShellRegion("Input", m.renderInputMeta(), m.shellWidth(), strings.Split(body, "\n"))
+	lines := make([]string, 0, 1+strings.Count(body, "\n")+1)
+	if help := m.renderContextualHelpLine(m.shellWidth()); help != "" {
+		lines = append(lines, help)
+	}
+	lines = append(lines, strings.Split(body, "\n")...)
+	return m.renderShellRegion("Input", m.renderInputMeta(), m.shellWidth(), lines)
+}
+
+func (m *Model) renderContextualHelpLine(width int) string {
+	return m.renderHelpSurfaceLine(width, ContextualHelpTitle(), m.contextualHelpSegments())
+}
+
+func ContextualHelpTitle() string {
+	return "Help"
+}
+
+func (m *Model) renderHelpSurfaceLine(width int, title string, segments []string) string {
+	if !m.shouldRenderContextualHelpLine() {
+		return ""
+	}
+	return RenderHelpSurfaceLine(width, title, segments, func(text string) string {
+		return m.wrapShellLine(m.sty.Muted.Render(text), width)
+	})
+}
+
+func RenderHelpSurfaceLine(width int, title string, segments []string, style func(string) string) string {
+	if len(segments) == 0 {
+		return ""
+	}
+	if width <= 0 {
+		width = 1
+	}
+	content := strings.TrimSpace(title)
+	if content == "" {
+		content = "Help"
+	}
+	content += " · " + strings.Join(segments, " · ")
+	content = "  " + truncateText(content, width)
+	if style != nil {
+		return style(content)
+	}
+	return content
+}
+
+func (m *Model) shouldRenderContextualHelpLine() bool {
+	if m.height > 0 && m.height < 10 {
+		return false
+	}
+	if m.hasWorkflowPanel() && m.width >= workflowPanelStackMinWidth && m.width < workflowPanelWideMinWidth {
+		return false
+	}
+	return true
+}
+
+func (m *Model) contextualHelpSegments() []string {
+	switch {
+	case m.approvalMode:
+		return []string{"y allow", "n deny", "a always allow", "d always deny", "Esc cancel"}
+	case m.askMode:
+		return []string{"Enter answer", "Esc cancel", "/help when ready"}
+	case m.busy:
+		segments := []string{"Enter steers", "Esc cancels"}
+		if queued := m.pendingCount(); queued > 0 {
+			segments = append([]string{fmt.Sprintf("%d queued", queued)}, segments...)
+		}
+		return segments
+	default:
+		return []string{"Try /help", "/search <query>", "/doctor", "Enter send", "Tab complete", "Esc cancel"}
+	}
 }
 
 func (m *Model) renderInputBusyOrIdle() string {
