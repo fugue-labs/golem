@@ -60,13 +60,12 @@ type Model struct {
 // New creates a dashboard model for the given mission ID.
 // If missionID is empty, displays the most recent active mission.
 func New(missionID string) *Model {
-	sty := styles.New(nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Model{
 		ctx:       ctx,
 		cancel:    cancel,
 		missionID: missionID,
-		sty:       sty,
+		sty:       styles.New(nil),
 	}
 }
 
@@ -83,7 +82,7 @@ type refreshDoneMsg struct {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.initStore(), tickCmd())
+	return tea.Batch(tea.RequestBackgroundColor, m.initStore(), tickCmd())
 }
 
 func (m *Model) initStore() tea.Cmd {
@@ -196,9 +195,17 @@ func (m *Model) doRefresh() tea.Msg {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		isDark := msg.IsDark()
+		m.sty = styles.NewMode(msg.Color, &isDark)
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.sty == nil {
+			m.sty = styles.New(nil)
+		}
 		return m, nil
 
 	case tickMsg:

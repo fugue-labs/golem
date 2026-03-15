@@ -350,8 +350,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
-		m.sty = styles.New(msg.Color)
-		m.spinner.Style = m.sty.SpinnerStyle
+		isDark := msg.IsDark()
+		m.applyStyles(styles.NewMode(msg.Color, &isDark))
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -1213,7 +1213,21 @@ func contextBar(pct int) string {
 	return bar
 }
 
+func (m *Model) applyStyles(sty *styles.Styles) {
+	m.sty = sty
+	if sty != nil {
+		m.spinner.Style = sty.SpinnerStyle
+	}
+}
+
+func (m *Model) ensureStyles() {
+	if m.sty == nil {
+		m.applyStyles(styles.New(nil))
+	}
+}
+
 func (m *Model) View() tea.View {
+	m.ensureStyles()
 	if m.sty == nil {
 		return tea.NewView("Loading...")
 	}
