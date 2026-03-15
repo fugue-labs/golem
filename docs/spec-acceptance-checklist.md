@@ -38,19 +38,22 @@ Documentation and implementation should agree on the currently shipped mission c
 1. **Lifecycle**
    - Mission statuses include `draft`, `planning`, `awaiting_approval`, `running`, `blocked`, `paused`, `completing`, `completed`, `failed`, and `cancelled`.
    - `/mission new <goal>` creates a durable draft mission using repo metadata supplied by the TUI.
+   - Reviewers should document current mission-creation metadata precisely: the TUI supplies `repo_root` and `base_branch`, while `base_commit` is not yet populated because `gitCommit()` still returns an empty string.
    - Reviewers must not claim repository precondition enforcement inside `CreateMission` unless that validation code actually ships.
    - Operator guidance must distinguish `awaiting_approval` from the summary phase label **`Ready to start`**.
 
 2. **Approval/start semantics**
    - `/mission plan` creates the durable mission-plan approval gate.
-   - `/mission approve` resolves that gate durably.
+   - `/mission approve` resolves that gate durably and immediately attempts start.
    - `/mission start` cannot bypass a pending plan approval.
+   - `/mission start` may begin execution from `awaiting_approval` only after the plan gate is approved and no other approvals remain pending.
    - Resume semantics are `/mission start` from `paused`.
 
 3. **Orchestration responsibilities**
    - The controller owns lifecycle transitions and mission summaries.
    - The scheduler/worker launcher dispatches ready work safely.
    - The orchestrator runs an in-process tick loop that dispatches workers, dispatches reviewers, integrates accepted work, checks completion, and emits transient operator-facing event-bus updates.
+   - The shipped TUI recreates orchestration in-process on `/mission start`; reviewers should not describe a daemon-backed resume/attach flow unless that implementation ships.
 
 4. **Persistence and dashboard behavior**
    - Mission Control and `/mission status` must read durable mission state rather than rely on transcript-only memory.

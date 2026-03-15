@@ -66,7 +66,7 @@ The implementation must be:
 
 5. **Operator control and comprehension**
    - The user can understand what the system is doing, why it is blocked, and what changed.
-   - In the shipped surface, the user can create a mission, inspect status/tasks/dashboard state, approve the mission plan, resume via `/mission start`, pause, and cancel.
+   - In the shipped surface, the user can create a mission, inspect status/tasks/dashboard state, approve the mission plan, start execution, resume from `paused` via `/mission start`, pause, and cancel.
    - Task-scoped reject/retry/replan/escalation controls discussed elsewhere in this PRD remain aspirational unless a dedicated operator surface ships.
 
 6. **Elegant implementation surface**
@@ -196,11 +196,12 @@ The current implementation is stricter and more explicit than the aspirational m
 4. **`running`**
    - Reached from `awaiting_approval` only after the durable mission-plan approval is `approved` and no other pending approvals block execution.
    - Also reached from `paused` via `/mission start`.
-   - Starting a mission resumes the orchestrator loop; it does not create a second independent scheduler.
+   - Starting a mission resumes the in-process orchestrator loop for that mission; it does not create a second independent scheduler or parallel control plane.
 
 5. **`paused`**
    - Entered only from `running` via `/mission pause`.
-   - Pausing stops new task leasing by stopping the in-process orchestrator.
+   - The TUI stops the in-process orchestrator before it asks the controller to mark the mission `paused`.
+   - The operator-facing guarantee is that no new tasks will be leased while the mission remains paused.
    - Resume semantics are currently `/mission start`, not a separate `/mission resume` command.
 
 6. **`blocked` / `completing` / terminal states**
@@ -250,7 +251,7 @@ The current implementation uses one controller-centric execution model:
   - checks for mission completion, and
   - emits **transient orchestrator/TUI event-bus updates** such as `worker.started`, `worker.completed`, `review.pass`, `review.reject`, `review.request_changes`, `integration.completed`, `integration.failed`, and `mission.completed`.
 
-Operationally, there is one orchestrator loop per active mission session in the TUI. The implementation does **not** expose separate user-controlled scheduler processes or a daemon-only control plane.
+Operationally, the TUI keeps one in-process orchestrator instance per active chat session and mission. `/mission start` resumes that mission by launching a fresh in-process loop against durable state, rather than by attaching to a separate daemon-only scheduler process.
 
 ### 7.6 Persistence and recovery expectations
 
@@ -267,7 +268,7 @@ Current persistence behavior:
   - events, and
   - artifacts.
 - Persisted event names currently include core lifecycle and orchestration records such as `mission.created`, `plan.applied`, `mission.approved`, `mission.started`, `mission.paused`, `mission.cancelled`, `worker.dispatched`, `worker.completed`, `worker.failed`, `review.dispatched`, `review.passed`, `review.rejected`, `review.changes_requested`, `integration.completed`, `integration.conflict.requeued`, `integration.error`, `recovery.completed`, `replan.applied`, and `task.unblocked`.
-- Dashboard and status views are designed to keep working after restart because they query durable state rather than transient transcript memory.
+- Restart/re-attach should preserve operator-visible truth in `/mission status` and `golem dashboard`, but the shipped TUI still recreates orchestration in-process on `/mission start` rather than reconnecting to a persistent daemon loop.
 
 The implementation is therefore **local-first and durable-first**: operator surfaces are expected to reflect persisted mission truth, even when no active chat transcript is present.
 
@@ -802,7 +803,7 @@ CREATE TABLE missions (
   title TEXT NOT NULL,
   goal TEXT NOT NULL,
   repo_root TEXT NOT NULL,
-  base_commit TEXT NOT NULL,
+  base_commit TEXT NOT NULL DEFAULT '',
   base_branch TEXT NOT NULL,
   status TEXT NOT NULL,
   policy_json TEXT NOT NULL,
@@ -1321,7 +1322,7 @@ The documentation should include representative artifact examples so implementer
 ## 17.1 Mission creation
 
 1. User creates mission from the shipped TUI surface via `/mission new <goal>` (and the standalone dashboard can later attach to the durable result).
-2. TUI mission creation supplies current repo metadata (`repo_root`, `base_branch`, `base_commit`) and `CreateMission` persists the mission in `draft`.
+2. TUI mission creation supplies current repo metadata. In the shipped implementation that currently means `repo_root` and `base_branch`, while `base_commit` is left empty because HEAD capture is not yet wired into `gitCommit()`. `CreateMission` then persists the mission in `draft`.
 3. User invokes `/mission plan`, which moves the mission to `planning` while the planner run executes.
 4. If planning succeeds, the controller applies tasks and dependencies transactionally and creates the durable mission-plan approval record.
 5. Mission moves from `planning` to `awaiting_approval`.
@@ -1716,7 +1717,7 @@ Current TUI help contract:
 
 Semantics:
 
-- `/mission new <goal>` creates the mission in `draft`; the TUI supplies current repo metadata (`repo_root`, `base_branch`, `base_commit`) when creating it
+- `/mission new <goal>` creates the mission in `draft`; the TUI supplies `repo_root` and `base_branch`, while `base_commit` is currently left empty because `gitCommit()` still returns an empty string
 - `/mission plan` moves the mission into `planning` and later applies the DAG into durable store state
 - `/mission approve` resolves the durable mission-plan approval and then attempts to start execution
 - `/mission start` starts an approved `awaiting_approval` mission or resumes a `paused` mission
@@ -1856,7 +1857,7 @@ Required primary views:
 
 ### Create mission flow
 1. capture goal/title/policy
-2. capture current repo metadata (`repo_root`, `base_branch`, `base_commit`) from the TUI session
+2. capture current repo metadata from the TUI session; in the shipped implementation this means `repo_root` and `base_branch`, while `base_commit` is still empty until HEAD capture is implemented
 3. create draft mission
 4. move into planning state and then overview/approval flow
 
