@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/fugue-labs/golem/internal/ui/chat"
+	"github.com/fugue-labs/golem/internal/ui/plan"
 	"github.com/fugue-labs/golem/internal/ui/styles"
 	"github.com/fugue-labs/gollem/ext/codetool"
 	"github.com/fugue-labs/gollem/ext/team"
@@ -138,7 +141,6 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	headerRightText := workflowPanelSummary(m)
 	headerRight := ""
 	if headerRightText != "" {
-		// Truncate summary if it would overflow the content area.
 		maxRight := contentWidth - lipgloss.Width(headerLeft) - 1
 		if maxRight > 0 {
 			headerRightText = ansi.Truncate(headerRightText, maxRight, "…")
@@ -151,104 +153,127 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	}
 	titleLine := headerLeft + strings.Repeat(" ", titleGap) + headerRight
 
-	var body []string
-	showMission := m.hasMissionState()
-	showSpec := m.specState.IsActive()
-	showPlan := m.planState.HasTasks()
-	showInv := m.invariantState.HasItems()
-	showVerify := m.verificationState.HasEntries()
-	showTeam := m.hasTeamMembers()
-	bodyBudget := max(1, height-2)
-
-	// Count how many sections we need to render.
-	sections := 0
-	if showMission {
-		sections++
-	}
-	if showSpec {
-		sections++
-	}
-	if showPlan {
-		sections++
-	}
-	if showInv {
-		sections++
-	}
-	if showVerify {
-		sections++
-	}
-	if showTeam {
-		sections++
+	type sectionSpec struct {
+		priority int
+		target   int
+		render   func(limit int) []string
 	}
 
-	if sections == 0 {
+	sections := make([]sectionSpec, 0, 6)
+	if m.hasMissionState() {
+		priority := 0
+		if summary := m.missionPanelSummary(); strings.Contains(summary, "blocked") || strings.Contains(summary, "approval") {
+			priority = -2
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 6, render: func(limit int) []string {
+			return m.renderMissionPanelLines(limit, contentWidth)
+		}})
+	}
+	if m.specState.IsActive() {
+		priority := 1
+		if m.specState.WaitingGateName() != "" {
+			priority = -1
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
+			return m.renderSpecPanelLines(limit, contentWidth)
+		}})
+	}
+	if m.planState.HasTasks() {
+		priority := 2
+		if focus := m.planState.Focus(); focus != nil {
+			switch focus.Status {
+			case "blocked":
+				priority = -1
+			case "in_progress":
+				priority = 0
+			}
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
+			return m.renderPlanPanelLines(limit, contentWidth)
+		}})
+	}
+	if m.verificationState.HasEntries() {
+		priority := 3
+		if focus := m.verificationState.Focus(); focus != nil {
+			switch {
+			case focus.Status == "fail":
+				priority = -1
+			case focus.Status == "in_progress", focus.Freshness == "stale":
+				priority = 1
+			}
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
+			return m.renderVerificationPanelLines(limit, contentWidth)
+		}})
+	}
+	if m.invariantState.HasItems() {
+		priority := 4
+		if focus := m.invariantState.Focus(); focus != nil {
+			switch focus.Status {
+			case "fail":
+				priority = 0
+			case "in_progress":
+				priority = 2
+			}
+		}
+		sections = append(sections, sectionSpec{priority: priority, target: 4, render: func(limit int) []string {
+			return m.renderInvariantPanelLines(limit, contentWidth)
+		}})
+	}
+	if m.hasTeamMembers() {
+		sections = append(sections, sectionSpec{priority: 5, target: 3, render: func(limit int) []string {
+			return m.renderTeamPanelLines(limit, contentWidth)
+		}})
+	}
+	if len(sections) > 1 {
+		slices.SortStableFunc(sections, func(a, b sectionSpec) int {
+			return cmp.Compare(a.priority, b.priority)
+		})
+	}
+
+	body := make([]string, 0, max(1, height-2))
+	if len(sections) == 0 {
 		body = append(body, m.sty.Muted.Render("No workflow state yet."))
 	} else {
-		// Subtract separator lines between sections.
-		if sections > 1 {
-			bodyBudget = max(sections, height-2-(sections-1))
+		usableLines := max(1, height-2)
+		if len(sections) > 1 {
+			usableLines = max(len(sections), usableLines-(len(sections)-1))
 		}
-		perSection := max(1, bodyBudget/sections)
-		remainder := bodyBudget - perSection*sections
+		budgets := make([]int, len(sections))
+		for i := range budgets {
+			budgets[i] = 1
+		}
+		extra := usableLines - len(sections)
+		for extra > 0 {
+			progressed := false
+			for i, sec := range sections {
+				if extra == 0 {
+					break
+				}
+				if budgets[i] >= sec.target {
+					continue
+				}
+				budgets[i]++
+				extra--
+				progressed = true
+			}
+			if progressed {
+				continue
+			}
+			for i := range sections {
+				if extra == 0 {
+					break
+				}
+				budgets[i]++
+				extra--
+			}
+		}
 
-		if showMission {
-			budget := perSection
-			if remainder > 0 {
-				budget++
-				remainder--
-			}
-			body = append(body, m.renderMissionPanelLines(budget, contentWidth)...)
-		}
-		if showSpec {
-			budget := perSection
-			if remainder > 0 {
-				budget++
-				remainder--
-			}
-			body = append(body, m.renderSpecPanelLines(budget, contentWidth)...)
-		}
-		if showTeam {
-			if len(body) > 0 {
+		for i, sec := range sections {
+			if i > 0 {
 				body = append(body, sep)
 			}
-			budget := perSection
-			if remainder > 0 {
-				budget++
-				remainder--
-			}
-			body = append(body, m.renderTeamPanelLines(budget, contentWidth)...)
-		}
-		if showPlan {
-			if len(body) > 0 {
-				body = append(body, sep)
-			}
-			budget := perSection
-			if remainder > 0 {
-				budget++
-				remainder--
-			}
-			body = append(body, m.renderPlanPanelLines(budget, contentWidth)...)
-		}
-		if showInv {
-			if len(body) > 0 {
-				body = append(body, sep)
-			}
-			budget := perSection
-			if remainder > 0 {
-				budget++
-				remainder--
-			}
-			body = append(body, m.renderInvariantPanelLines(budget, contentWidth)...)
-		}
-		if showVerify {
-			if len(body) > 0 {
-				body = append(body, sep)
-			}
-			budget := perSection
-			if remainder > 0 {
-				budget++
-			}
-			body = append(body, m.renderVerificationPanelLines(budget, contentWidth)...)
+			body = append(body, sec.render(budgets[i])...)
 		}
 	}
 
@@ -276,7 +301,48 @@ func workflowPanelSummary(m *Model) string {
 		parts = append(parts, missionSummary)
 	}
 	if m.specState.IsActive() {
-		parts = append(parts, fmt.Sprintf("spec %s · %s", m.specState.PhaseLabel(), m.specState.GateSummary()))
+		if gate := m.specState.WaitingGateName(); gate != "" {
+			parts = append(parts, "spec approval")
+		} else {
+			parts = append(parts, "spec "+strings.ToLower(m.specState.Headline()))
+		}
+	}
+	if focus := m.planState.Focus(); focus != nil {
+		switch focus.Status {
+		case "blocked":
+			parts = append(parts, "plan blocked")
+		case "in_progress":
+			parts = append(parts, "plan active")
+		default:
+			completed, total := m.planState.Progress()
+			parts = append(parts, fmt.Sprintf("plan %d/%d", completed, total))
+		}
+	}
+	if focus := m.verificationState.Focus(); focus != nil {
+		switch {
+		case focus.Status == "fail":
+			parts = append(parts, "verify failed")
+		case focus.Status == "in_progress":
+			parts = append(parts, "verify running")
+		case focus.Freshness == "stale":
+			parts = append(parts, "verify stale")
+		default:
+			parts = append(parts, "verify ok")
+		}
+	}
+	if focus := m.invariantState.Focus(); focus != nil {
+		switch focus.Status {
+		case "fail":
+			parts = append(parts, "inv failing")
+		case "in_progress":
+			parts = append(parts, "inv checking")
+		case "unknown":
+			parts = append(parts, "inv open")
+		default:
+			parts = append(parts, "inv pass")
+		}
+	} else if m.invariantState.Extracted {
+		parts = append(parts, "inv pending")
 	}
 	if m.hasTeamMembers() {
 		members := activeTeamMembers(m.runtime.Session.Team.Members())
@@ -287,15 +353,6 @@ func workflowPanelSummary(m *Model) string {
 			}
 		}
 		parts = append(parts, fmt.Sprintf("team %d/%d", running, len(members)))
-	}
-	if completed, total := m.planState.Progress(); total > 0 {
-		parts = append(parts, fmt.Sprintf("plan %d/%d", completed, total))
-	}
-	if hardTotal, hardPass, hardFail, hardUnresolved, _, _, _ := m.invariantState.Counts(); hardTotal > 0 || m.invariantState.Extracted {
-		parts = append(parts, fmt.Sprintf("inv %d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved))
-	}
-	if total, pass, fail, stale, inProgress := m.verificationState.Counts(); total > 0 {
-		parts = append(parts, fmt.Sprintf("verify %d✓ %d✗ %d◐ %d*", pass, fail, inProgress, stale))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -314,14 +371,13 @@ func (m *Model) renderTeamPanelLines(limit, width int) []string {
 			idle++
 		}
 	}
-	header := fmt.Sprintf("Team %d↑ %d○", running, idle)
-	lines := []string{m.sty.Panel.Progress.Render(header)}
+	lines := []string{m.workflowProgressLine(fmt.Sprintf("Team %d active · %d ready", running, idle), width)}
 	if limit == 1 {
 		return lines
 	}
 	itemBudget := limit - 1
 	maxItems := min(itemBudget, len(members))
-	for i := range maxItems {
+	for i := 0; i < maxItems; i++ {
 		mi := members[i]
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
 		switch mi.State.String() {
@@ -334,8 +390,8 @@ func (m *Model) renderTeamPanelLines(limit, width int) []string {
 		case "starting":
 			icon = m.sty.Panel.IconPending.Render(styles.PendingIcon)
 		}
-		label := ansi.Truncate(mi.Name+" ("+mi.State.String()+")", max(1, width-4), "...")
-		lines = append(lines, fmt.Sprintf(" %s %s", icon, m.sty.Panel.TaskText.Render(label)))
+		label := mi.Name + " (" + mi.State.String() + ")"
+		lines = append(lines, m.workflowBullet(icon, label, width, false))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")
@@ -344,41 +400,72 @@ func (m *Model) renderTeamPanelLines(limit, width int) []string {
 }
 
 func (m *Model) renderPlanPanelLines(limit, width int) []string {
-	if limit <= 0 {
+	if limit <= 0 || !m.planState.HasTasks() {
 		return nil
 	}
 	completed, total := m.planState.Progress()
-	lines := []string{m.sty.Panel.Progress.Render(fmt.Sprintf("Plan %d/%d completed", completed, total))}
+	_, inProgress, blocked, pending := m.planState.Counts()
+	focus := m.planState.Focus()
+	header := fmt.Sprintf("Plan %d/%d complete", completed, total)
+	switch {
+	case focus == nil:
+	case focus.Status == "blocked":
+		header = fmt.Sprintf("Plan %s blocked", styles.BlockedIcon)
+	case focus.Status == "in_progress":
+		header = fmt.Sprintf("Plan %s active", styles.InProgressIcon)
+	case completed == total && total > 0:
+		header = fmt.Sprintf("Plan %s complete", styles.CheckIcon)
+	default:
+		header = fmt.Sprintf("Plan %s next up", styles.PendingIcon)
+	}
+	lines := []string{m.workflowProgressLine(header, width)}
 	if limit == 1 {
 		return lines
 	}
-	itemBudget := limit - 1
-	maxItems := min(itemBudget, len(m.planState.Tasks))
-	if len(m.planState.Tasks) > itemBudget && itemBudget > 0 {
-		maxItems = itemBudget - 1
+	if focus != nil {
+		lines = append(lines, m.renderPlanSpotlight(focus, width))
 	}
-	for i := range maxItems {
-		t := m.planState.Tasks[i]
+	if len(lines) < limit {
+		if next := m.planState.Next(); next != nil && (focus == nil || next.ID != focus.ID) {
+			lines = append(lines, m.workflowBullet(m.sty.Panel.IconPending.Render(styles.PendingIcon), "Next: "+next.Description, width, false))
+		}
+	}
+	if len(lines) < limit {
+		counts := fmt.Sprintf("Done %d/%d · Active %d · Blocked %d · Pending %d", completed, total, inProgress, blocked, pending)
+		lines = append(lines, m.workflowProgressLine(counts, width))
+	}
+	for i := range m.planState.Tasks {
+		if len(lines) >= limit {
+			break
+		}
+		task := m.planState.Tasks[i]
+		if focus != nil && task.ID == focus.ID {
+			continue
+		}
+		if next := m.planState.Next(); next != nil && task.ID == next.ID {
+			continue
+		}
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
-		switch t.Status {
+		done := false
+		switch task.Status {
 		case "completed":
 			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+			done = true
 		case "in_progress":
 			icon = m.sty.Panel.IconInProgress.Render(styles.InProgressIcon)
 		case "blocked":
 			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
 		}
-		desc := ansi.Truncate(t.Description, max(1, width-4), "...")
-		if t.Status == "completed" {
-			desc = m.sty.Panel.TaskDone.Render(desc)
-		} else {
-			desc = m.sty.Panel.TaskText.Render(desc)
-		}
-		lines = append(lines, fmt.Sprintf(" %s %s", icon, desc))
+		lines = append(lines, m.workflowBullet(icon, task.Description, width, done))
 	}
-	remaining := len(m.planState.Tasks) - maxItems
-	if remaining > 0 && len(lines) < limit {
-		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("... +%d plan tasks", remaining)))
+	if len(m.planState.Tasks) > 0 && len(lines) < limit {
+		shown := len(lines) - 1
+		if shown < len(m.planState.Tasks) {
+			remaining := len(m.planState.Tasks) - shown
+			if remaining > 0 {
+				lines = append(lines, m.sty.Muted.Render(ansi.Truncate(fmt.Sprintf("… +%d plan tasks", remaining), max(1, width), "…")))
+			}
+		}
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")
@@ -387,51 +474,78 @@ func (m *Model) renderPlanPanelLines(limit, width int) []string {
 }
 
 func (m *Model) renderInvariantPanelLines(limit, width int) []string {
-	if limit <= 0 {
+	if limit <= 0 || !m.invariantState.HasItems() {
 		return nil
 	}
 	hardTotal, hardPass, hardFail, hardUnresolved, _, _, _ := m.invariantState.Counts()
-	lines := []string{m.sty.Panel.Progress.Render(fmt.Sprintf("Inv %d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved))}
-	if hardTotal == 0 && !m.invariantState.Extracted {
-		lines[0] = m.sty.Panel.Progress.Render("Inv pending")
+	focus := m.invariantState.Focus()
+	header := fmt.Sprintf("Inv %d✓ %d✗ %d?", hardPass, hardFail, hardUnresolved)
+	switch {
+	case focus != nil && focus.Status == "fail":
+		header = fmt.Sprintf("Inv %s failing", styles.BlockedIcon)
+	case focus != nil && focus.Status == "in_progress":
+		header = fmt.Sprintf("Inv %s checking", styles.InProgressIcon)
+	case focus != nil && focus.Status == "unknown":
+		header = "Inv unresolved"
+	case hardTotal > 0 && hardUnresolved == 0 && hardFail == 0:
+		header = fmt.Sprintf("Inv %s satisfied", styles.CheckIcon)
 	}
+	lines := []string{m.workflowProgressLine(header, width)}
 	if limit == 1 {
 		return lines
 	}
-	itemBudget := limit - 1
-	maxItems := min(itemBudget, len(m.invariantState.Items))
-	if len(m.invariantState.Items) > itemBudget && itemBudget > 0 {
-		maxItems = itemBudget - 1
-	}
-	for i := range maxItems {
-		item := m.invariantState.Items[i]
+	if focus != nil {
+		prefix := "Open: "
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
+		switch focus.Status {
+		case "pass":
+			prefix = "Pass: "
+			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+		case "fail":
+			prefix = "Failing: "
+			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
+		case "in_progress":
+			prefix = "Checking: "
+			icon = m.sty.Panel.IconInProgress.Render(styles.InProgressIcon)
+		}
+		lines = append(lines, m.workflowBullet(icon, prefix+focus.Description, width, focus.Status == "pass"))
+	}
+	if len(lines) < limit {
+		if next := m.invariantState.Next(); next != nil && (focus == nil || next.ID != focus.ID) {
+			lines = append(lines, m.workflowBullet(m.sty.Panel.IconPending.Render(styles.PendingIcon), "Next: "+next.Description, width, false))
+		}
+	}
+	if len(lines) < limit {
+		lines = append(lines, m.workflowProgressLine(m.invariantState.Summary(), width))
+	}
+	for i := range m.invariantState.Items {
+		if len(lines) >= limit {
+			break
+		}
+		item := m.invariantState.Items[i]
+		if focus != nil && item.ID == focus.ID {
+			continue
+		}
+		if next := m.invariantState.Next(); next != nil && item.ID == next.ID {
+			continue
+		}
+		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
+		done := false
 		switch item.Status {
 		case "pass":
 			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+			done = true
 		case "fail":
 			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
 		case "in_progress":
 			icon = m.sty.Panel.IconInProgress.Render(styles.InProgressIcon)
 		}
-		kind := strings.ToUpper(strings.TrimSpace(item.Kind))
-		if kind == "" {
-			kind = "H"
-		} else {
-			kind = kind[:1]
+		kind := "H"
+		if strings.TrimSpace(item.Kind) != "" {
+			kind = strings.ToUpper(strings.TrimSpace(item.Kind))[:1]
 		}
-		label := fmt.Sprintf("%s %s %s", item.ID, kind, item.Description)
-		label = ansi.Truncate(strings.TrimSpace(label), max(1, width-4), "...")
-		if item.Status == "pass" {
-			label = m.sty.Panel.TaskDone.Render(label)
-		} else {
-			label = m.sty.Panel.TaskText.Render(label)
-		}
-		lines = append(lines, fmt.Sprintf(" %s %s", icon, label))
-	}
-	remaining := len(m.invariantState.Items) - maxItems
-	if remaining > 0 && len(lines) < limit {
-		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("... +%d invariants", remaining)))
+		label := strings.TrimSpace(item.ID + " " + kind + " " + item.Description)
+		lines = append(lines, m.workflowBullet(icon, label, width, done))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")
@@ -440,26 +554,69 @@ func (m *Model) renderInvariantPanelLines(limit, width int) []string {
 }
 
 func (m *Model) renderVerificationPanelLines(limit, width int) []string {
-	if limit <= 0 {
+	if limit <= 0 || !m.verificationState.HasEntries() {
 		return nil
 	}
 	_, pass, fail, stale, inProgress := m.verificationState.Counts()
+	focus := m.verificationState.Focus()
 	header := fmt.Sprintf("Verify %d✓ %d✗ %d◐ %d*", pass, fail, inProgress, stale)
-	lines := []string{m.sty.Panel.Progress.Render(header)}
+	switch {
+	case focus != nil && focus.Status == "fail":
+		header = fmt.Sprintf("Verify %s failed", styles.BlockedIcon)
+	case focus != nil && focus.Status == "in_progress":
+		header = fmt.Sprintf("Verify %s running", styles.InProgressIcon)
+	case focus != nil && focus.Freshness == "stale":
+		header = "Verify stale"
+	case fail == 0 && stale == 0 && inProgress == 0 && pass > 0:
+		header = fmt.Sprintf("Verify %s clean", styles.CheckIcon)
+	}
+	lines := []string{m.workflowProgressLine(header, width)}
 	if limit == 1 {
 		return lines
 	}
-	itemBudget := limit - 1
-	maxItems := min(itemBudget, len(m.verificationState.Entries))
-	if len(m.verificationState.Entries) > itemBudget && itemBudget > 0 {
-		maxItems = itemBudget - 1
-	}
-	for i := range maxItems {
-		entry := m.verificationState.Entries[i]
+	if focus != nil {
+		prefix := "Latest: "
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
+		if focus.Status == "fail" {
+			prefix = "Failing: "
+			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
+		} else if focus.Status == "in_progress" {
+			prefix = "Running: "
+			icon = m.sty.Panel.IconInProgress.Render(styles.InProgressIcon)
+		} else if focus.Freshness == "stale" {
+			prefix = "Re-run: "
+			icon = m.sty.Panel.IconPending.Render(styles.PendingIcon)
+		} else if focus.Status == "pass" {
+			prefix = "Passed: "
+			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+		}
+		lines = append(lines, m.workflowBullet(icon, prefix+focus.Command, width, focus.Status == "pass" && focus.Freshness != "stale"))
+	}
+	if len(lines) < limit {
+		if next := m.verificationState.Next(); next != nil && (focus == nil || next.ID != focus.ID) {
+			lines = append(lines, m.workflowBullet(m.sty.Panel.IconPending.Render(styles.PendingIcon), "Next: "+next.Command, width, false))
+		}
+	}
+	if len(lines) < limit {
+		lines = append(lines, m.workflowProgressLine(m.verificationState.Summary(), width))
+	}
+	for i := range m.verificationState.Entries {
+		if len(lines) >= limit {
+			break
+		}
+		entry := m.verificationState.Entries[i]
+		if focus != nil && entry.ID == focus.ID {
+			continue
+		}
+		if next := m.verificationState.Next(); next != nil && entry.ID == next.ID {
+			continue
+		}
+		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
+		done := false
 		switch entry.Status {
 		case "pass":
 			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+			done = entry.Freshness != "stale"
 		case "fail":
 			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
 		case "in_progress":
@@ -469,17 +626,7 @@ func (m *Model) renderVerificationPanelLines(limit, width int) []string {
 		if entry.Freshness == "stale" {
 			label += " *"
 		}
-		label = ansi.Truncate(strings.TrimSpace(label), max(1, width-4), "...")
-		if entry.Status == "pass" && entry.Freshness != "stale" {
-			label = m.sty.Panel.TaskDone.Render(label)
-		} else {
-			label = m.sty.Panel.TaskText.Render(label)
-		}
-		lines = append(lines, fmt.Sprintf(" %s %s", icon, label))
-	}
-	remaining := len(m.verificationState.Entries) - maxItems
-	if remaining > 0 && len(lines) < limit {
-		lines = append(lines, m.sty.Muted.Render(fmt.Sprintf("... +%d verifications", remaining)))
+		lines = append(lines, m.workflowBullet(icon, label, width, done))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")
@@ -491,32 +638,84 @@ func (m *Model) renderSpecPanelLines(limit, width int) []string {
 	if limit <= 0 || !m.specState.IsActive() {
 		return nil
 	}
-	header := fmt.Sprintf("Spec — %s · %s", m.specState.PhaseLabel(), m.specState.GateSummary())
-	lines := []string{m.sty.Panel.Progress.Render(header)}
+	header := "Spec — " + m.specState.Headline()
+	lines := []string{m.workflowProgressLine(header, width)}
 	if limit == 1 {
 		return lines
 	}
-	itemBudget := limit - 1
-	maxItems := min(itemBudget, len(m.specState.Gates))
-	if len(m.specState.Gates) > itemBudget && itemBudget > 0 {
-		maxItems = itemBudget - 1
+	lines = append(lines, m.workflowBullet(m.sty.Panel.IconPending.Render(styles.PendingIcon), m.specState.NextAction(), width, false))
+	if len(lines) >= limit {
+		return lines[:limit]
 	}
-	for i := range maxItems {
-		g := m.specState.Gates[i]
+	progress := m.specState.GateSummary()
+	if completed, total := m.specState.Progress(); total > 0 {
+		progress += fmt.Sprintf(" · Tasks %d/%d", completed, total)
+	}
+	lines = append(lines, m.workflowProgressLine(progress, width))
+	if len(lines) >= limit {
+		return lines[:limit]
+	}
+	if fileLine := strings.TrimSpace(m.specState.FileLabel()); fileLine != "" {
+		lines = append(lines, m.workflowBullet(m.sty.Panel.IconPending.Render(styles.HollowIcon), fileLine, width, false))
+	}
+	visible := m.specState.VisibleGates()
+	focus := m.specState.FocusGateName()
+	for i := range visible {
+		if len(lines) >= limit {
+			break
+		}
+		g := visible[i]
 		icon := m.sty.Panel.IconPending.Render(styles.HollowIcon)
+		done := false
+		label := g.Name
 		if g.Status == "passed" {
 			icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+			done = true
+		} else if strings.EqualFold(focus, g.Name) {
+			label = "Gate: " + label
+			icon = m.sty.Panel.IconPending.Render(styles.PendingIcon)
 		}
-		label := ansi.Truncate(g.Name, max(1, width-4), "...")
-		if g.Status == "passed" {
-			label = m.sty.Panel.TaskDone.Render(label)
-		} else {
-			label = m.sty.Panel.TaskText.Render(label)
-		}
-		lines = append(lines, fmt.Sprintf(" %s %s", icon, label))
+		lines = append(lines, m.workflowBullet(icon, label, width, done))
 	}
 	for len(lines) < limit {
 		lines = append(lines, "")
 	}
 	return lines[:limit]
+}
+
+func (m *Model) renderPlanSpotlight(task *plan.Task, width int) string {
+	icon := m.sty.Panel.IconPending.Render(styles.PendingIcon)
+	prefix := "Next: "
+	done := false
+	switch task.Status {
+	case "completed":
+		icon = m.sty.Panel.IconCompleted.Render(styles.CheckIcon)
+		prefix = "Done: "
+		done = true
+	case "in_progress":
+		icon = m.sty.Panel.IconInProgress.Render(styles.InProgressIcon)
+		prefix = "In progress: "
+	case "blocked":
+		icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
+		prefix = "Blocked: "
+	}
+	label := prefix + task.Description
+	if task.Notes != "" && task.Status == "blocked" {
+		label += " — " + task.Notes
+	}
+	return m.workflowBullet(icon, label, width, done)
+}
+
+func (m *Model) workflowProgressLine(text string, width int) string {
+	return m.sty.Panel.Progress.Render(ansi.Truncate(strings.TrimSpace(text), max(1, width), "…"))
+}
+
+func (m *Model) workflowBullet(icon, label string, width int, done bool) string {
+	label = ansi.Truncate(strings.TrimSpace(label), max(1, width-4), "…")
+	if done {
+		label = m.sty.Panel.TaskDone.Render(label)
+	} else {
+		label = m.sty.Panel.TaskText.Render(label)
+	}
+	return fmt.Sprintf(" %s %s", icon, label)
 }

@@ -1,6 +1,7 @@
 package verification
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/fugue-labs/gollem/ext/codetool"
@@ -54,10 +55,10 @@ func (s *State) MarkAllStale(reason string) {
 func (s *State) Counts() (total, pass, fail, stale, inProgress int) {
 	total = len(s.Entries)
 	for _, e := range s.Entries {
-		if e.Freshness == "stale" {
+		if normalizeFreshness(e.Freshness) == "stale" {
 			stale++
 		}
-		switch e.Status {
+		switch normalizeStatus(e.Status) {
 		case "pass":
 			pass++
 		case "fail":
@@ -67,6 +68,60 @@ func (s *State) Counts() (total, pass, fail, stale, inProgress int) {
 		}
 	}
 	return
+}
+
+// Summary returns an attention-first summary for the workflow rail.
+func (s *State) Summary() string {
+	_, pass, fail, stale, inProgress := s.Counts()
+	switch {
+	case fail > 0:
+		return fmt.Sprintf("%d fail · %d running · %d stale · %d pass", fail, inProgress, stale, pass)
+	case inProgress > 0:
+		return fmt.Sprintf("%d running · %d stale · %d pass", inProgress, stale, pass)
+	case stale > 0:
+		return fmt.Sprintf("%d stale · %d pass", stale, pass)
+	case pass > 0:
+		return fmt.Sprintf("%d pass", pass)
+	default:
+		return ""
+	}
+}
+
+// Focus returns the most urgent verification entry.
+func (s *State) Focus() *Entry {
+	for i := range s.Entries {
+		if normalizeStatus(s.Entries[i].Status) == "fail" {
+			return &s.Entries[i]
+		}
+	}
+	for i := range s.Entries {
+		if normalizeStatus(s.Entries[i].Status) == "in_progress" {
+			return &s.Entries[i]
+		}
+	}
+	for i := range s.Entries {
+		if normalizeFreshness(s.Entries[i].Freshness) == "stale" {
+			return &s.Entries[i]
+		}
+	}
+	if len(s.Entries) == 0 {
+		return nil
+	}
+	return &s.Entries[0]
+}
+
+// Next returns the next command that should likely run after the focus entry.
+func (s *State) Next() *Entry {
+	for i := range s.Entries {
+		status := normalizeStatus(s.Entries[i].Status)
+		if status == "in_progress" {
+			continue
+		}
+		if status == "fail" || normalizeFreshness(s.Entries[i].Freshness) == "stale" {
+			return &s.Entries[i]
+		}
+	}
+	return nil
 }
 
 // Badge returns a compact status indicator for the status bar.
@@ -79,10 +134,10 @@ func (s *State) Badge() string {
 	hasInProgress := false
 	allPass := true
 	for _, e := range s.Entries {
-		if e.Freshness == "stale" {
+		if normalizeFreshness(e.Freshness) == "stale" {
 			hasStale = true
 		}
-		switch e.Status {
+		switch normalizeStatus(e.Status) {
 		case "fail":
 			hasFail = true
 			allPass = false
@@ -90,7 +145,7 @@ func (s *State) Badge() string {
 			hasInProgress = true
 			allPass = false
 		default:
-			if e.Status != "pass" {
+			if normalizeStatus(e.Status) != "pass" {
 				allPass = false
 			}
 		}

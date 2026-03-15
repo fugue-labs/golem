@@ -65,22 +65,32 @@ func (p Panel) View() tea.View {
 	}
 
 	var b strings.Builder
-	header := fmt.Sprintf("Spec — %s · %s", p.state.PhaseLabel(), p.state.GateSummary())
-	b.WriteString(header)
+	b.WriteString("Spec — ")
+	b.WriteString(p.state.Headline())
 	b.WriteByte('\n')
+	b.WriteString(p.state.NextAction())
+	b.WriteByte('\n')
+	b.WriteString(p.state.GateSummary())
+	if completed, total := p.state.Progress(); total > 0 {
+		b.WriteString(fmt.Sprintf(" · Tasks: %d/%d", completed, total))
+	}
+	b.WriteByte('\n')
+	if file := p.state.FileLabel(); file != "" {
+		b.WriteString(file)
+		b.WriteByte('\n')
+	}
 
-	for _, g := range p.state.Gates {
+	focus := p.state.FocusGateName()
+	for _, g := range p.state.VisibleGates() {
 		icon := "○"
+		label := g.Name
 		if g.Status == "passed" {
 			icon = "✓"
+		} else if strings.EqualFold(g.Name, focus) {
+			label = "Approval gate: " + label
 		}
-		b.WriteString(fmt.Sprintf(" %s %s\n", icon, g.Name))
+		b.WriteString(fmt.Sprintf(" %s %s\n", icon, label))
 	}
 
-	completed, total := p.state.Progress()
-	if total > 0 {
-		b.WriteString(fmt.Sprintf("Tasks: %d/%d\n", completed, total))
-	}
-
-	return tea.NewView(b.String())
+	return tea.NewView(strings.TrimRight(b.String(), "\n"))
 }
