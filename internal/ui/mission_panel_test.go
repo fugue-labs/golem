@@ -297,19 +297,113 @@ func TestMissionPanelLimitTruncatesTaskList(t *testing.T) {
 	}
 }
 
-func TestMissionPanelSummaryFormat(t *testing.T) {
+func TestMissionPanelPrioritizesRunningTaskForNextAction(t *testing.T) {
 	m, ctrl := testMissionModel(t)
 
 	tasks := []mission.Task{
-		{ID: "t_1", Title: "A", Kind: mission.TaskKindCode, Status: mission.TaskDone, Priority: 2, RiskLevel: mission.RiskLow},
-		{ID: "t_2", Title: "B", Kind: mission.TaskKindCode, Status: mission.TaskReady, Priority: 1, RiskLevel: mission.RiskLow},
+		{ID: "t_run", Title: "Implement worker lane", Kind: mission.TaskKindCode, Status: mission.TaskRunning, Priority: 3, RiskLevel: mission.RiskLow},
+		{ID: "t_ready", Title: "Polish dashboard", Kind: mission.TaskKindDocs, Status: mission.TaskReady, Priority: 1, RiskLevel: mission.RiskLow},
+	}
+	missionID := seedMission(t, ctrl, mission.MissionRunning, tasks)
+	m.activeMissionID = missionID
+
+	rendered := stripANSI(strings.Join(m.renderMissionPanelLines(8, 70), "\n"))
+	if !strings.Contains(rendered, "In progress: Implement worker lane") {
+		t.Fatalf("expected running task spotlight\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Next: Polish dashboard") {
+		t.Fatalf("expected ready task queued next line\n%s", rendered)
+	}
+
+	msg, _ := m.handleMissionCommand("/mission status")
+	if !strings.Contains(msg.Content, "Monitor active work on Implement worker lane") {
+		t.Fatalf("expected running-task next action in status message\n%s", msg.Content)
+	}
+}
+
+func TestMissionStatusKeepsRunningLifecycleWhileSurfacingBlockedTasks(t *testing.T) {
+	m, ctrl := testMissionModel(t)
+
+	tasks := []mission.Task{
+		{ID: "t_blocked", Title: "Unblock schema sync", Kind: mission.TaskKindCode, Status: mission.TaskBlocked, Priority: 2, RiskLevel: mission.RiskLow},
+		{ID: "t_ready", Title: "Apply follow-up patch", Kind: mission.TaskKindCode, Status: mission.TaskReady, Priority: 1, RiskLevel: mission.RiskLow},
+	}
+	missionID := seedMission(t, ctrl, mission.MissionRunning, tasks)
+	blockedTask, err := ctrl.Store().GetTask(context.Background(), "t_blocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedTask.BlockingReason = "waiting on schema approval"
+	if err := ctrl.Store().UpdateTask(context.Background(), blockedTask); err != nil {
+		t.Fatal(err)
+	}
+	m.activeMissionID = missionID
+
+	msg, _ := m.handleMissionCommand("/mission status")
+	for _, want := range []string{
+		"**Status**: running",
+		"**Phase**: Running · ready queue",
+		"**Attention**: 1 blocked task(s)",
+		"**Next action**: Unblock Unblock schema sync: waiting on schema approval",
+		"- Blocked: Unblock schema sync — waiting on schema approval",
+	} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("status missing %q\n%s", want, msg.Content)
+		}
+	}
+}
+
+func TestMissionPanelSummaryTreatsTaskBlockersAsAttentionNotBlockedLifecycle(t *testing.T) {
+	m, ctrl := testMissionModel(t)
+
+	tasks := []mission.Task{
+		{ID: "t_blocked", Title: "Resolve migration conflict", Kind: mission.TaskKindCode, Status: mission.TaskBlocked, Priority: 2, RiskLevel: mission.RiskLow},
+		{ID: "t_done", Title: "Ship base migration", Kind: mission.TaskKindCode, Status: mission.TaskDone, Priority: 1, RiskLevel: mission.RiskLow},
 	}
 	missionID := seedMission(t, ctrl, mission.MissionRunning, tasks)
 	m.activeMissionID = missionID
 
 	summary := m.missionPanelSummary()
-	if summary != "mission 1/2" {
-		t.Fatalf("summary=%q, want %q", summary, "mission 1/2")
+	if strings.Contains(summary, "mission blocked") {
+		t.Fatalf("task blockers should not rewrite lifecycle summary: %q", summary)
+	}
+	if !strings.Contains(summary, "mission attention") || !strings.Contains(summary, "blocked") {
+		t.Fatalf("expected attention summary for blocked tasks, got %q", summary)
+	}
+}
+
+func TestMissionApprovalGateWinsOverPendingApprovalAttention(t *testing.T) {
+	m, ctrl := testMissionModel(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	created, err := ctrl.CreateMission(ctx, mission.CreateMissionRequest{Title: "Approval gate", Goal: "Need approval", RepoRoot: "/tmp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ctrl.ApplyPlan(ctx, created.ID, &mission.PlanResult{
+		Summary: "plan",
+		Tasks:   []mission.PlanTask{{ID: "t_a", Title: "First task", Kind: mission.TaskKindCode, Priority: 1, RiskLevel: mission.RiskLow}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctrl.Store().CreateApproval(ctx, &mission.Approval{
+		ID:        "ap_1",
+		MissionID: created.ID,
+		Kind:      "plan",
+		Status:    mission.ApprovalPending,
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.activeMissionID = created.ID
+
+	rendered := stripANSI(strings.Join(m.renderMissionPanelLines(6, 120), "\n"))
+	if !strings.Contains(rendered, "Approval: Review the proposed mission plan and approve start with /mission approve") {
+		t.Fatalf("expected approval gate spotlight\n%s", rendered)
+	}
+	if !strings.Contains(m.missionPanelSummary(), "mission awaiting approval") {
+		t.Fatalf("expected awaiting approval summary, got %q", m.missionPanelSummary())
 	}
 }
 

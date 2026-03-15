@@ -198,15 +198,34 @@ func renderMissionSummaryMessage(summary *mission.MissionSummary) *chat.Message 
 
 	if summary.ActiveRuns > 0 {
 		fmt.Fprintf(&b, "**Active runs**: %d\n", summary.ActiveRuns)
+		for _, task := range summary.RunningTasks {
+			fmt.Fprintf(&b, "- Running: %s\n", task.Title)
+		}
 	}
 	if summary.PendingApprovals > 0 {
 		fmt.Fprintf(&b, "**Pending approvals**: %d\n", summary.PendingApprovals)
 	}
 	if len(summary.BlockedTasks) > 0 {
 		fmt.Fprintf(&b, "**Blocked tasks**: %d\n", len(summary.BlockedTasks))
+		for _, task := range summary.BlockedTasks {
+			if task.BlockingReason != "" {
+				fmt.Fprintf(&b, "- Blocked: %s — %s\n", task.Title, task.BlockingReason)
+			} else {
+				fmt.Fprintf(&b, "- Blocked: %s\n", task.Title)
+			}
+		}
 	}
 	if len(summary.ReviewTasks) > 0 {
 		fmt.Fprintf(&b, "**Awaiting review**: %d\n", len(summary.ReviewTasks))
+		for _, task := range summary.ReviewTasks {
+			fmt.Fprintf(&b, "- Review: %s\n", task.Title)
+		}
+	}
+	if len(summary.ReadyTasks) > 0 {
+		fmt.Fprintf(&b, "**Ready queue**: %d\n", len(summary.ReadyTasks))
+		for _, task := range summary.ReadyTasks {
+			fmt.Fprintf(&b, "- Ready: %s\n", task.Title)
+		}
 	}
 
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}

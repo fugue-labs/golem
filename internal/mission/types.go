@@ -337,18 +337,66 @@ func (tc TaskCounts) Remaining() int {
 	return remaining
 }
 
-// HasApprovalGate returns true when the mission is currently waiting on approval.
+// HasApprovalGate returns true when the mission lifecycle itself is paused at an approval gate.
 func (s *MissionSummary) HasApprovalGate() bool {
 	if s == nil || s.Mission == nil {
 		return false
 	}
-	return s.PendingApprovals > 0 || s.Mission.Status == MissionAwaitingApproval
+	return s.Mission.Status == MissionAwaitingApproval
 }
 
-// HasBlockers returns true when mission progress is blocked by task or mission state.
+// HasPendingApprovals returns true when any approval items remain unresolved.
+func (s *MissionSummary) HasPendingApprovals() bool {
+	if s == nil {
+		return false
+	}
+	return s.PendingApprovals > 0
+}
+
+// HasBlockers returns true when the mission lifecycle itself is blocked.
 func (s *MissionSummary) HasBlockers() bool {
 	if s == nil || s.Mission == nil {
 		return false
 	}
-	return s.TaskCounts.Blocked > 0 || s.Mission.Status == MissionBlocked
+	return s.Mission.Status == MissionBlocked
+}
+
+// HasBlockedTasks returns true when one or more tasks are blocked.
+func (s *MissionSummary) HasBlockedTasks() bool {
+	if s == nil {
+		return false
+	}
+	return s.TaskCounts.Blocked > 0 || len(s.BlockedTasks) > 0
+}
+
+// PrimaryRunningTask returns the first running task in the summary, if any.
+func (s *MissionSummary) PrimaryRunningTask() *MissionTaskView {
+	if s == nil || len(s.RunningTasks) == 0 {
+		return nil
+	}
+	return &s.RunningTasks[0]
+}
+
+// PrimaryReviewTask returns the first task awaiting review, if any.
+func (s *MissionSummary) PrimaryReviewTask() *MissionTaskView {
+	if s == nil || len(s.ReviewTasks) == 0 {
+		return nil
+	}
+	return &s.ReviewTasks[0]
+}
+
+// PrimaryBlockedTask returns the first blocked task, if any.
+func (s *MissionSummary) PrimaryBlockedTask() *MissionTaskView {
+	if s == nil || len(s.BlockedTasks) == 0 {
+		return nil
+	}
+	return &s.BlockedTasks[0]
+}
+
+// PrimaryReadyTask returns the first ready task, if any.
+func (s *MissionSummary) PrimaryReadyTask() *MissionTaskView {
+	if s == nil || len(s.ReadyTasks) == 0 {
+		return nil
+	}
+	return &s.ReadyTasks[0]
 }

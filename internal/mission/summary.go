@@ -3,6 +3,7 @@ package mission
 import (
 	"context"
 	"fmt"
+	"slices"
 )
 
 // BuildMissionSummary derives a mission summary from durable mission, task,
@@ -101,19 +102,12 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 			summary.BlockedTasks = append(summary.BlockedTasks, view)
 		}
 	}
+	sortMissionTaskViews(summary.RunningTasks)
+	sortMissionTaskViews(summary.ReviewTasks)
+	sortMissionTaskViews(summary.ReadyTasks)
+	sortMissionTaskViews(summary.BlockedTasks)
 
-	focus := selectMissionTaskView(tasks, depMap,
-		TaskBlocked,
-		TaskRunning, TaskLeased,
-		TaskAwaitingReview,
-		TaskReady,
-		TaskPending,
-		TaskAccepted,
-		TaskIntegrated,
-		TaskDone,
-		TaskFailed,
-		TaskRejected,
-	)
+	focus := selectMissionFocusTask(summary, tasks, depMap)
 	if focus != nil {
 		summary.FocusTask = focus
 	}
@@ -147,6 +141,64 @@ func selectMissionTaskView(tasks []*Task, depMap map[string][]string, statuses .
 	return nil
 }
 
+func selectMissionFocusTask(summary *MissionSummary, tasks []*Task, depMap map[string][]string) *MissionTaskView {
+	if summary == nil {
+		return nil
+	}
+	if summary.HasApprovalGate() {
+		if ready := summary.PrimaryReadyTask(); ready != nil {
+			copy := *ready
+			return &copy
+		}
+	}
+	if blocked := summary.PrimaryBlockedTask(); blocked != nil {
+		copy := *blocked
+		return &copy
+	}
+	if running := summary.PrimaryRunningTask(); running != nil {
+		copy := *running
+		return &copy
+	}
+	if review := summary.PrimaryReviewTask(); review != nil {
+		copy := *review
+		return &copy
+	}
+	if ready := summary.PrimaryReadyTask(); ready != nil {
+		copy := *ready
+		return &copy
+	}
+	return selectMissionTaskView(tasks, depMap,
+		TaskPending,
+		TaskAccepted,
+		TaskIntegrated,
+		TaskDone,
+		TaskFailed,
+		TaskRejected,
+	)
+}
+
+func sortMissionTaskViews(tasks []MissionTaskView) {
+	slices.SortStableFunc(tasks, func(a, b MissionTaskView) int {
+		return compareMissionTaskViews(a, b)
+	})
+}
+
+func compareMissionTaskViews(a, b MissionTaskView) int {
+	if a.Title != b.Title {
+		if a.Title < b.Title {
+			return -1
+		}
+		return 1
+	}
+	if a.ID < b.ID {
+		return -1
+	}
+	if a.ID > b.ID {
+		return 1
+	}
+	return 0
+}
+
 func selectMissionNextTask(tasks []*Task, depMap map[string][]string, focus *MissionTaskView) *MissionTaskView {
 	for _, task := range tasks {
 		if focus != nil && task.ID == focus.ID {
@@ -170,14 +222,13 @@ func missionPhaseLabel(summary *MissionSummary) string {
 	if summary == nil || summary.Mission == nil {
 		return ""
 	}
-	if summary.HasApprovalGate() {
-		return "Awaiting approval"
-	}
 	switch summary.Mission.Status {
 	case MissionDraft:
 		return "Draft"
 	case MissionPlanning:
 		return "Planning"
+	case MissionAwaitingApproval:
+		return "Awaiting approval"
 	case MissionRunning:
 		if summary.TaskCounts.AwaitingReview > 0 {
 			return "Running · review"
@@ -210,7 +261,7 @@ func missionNextAction(summary *MissionSummary) string {
 	if summary == nil || summary.Mission == nil {
 		return ""
 	}
-	if summary.PendingApprovals > 0 || summary.Mission.Status == MissionAwaitingApproval {
+	if summary.HasApprovalGate() {
 		return "Review the proposed mission plan and approve start with /mission approve"
 	}
 	switch summary.Mission.Status {
@@ -221,8 +272,8 @@ func missionNextAction(summary *MissionSummary) string {
 	case MissionPaused:
 		return "Resume mission execution with /mission start"
 	case MissionBlocked:
-		if summary.FocusTask != nil && summary.FocusTask.BlockingReason != "" {
-			return fmt.Sprintf("Unblock %s: %s", summary.FocusTask.Title, summary.FocusTask.BlockingReason)
+		if blocked := summary.PrimaryBlockedTask(); blocked != nil && blocked.BlockingReason != "" {
+			return fmt.Sprintf("Unblock %s: %s", blocked.Title, blocked.BlockingReason)
 		}
 		return "Resolve the blocking issue or cancel the mission"
 	case MissionCompleted:
@@ -232,14 +283,26 @@ func missionNextAction(summary *MissionSummary) string {
 	case MissionFailed:
 		return "Inspect failures before retrying or replanning"
 	}
-	if summary.TaskCounts.AwaitingReview > 0 && summary.FocusTask != nil {
-		return fmt.Sprintf("Review %s before integration can proceed", summary.FocusTask.Title)
+	if blocked := summary.PrimaryBlockedTask(); blocked != nil {
+		if blocked.BlockingReason != "" {
+			return fmt.Sprintf("Unblock %s: %s", blocked.Title, blocked.BlockingReason)
+		}
+		return fmt.Sprintf("Unblock %s so the DAG can keep moving", blocked.Title)
 	}
-	if summary.ActiveRuns > 0 && summary.FocusTask != nil {
-		return fmt.Sprintf("Monitor active work on %s", summary.FocusTask.Title)
+	if review := summary.PrimaryReviewTask(); review != nil {
+		return fmt.Sprintf("Review %s before integration can proceed", review.Title)
+	}
+	if running := summary.PrimaryRunningTask(); running != nil {
+		return fmt.Sprintf("Monitor active work on %s", running.Title)
+	}
+	if summary.HasPendingApprovals() {
+		return fmt.Sprintf("Resolve %d pending approval(s) to keep the DAG moving", summary.PendingApprovals)
+	}
+	if ready := summary.PrimaryReadyTask(); ready != nil {
+		return fmt.Sprintf("Next ready task: %s", ready.Title)
 	}
 	if summary.NextTask != nil {
-		return fmt.Sprintf("Next ready task: %s", summary.NextTask.Title)
+		return fmt.Sprintf("Queued after dependencies: %s", summary.NextTask.Title)
 	}
 	if summary.TaskCounts.Remaining() == 0 && summary.TaskCounts.Total > 0 {
 		return "Wait for final integration or completion checks"
@@ -251,10 +314,13 @@ func missionAttention(summary *MissionSummary) string {
 	if summary == nil || summary.Mission == nil {
 		return ""
 	}
-	if summary.PendingApprovals > 0 {
+	if summary.HasApprovalGate() {
+		return "Mission plan is waiting for approval"
+	}
+	if summary.HasPendingApprovals() {
 		return fmt.Sprintf("%d approval gate(s) pending", summary.PendingApprovals)
 	}
-	if summary.TaskCounts.Blocked > 0 {
+	if summary.HasBlockers() || summary.HasBlockedTasks() {
 		return fmt.Sprintf("%d blocked task(s)", summary.TaskCounts.Blocked)
 	}
 	if summary.TaskCounts.AwaitingReview > 0 {

@@ -137,10 +137,14 @@ func (m *Model) missionPanelSummary() string {
 	tc := summary.TaskCounts
 	done := tc.Completed()
 	switch {
-	case summary.HasBlockers():
-		return fmt.Sprintf("mission blocked · %d/%d", done, tc.Total)
 	case summary.HasApprovalGate():
 		return fmt.Sprintf("mission awaiting approval · %d/%d", done, tc.Total)
+	case summary.HasBlockers():
+		return fmt.Sprintf("mission blocked · %d/%d", done, tc.Total)
+	case summary.HasBlockedTasks():
+		return fmt.Sprintf("mission attention · %d/%d (%d blocked)", done, tc.Total, tc.Blocked)
+	case summary.HasPendingApprovals():
+		return fmt.Sprintf("mission attention · %d/%d (%d approvals)", done, tc.Total, summary.PendingApprovals)
 	}
 	base := fmt.Sprintf("mission %d/%d", done, tc.Total)
 	if summary.ActiveRuns > 0 {
@@ -284,10 +288,10 @@ func missionPanelHeader(summary *mission.MissionSummary) string {
 	}
 	icon := missionStatusIcon(summary.Mission.Status)
 	switch {
-	case summary.HasBlockers():
-		return fmt.Sprintf("Mission %s blocked", styles.BlockedIcon)
 	case summary.HasApprovalGate():
 		return "Mission ⏳ awaiting approval"
+	case summary.HasBlockers():
+		return fmt.Sprintf("Mission %s blocked", styles.BlockedIcon)
 	case strings.TrimSpace(summary.PhaseLabel) != "":
 		return fmt.Sprintf("Mission %s %s", icon, strings.ToLower(summary.PhaseLabel))
 	default:
@@ -305,6 +309,12 @@ func (m *Model) renderMissionSpotlight(summary *mission.MissionSummary, task *mi
 		if summary.HasApprovalGate() {
 			icon = m.sty.Panel.IconPending.Render("⏳")
 			prefix = "Approval: "
+		} else if summary.HasPendingApprovals() {
+			icon = m.sty.Panel.IconPending.Render("⏳")
+			prefix = "Attention: "
+		} else if summary.HasBlockedTasks() {
+			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
+			prefix = "Blocked: "
 		}
 		label := strings.TrimSpace(summary.NextAction)
 		if label == "" {
@@ -326,6 +336,10 @@ func (m *Model) renderMissionSpotlight(summary *mission.MissionSummary, task *mi
 		if task.BlockingReason != "" {
 			label += " — " + task.BlockingReason
 		}
+	case summary.HasPendingApprovals() && task.Status != mission.TaskRunning && task.Status != mission.TaskLeased:
+		icon = m.sty.Panel.IconPending.Render("⏳")
+		prefix = "Attention: "
+		label = summary.NextAction
 	case task.Status == mission.TaskRunning || task.Status == mission.TaskLeased:
 		prefix = "In progress: "
 	case task.Status == mission.TaskAwaitingReview:
@@ -340,7 +354,7 @@ func (m *Model) renderMissionSpotlight(summary *mission.MissionSummary, task *mi
 	case task.Status == mission.TaskDone || task.Status == mission.TaskIntegrated || task.Status == mission.TaskAccepted:
 		prefix = "Done: "
 	}
-	if strings.TrimSpace(summary.NextAction) != "" && (summary.HasApprovalGate() || task.Status == mission.TaskReady || task.Status == mission.TaskPending) {
+	if strings.TrimSpace(summary.NextAction) != "" && (summary.HasApprovalGate() || (summary.HasPendingApprovals() && task.Status != mission.TaskRunning && task.Status != mission.TaskLeased) || task.Status == mission.TaskReady || task.Status == mission.TaskPending) {
 		label = summary.NextAction
 	}
 	done := task.Status == mission.TaskDone || task.Status == mission.TaskIntegrated || task.Status == mission.TaskAccepted

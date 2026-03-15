@@ -118,6 +118,13 @@ func TestCompleteMissionPlanRunAppliesPlanAndEnablesApproval(t *testing.T) {
 		t.Fatalf("expected success message, got %q", got)
 	}
 
+	statusMsg, _ := m.handleMissionCommand("/mission status")
+	for _, want := range []string{"awaiting_approval", "Awaiting approval", "Review the proposed mission plan and approve start with /mission approve", "Ready queue: 1"} {
+		if !strings.Contains(statusMsg.Content, want) {
+			t.Fatalf("status missing %q\n%s", want, statusMsg.Content)
+		}
+	}
+
 	approveMsg, _ := m.handleMissionCommand("/mission approve")
 	if approveMsg == nil || approveMsg.Kind != chat.KindAssistant || !strings.Contains(approveMsg.Content, "approved and started") {
 		t.Fatalf("unexpected approve message: %#v", approveMsg)
@@ -350,5 +357,5 @@ func validMissionPlanJSON() string {
 		"\"task_id\":\"t_test\"," +
 		"\"depends_on_id\":\"t_impl\"" +
 		"}]" +
-	"}\n```"
+		"}\n```"
 }
