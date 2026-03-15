@@ -289,6 +289,7 @@ type MissionSummary struct {
 	ActiveRuns           int               `json:"active_runs"`
 	PendingApprovals     int               `json:"pending_approvals"`
 	DependencyEdges      int               `json:"dependency_edges"`
+	PlanApprovalStatus   ApprovalStatus    `json:"plan_approval_status,omitempty"`
 	PhaseLabel           string            `json:"phase_label,omitempty"`
 	NextAction           string            `json:"next_action,omitempty"`
 	Attention            string            `json:"attention,omitempty"`
@@ -339,12 +340,12 @@ func (tc TaskCounts) Remaining() int {
 	return remaining
 }
 
-// HasApprovalGate returns true when the mission lifecycle itself is paused at an approval gate.
+// HasApprovalGate returns true when the mission lifecycle itself is paused at a pending plan approval gate.
 func (s *MissionSummary) HasApprovalGate() bool {
 	if s == nil || s.Mission == nil {
 		return false
 	}
-	return s.Mission.Status == MissionAwaitingApproval
+	return s.Mission.Status == MissionAwaitingApproval && s.PlanApprovalStatus == ApprovalPending
 }
 
 // HasPendingApprovals returns true when any approval items remain unresolved.

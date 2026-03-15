@@ -3,6 +3,8 @@ package mission
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // BuildMissionSummary derives a mission summary from durable mission, task,
@@ -31,8 +33,12 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 	}
 
 	depMap := make(map[string][]string, len(tasks))
+	taskByID := make(map[string]*Task, len(tasks))
 	for _, dep := range deps {
 		depMap[dep.TaskID] = append(depMap[dep.TaskID], dep.DependsOnID)
+	}
+	for _, task := range tasks {
+		taskByID[task.ID] = task
 	}
 
 	var counts TaskCounts
@@ -74,6 +80,11 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 		DependencyEdges: len(deps),
 	}
 
+	planApproval := latestMissionPlanApproval(approvals)
+	if planApproval != nil {
+		summary.PlanApprovalStatus = planApproval.Status
+	}
+
 	for _, task := range tasks {
 		view := MissionTaskView{
 			ID:             task.ID,
@@ -93,29 +104,25 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 			summary.BlockedTasks = append(summary.BlockedTasks, view)
 		}
 	}
+	sortMissionTaskViews(summary.RunningTasks)
+	sortMissionTaskViews(summary.ReviewTasks)
+	sortMissionTaskViews(summary.ReadyTasks)
+	sortMissionTaskViews(summary.BlockedTasks)
 
 	for _, approval := range approvals {
 		if approval.Status != ApprovalPending {
 			continue
 		}
 		summary.PendingApprovals++
-		title := "Approval gate"
-		if approval.TaskID != "" {
-			for _, task := range tasks {
-				if task.ID == approval.TaskID {
-					title = task.Title
-					break
-				}
-			}
-		} else if approval.Kind != "" {
-			title = fmt.Sprintf("%s approval", approval.Kind)
-		}
+		title := approvalDisplayTitle(approval, taskByID)
 		summary.PendingApprovalItems = append(summary.PendingApprovalItems, MissionTaskView{
-			ID:           approval.ID,
-			Title:        title,
-			ApprovalKind: approval.Kind,
+			ID:             approval.ID,
+			Title:          title,
+			ApprovalKind:   approval.Kind,
+			BlockingReason: approvalBlockingReason(approval, taskByID),
 		})
 	}
+	sortMissionTaskViews(summary.PendingApprovalItems)
 
 	focus := selectMissionFocusTask(summary, tasks, depMap)
 	if focus != nil {
@@ -131,6 +138,109 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 	summary.Attention = missionAttention(summary)
 
 	return summary, nil
+}
+
+func approvalDisplayTitle(approval *Approval, taskByID map[string]*Task) string {
+	if approval == nil {
+		return "Approval gate"
+	}
+	if approval.Kind == missionPlanApprovalKind {
+		return "Mission plan approval"
+	}
+	if approval.TaskID != "" {
+		if task := taskByID[approval.TaskID]; task != nil && strings.TrimSpace(task.Title) != "" {
+			return task.Title
+		}
+	}
+	if approval.Kind != "" {
+		return fmt.Sprintf("%s approval", approval.Kind)
+	}
+	return "Approval gate"
+}
+
+func latestMissionPlanApproval(approvals []*Approval) *Approval {
+	var latest *Approval
+	for _, approval := range approvals {
+		if approval == nil || approval.Kind != missionPlanApprovalKind {
+			continue
+		}
+		if latest == nil || approval.CreatedAt.After(latest.CreatedAt) || (approval.CreatedAt.Equal(latest.CreatedAt) && approval.ID > latest.ID) {
+			cp := *approval
+			latest = &cp
+		}
+	}
+	return latest
+}
+
+func approvalBlockingReason(approval *Approval, taskByID map[string]*Task) string {
+	if approval == nil {
+		return ""
+	}
+	if approval.Kind == missionPlanApprovalKind {
+		return "Mission plan approval is still pending"
+	}
+	if approval.TaskID != "" {
+		if task := taskByID[approval.TaskID]; task != nil && strings.TrimSpace(task.Title) != "" {
+			return fmt.Sprintf("Approval pending for %s", task.Title)
+		}
+	}
+	if approval.Kind != "" {
+		return fmt.Sprintf("%s approval pending", approval.Kind)
+	}
+	return "Approval gate pending"
+}
+
+func primaryNonPlanPendingApproval(summary *MissionSummary) *MissionTaskView {
+	if summary == nil {
+		return nil
+	}
+	for i := range summary.PendingApprovalItems {
+		item := &summary.PendingApprovalItems[i]
+		if item.ApprovalKind == missionPlanApprovalKind {
+			continue
+		}
+		return item
+	}
+	return nil
+}
+
+func sortMissionTaskViews(items []MissionTaskView) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left := strings.TrimSpace(items[i].Title)
+		right := strings.TrimSpace(items[j].Title)
+		if left == right {
+			return items[i].ID < items[j].ID
+		}
+		return left < right
+	})
+}
+
+func awaitingApprovalBlocker(summary *MissionSummary) string {
+	if summary == nil || summary.Mission == nil || summary.Mission.Status != MissionAwaitingApproval {
+		return ""
+	}
+	if summary.HasApprovalGate() {
+		return "Mission plan approval is waiting for approval"
+	}
+	if summary.PlanApprovalStatus == ApprovalApproved {
+		if next := primaryNonPlanPendingApproval(summary); next != nil {
+			if next.BlockingReason != "" {
+				return next.BlockingReason
+			}
+			if next.Title != "" {
+				return fmt.Sprintf("Approval pending: %s", next.Title)
+			}
+			return fmt.Sprintf("Resolve %d remaining approval(s) before starting", summary.PendingApprovals)
+		}
+		if summary.PendingApprovals > 0 {
+			return fmt.Sprintf("Resolve %d remaining approval(s) before starting", summary.PendingApprovals)
+		}
+		return ""
+	}
+	if summary.PlanApprovalStatus != "" {
+		return fmt.Sprintf("Mission plan approval is %s", summary.PlanApprovalStatus)
+	}
+	return "Mission is missing its durable plan approval record"
 }
 
 func selectMissionTaskView(tasks []*Task, depMap map[string][]string, statuses ...TaskStatus) *MissionTaskView {
@@ -206,6 +316,22 @@ func selectMissionNextTask(tasks []*Task, depMap map[string][]string, focus *Mis
 	return nil
 }
 
+func awaitingApprovalPhaseLabel(summary *MissionSummary) string {
+	if blocker := awaitingApprovalBlocker(summary); blocker != "" && summary != nil && summary.PlanApprovalStatus == ApprovalApproved && summary.PendingApprovals > 0 {
+		if next := primaryNonPlanPendingApproval(summary); next != nil {
+			label := strings.TrimSpace(next.Title)
+			if label == "" {
+				label = strings.TrimSpace(next.ApprovalKind)
+			}
+			if label != "" {
+				return fmt.Sprintf("Awaiting approval · %s", label)
+			}
+		}
+		return "Awaiting approval · remaining approvals"
+	}
+	return "Awaiting approval"
+}
+
 func missionPhaseLabel(summary *MissionSummary) string {
 	if summary == nil || summary.Mission == nil {
 		return ""
@@ -216,7 +342,18 @@ func missionPhaseLabel(summary *MissionSummary) string {
 	case MissionPlanning:
 		return "Planning"
 	case MissionAwaitingApproval:
-		return "Awaiting approval"
+		switch {
+		case summary.HasApprovalGate():
+			return awaitingApprovalPhaseLabel(summary)
+		case summary.PlanApprovalStatus == ApprovalApproved && summary.PendingApprovals == 0:
+			return "Ready to start"
+		case awaitingApprovalBlocker(summary) != "":
+			return awaitingApprovalPhaseLabel(summary)
+		case summary.PlanApprovalStatus != "":
+			return "Awaiting plan resolution"
+		default:
+			return awaitingApprovalPhaseLabel(summary)
+		}
 	case MissionRunning:
 		if summary.TaskCounts.AwaitingReview > 0 {
 			return "Running · review"
@@ -252,11 +389,24 @@ func missionNextAction(summary *MissionSummary) string {
 	if summary.HasApprovalGate() {
 		return "Review the proposed mission plan and approve start with /mission approve"
 	}
+	if blocker := awaitingApprovalBlocker(summary); blocker != "" {
+		if summary.Mission.Status == MissionAwaitingApproval && summary.PlanApprovalStatus == ApprovalApproved && summary.PendingApprovals > 0 {
+			return blocker
+		}
+	}
 	switch summary.Mission.Status {
 	case MissionDraft:
 		return "Generate a task DAG with /mission plan"
 	case MissionPlanning:
 		return "Wait for planning to finish, then review the DAG"
+	case MissionAwaitingApproval:
+		if summary.PlanApprovalStatus == ApprovalApproved {
+			return "Plan approved. Start mission execution with /mission start"
+		}
+		if summary.PlanApprovalStatus != "" {
+			return fmt.Sprintf("Mission plan approval is %s; resolve it before starting", summary.PlanApprovalStatus)
+		}
+		return "Mission is awaiting a durable plan approval record before it can start"
 	case MissionPaused:
 		return "Resume mission execution with /mission start"
 	case MissionBlocked:
@@ -284,6 +434,12 @@ func missionNextAction(summary *MissionSummary) string {
 		return fmt.Sprintf("Monitor active work on %s", running.Title)
 	}
 	if summary.HasPendingApprovals() {
+		if next := primaryNonPlanPendingApproval(summary); next != nil {
+			if next.BlockingReason != "" {
+				return next.BlockingReason
+			}
+			return fmt.Sprintf("Resolve pending approval: %s", next.Title)
+		}
 		return fmt.Sprintf("Resolve %d pending approval(s) to keep the DAG moving", summary.PendingApprovals)
 	}
 	if ready := summary.PrimaryReadyTask(); ready != nil {
@@ -304,6 +460,29 @@ func missionAttention(summary *MissionSummary) string {
 	}
 	if summary.HasApprovalGate() {
 		return "Mission plan is waiting for approval"
+	}
+	if summary.Mission.Status == MissionAwaitingApproval {
+		if blocker := awaitingApprovalBlocker(summary); blocker != "" {
+			if summary.PlanApprovalStatus == ApprovalApproved && summary.PendingApprovals > 0 {
+				return blocker
+			}
+			switch summary.PlanApprovalStatus {
+			case "":
+				return blocker
+			case ApprovalApproved:
+				return blocker
+			default:
+				return blocker
+			}
+		}
+		switch summary.PlanApprovalStatus {
+		case ApprovalApproved:
+			return "Plan approved and ready to start"
+		case "":
+			return "Mission is missing its durable plan approval record"
+		default:
+			return fmt.Sprintf("Mission plan approval is %s", summary.PlanApprovalStatus)
+		}
 	}
 	if summary.HasPendingApprovals() {
 		return fmt.Sprintf("%d approval gate(s) pending", summary.PendingApprovals)

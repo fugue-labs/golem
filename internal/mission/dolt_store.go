@@ -751,73 +751,7 @@ func (s *DoltStore) ListApprovals(ctx context.Context, missionID string) ([]*App
 // --- Aggregate queries ---
 
 func (s *DoltStore) GetMissionSummary(ctx context.Context, missionID string) (*MissionSummary, error) {
-	m, err := s.GetMission(ctx, missionID)
-	if err != nil {
-		return nil, err
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var counts TaskCounts
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT status, COUNT(*) FROM tasks WHERE mission_id = ? GROUP BY status`, missionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var status string
-		var count int
-		if err := rows.Scan(&status, &count); err != nil {
-			return nil, err
-		}
-		counts.Total += count
-		switch TaskStatus(status) {
-		case TaskPending:
-			counts.Pending = count
-		case TaskReady:
-			counts.Ready = count
-		case TaskRunning:
-			counts.Running = count
-		case TaskAwaitingReview:
-			counts.AwaitingReview = count
-		case TaskAccepted:
-			counts.Accepted = count
-		case TaskIntegrated:
-			counts.Integrated = count
-		case TaskDone:
-			counts.Done = count
-		case TaskBlocked:
-			counts.Blocked = count
-		case TaskFailed:
-			counts.Failed = count
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	var activeRuns int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM runs WHERE mission_id = ? AND status IN ('queued', 'running')`,
-		missionID).Scan(&activeRuns); err != nil {
-		return nil, fmt.Errorf("count active runs: %w", err)
-	}
-
-	var pendingApprovals int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM approvals WHERE mission_id = ? AND status = 'pending'`,
-		missionID).Scan(&pendingApprovals); err != nil {
-		return nil, fmt.Errorf("count pending approvals: %w", err)
-	}
-
-	return &MissionSummary{
-		Mission:          m,
-		TaskCounts:       counts,
-		ActiveRuns:       activeRuns,
-		PendingApprovals: pendingApprovals,
-	}, nil
+	return BuildMissionSummary(ctx, s, missionID)
 }
 
 func (s *DoltStore) GetReadyTasks(ctx context.Context, missionID string) ([]*Task, error) {
