@@ -66,7 +66,8 @@ The implementation must be:
 
 5. **Operator control and comprehension**
    - The user can understand what the system is doing, why it is blocked, and what changed.
-   - The user can pause, resume, approve, reject, retry, and cancel.
+   - In the shipped surface, the user can create a mission, inspect status/tasks/dashboard state, approve the mission plan, resume via `/mission start`, pause, and cancel.
+   - Task-scoped reject/retry/replan/escalation controls discussed elsewhere in this PRD remain aspirational unless a dedicated operator surface ships.
 
 6. **Elegant implementation surface**
    - v1 must avoid unnecessary protocol, daemon, or distributed-system complexity.
@@ -134,9 +135,9 @@ The implementation must be:
 
 1. As a developer, I can say “split the monolithic auth module into OAuth2 services, add tests, and update docs” and Golem turns that into a mission.
 2. As a developer, I can watch progress across many workers without losing the thread.
-3. As a developer, I can require approval before risky escalations or final integration.
+3. As a developer, I can approve a mission plan and then start or resume execution with explicit lifecycle feedback.
 4. As a developer, I can pause a mission, restart Golem, and continue later.
-5. As a developer, I can inspect why a task failed review and decide whether to retry, replan, or stop.
+5. As a developer, I can inspect why a task failed review from durable mission evidence, even though shipped task-scoped retry/replan/escalation controls are still aspirational.
 6. As a maintainer, I can prove the system works with deterministic tests and opt-in real-provider smoke tests.
 
 ### 6.2 Secondary user stories
@@ -265,6 +266,7 @@ Current persistence behavior:
   - approvals,
   - events, and
   - artifacts.
+- Persisted event names currently include core lifecycle and orchestration records such as `mission.created`, `plan.applied`, `mission.approved`, `mission.started`, `mission.paused`, `mission.cancelled`, `worker.dispatched`, `worker.completed`, `worker.failed`, `review.dispatched`, `review.passed`, `review.rejected`, `review.changes_requested`, `integration.completed`, `integration.conflict.requeued`, `integration.error`, `recovery.completed`, `replan.applied`, and `task.unblocked`.
 - Dashboard and status views are designed to keep working after restart because they query durable state rather than transient transcript memory.
 
 The implementation is therefore **local-first and durable-first**: operator surfaces are expected to reflect persisted mission truth, even when no active chat transcript is present.
@@ -396,7 +398,7 @@ The mission controller must:
 
 - own the mission lifecycle
 - persist and load state
-- request planning and replanning
+- request initial planning for the shipped `/mission plan` flow
 - schedule runnable tasks
 - lease and monitor runs
 - collect artifacts
@@ -405,6 +407,8 @@ The mission controller must:
 - integrate reviewed work
 - emit events for UI and logs
 - perform recovery on startup
+
+The current implementation also contains recovery/replan-related durable state and events, but user-facing task-scoped replan controls are not yet part of the shipped operator contract.
 
 The mission controller must **not**:
 
@@ -530,6 +534,8 @@ Strong default heuristics for v1:
 - prefer one writable scope per task
 - prefer one review run per completed worker task
 - prefer follow-up tasks over speculative front-loading
+
+**Aspirational note:** the remainder of this replanning section describes desired future policy and recovery behavior, not the current shipped operator surface. Today the shipped user-facing commands remain centered on `/mission new|status|tasks|plan|approve|start|pause|cancel|list` plus `golem dashboard`; there is no shipped `/mission replan`, `/mission retry`, or escalation command.
 
 ## 11.3 Replanning triggers
 
@@ -1406,7 +1412,7 @@ Additional approval kinds may exist in the durable model, but the operator-facin
 
 ## 18.4 Approval lifecycle semantics
 
-Every approval request must have:
+The durable approval model supports approval records with these fields:
 
 - a stable `approval_id`
 - `kind`
@@ -1418,13 +1424,15 @@ Every approval request must have:
 - `resolved_at`
 - optional `superseded_by`
 
+Current shipped operator flow guarantees only the mission-plan approval path described above. The broader rejection/supersession semantics below describe durable model expectations and future-proof behavior, not an additional shipped user command surface.
+
 Controller rules:
 
 1. there must be at most one active blocking approval for the same decision surface
 2. repeated identical approval requests must coalesce instead of spamming the operator
 3. a new approval that makes an older one obsolete must mark the older request `superseded`
 4. approvals must be durable across restart
-5. rejecting an approval must always produce a deterministic next state:
+5. if a future operator surface supports rejection, rejecting an approval must produce a deterministic next state:
    - resume current plan
    - block task
    - cancel risky action
@@ -1802,7 +1810,9 @@ JSON contract rules:
 
 ## 20.2 TUI mission board
 
-The TUI must provide:
+**Aspirational note:** the detailed mission-board model in this section describes a richer future mission workspace than the currently shipped surface. Today the shipped operator experience is the `/mission ...` chat flow plus `golem dashboard`, with durable summaries, task lists, and the four Mission Control panes.
+
+The future TUI mission board should provide:
 
 - mission overview panel
 - task board with dependency visibility
@@ -1868,16 +1878,30 @@ The TUI must:
 
 ## 20.3 Required operator actions
 
-From the TUI, the user must be able to:
+### 20.3.1 Shipped operator actions
 
-- create a mission
-- approve/reject the plan
-- inspect task details and artifacts
-- pause, resume via `/mission start`, or cancel
-- retry a task
-- force a replan
-- approve/reject escalation
-- inspect final completion evidence
+From the shipped TUI and dashboard surfaces, the operator can currently:
+
+- create a mission with `/mission new <goal>`
+- inspect durable mission status with `/mission status`
+- inspect the task DAG with `/mission tasks`
+- invoke planning with `/mission plan`
+- approve the durable mission-plan gate with `/mission approve`
+- start or resume execution with `/mission start`
+- pause a running mission with `/mission pause`
+- cancel a mission with `/mission cancel`
+- list missions with `/mission list`
+- inspect Mission Control state in `golem dashboard`
+- inspect final or in-progress evidence through durable mission status, dashboard evidence, events, and artifacts
+
+### 20.3.2 Aspirational operator actions
+
+The following actions are still aspirational in this PRD unless and until a dedicated surface ships:
+
+- reject the plan from a user-facing mission command
+- retry a task directly from a user-facing mission command
+- force a replan from a user-facing mission command
+- approve/reject escalation from a dedicated operator control surface
 
 ## 20.4 TUI state model
 

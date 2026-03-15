@@ -56,6 +56,7 @@ Documentation and implementation should agree on the currently shipped mission c
    - When no mission ID is supplied, the dashboard should prefer the highest-priority active mission (`running` > `blocked` > `paused` > `awaiting_approval` > `planning` > `draft`).
    - Current shipped behavior should not claim a dedicated `golem mission new` CLI exists unless that CLI has actually shipped.
    - Event examples must distinguish persisted mission-store names (for example `mission.created`, `plan.applied`, `review.passed`, `integration.conflict.requeued`) from transient orchestrator/TUI event-bus names (for example `worker.started`, `review.pass`, `review.request_changes`).
+   - Documentation should keep unsupported reject/retry/replan/escalation actions clearly marked aspirational rather than describing them as shipped operator controls.
 
 ## Acceptance Criteria
 

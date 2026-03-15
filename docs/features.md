@@ -83,7 +83,8 @@ Mission orchestration is currently exposed through two operator-facing surfaces.
    - Auto-selects the most relevant non-terminal mission by priority: `running`, `blocked`, `paused`, `awaiting_approval`, `planning`, then `draft`.
    - Renders four panes: **Tasks**, **Workers**, **Evidence**, and **Events**.
    - The header surfaces status, task progress, active workers, pending approvals, evidence count, elapsed time, repo, branch, and worker budget.
-   - Empty-state behavior is explicit: the dashboard should show `Mission Control`, `No active mission`, and guidance to create one with `/mission new`. Current dashboard copy may also mention a future `golem mission new` command, but docs should treat that CLI reference as aspirational until it exists.
+   - Empty-state behavior is explicit: the dashboard should show `Mission Control`, `No active mission`, and guidance to create one with `/mission new`.
+   - Current implementation copy may still mention `golem mission new`, but that broader CLI family should be treated as aspirational until it ships.
 
 ### Mission command semantics and approval model
 
@@ -92,12 +93,14 @@ The current shipped mission contract is:
 - A new mission starts in **`draft`**.
 - `/mission plan` is the only normal path from `draft` to a task DAG.
 - Applying a plan creates durable tasks, dependencies, and a durable **mission-plan approval** record, then moves the mission to **`awaiting_approval`**.
-- `/mission approve` approves that durable gate.
+- `/mission approve` resolves that durable gate and immediately attempts to start the mission.
 - `/mission start` does **not** bypass approval. It only starts execution when:
   - the mission is `paused`, or
   - the mission is `awaiting_approval` and the durable mission-plan approval is already `approved` and there are no remaining pending approvals.
 - Resume semantics are currently `/mission start`; there is no separate `/mission resume` slash command.
 - `/mission pause` stops new task leasing by stopping the in-process orchestrator.
+- `/mission cancel` transitions the mission to `cancelled` and clears the active mission from the current TUI session.
+- Shipped mission docs should stay centered on `/mission new|status|tasks|plan|approve|start|pause|cancel|list` plus `golem dashboard`; task-scoped retry/replan/escalation controls are not yet a shipped command surface.
 
 ### Mission summary, orchestration, and dashboard behavior
 
