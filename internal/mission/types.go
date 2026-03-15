@@ -49,12 +49,12 @@ const (
 type TaskKind string
 
 const (
-	TaskKindCode              TaskKind = "code"
-	TaskKindTest              TaskKind = "test"
-	TaskKindDocs              TaskKind = "docs"
-	TaskKindInvestigation     TaskKind = "investigation"
-	TaskKindIntegrationFixup  TaskKind = "integration_followup"
-	TaskKindReviewFix         TaskKind = "review_fix"
+	TaskKindCode             TaskKind = "code"
+	TaskKindTest             TaskKind = "test"
+	TaskKindDocs             TaskKind = "docs"
+	TaskKindInvestigation    TaskKind = "investigation"
+	TaskKindIntegrationFixup TaskKind = "integration_followup"
+	TaskKindReviewFix        TaskKind = "review_fix"
 )
 
 // RunStatus represents the lifecycle of a run.
@@ -122,13 +122,13 @@ type Mission struct {
 
 // Budget defines resource limits for a mission.
 type Budget struct {
-	MaxConcurrentWorkers  int           `json:"max_concurrent_workers,omitempty"`
-	MaxTotalRuns          int           `json:"max_total_runs,omitempty"`
-	MaxModelCalls         int           `json:"max_model_calls,omitempty"`
-	MaxCostUSD            float64       `json:"max_cost_usd,omitempty"`
-	MaxWallClockDuration  time.Duration `json:"max_wall_clock_duration,omitempty"`
-	MaxReplans            int           `json:"max_replans,omitempty"`
-	MaxConsecutiveFailures int          `json:"max_consecutive_failures,omitempty"`
+	MaxConcurrentWorkers   int           `json:"max_concurrent_workers,omitempty"`
+	MaxTotalRuns           int           `json:"max_total_runs,omitempty"`
+	MaxModelCalls          int           `json:"max_model_calls,omitempty"`
+	MaxCostUSD             float64       `json:"max_cost_usd,omitempty"`
+	MaxWallClockDuration   time.Duration `json:"max_wall_clock_duration,omitempty"`
+	MaxReplans             int           `json:"max_replans,omitempty"`
+	MaxConsecutiveFailures int           `json:"max_consecutive_failures,omitempty"`
 }
 
 // Task represents a single unit of work within a mission.
@@ -165,19 +165,19 @@ type TaskDependency struct {
 
 // Run represents a single execution attempt (planner, worker, review, or integration).
 type Run struct {
-	ID            string     `json:"id"`
-	MissionID     string     `json:"mission_id"`
-	TaskID        string     `json:"task_id,omitempty"`
-	Mode          RunMode    `json:"mode"`
-	Status        RunStatus  `json:"status"`
-	LeaseOwner    string     `json:"lease_owner,omitempty"`
-	LeaseExpires  *time.Time `json:"lease_expires_at,omitempty"`
-	HeartbeatAt   *time.Time `json:"heartbeat_at,omitempty"`
-	WorktreePath  string     `json:"worktree_path,omitempty"`
-	StartedAt     *time.Time `json:"started_at,omitempty"`
-	EndedAt       *time.Time `json:"ended_at,omitempty"`
-	Summary       string     `json:"summary,omitempty"`
-	ErrorText     string     `json:"error_text,omitempty"`
+	ID           string     `json:"id"`
+	MissionID    string     `json:"mission_id"`
+	TaskID       string     `json:"task_id,omitempty"`
+	Mode         RunMode    `json:"mode"`
+	Status       RunStatus  `json:"status"`
+	LeaseOwner   string     `json:"lease_owner,omitempty"`
+	LeaseExpires *time.Time `json:"lease_expires_at,omitempty"`
+	HeartbeatAt  *time.Time `json:"heartbeat_at,omitempty"`
+	WorktreePath string     `json:"worktree_path,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	Summary      string     `json:"summary,omitempty"`
+	ErrorText    string     `json:"error_text,omitempty"`
 }
 
 // Artifact represents a durable output from a run.
@@ -194,16 +194,16 @@ type Artifact struct {
 
 // Approval represents a pending or resolved approval gate.
 type Approval struct {
-	ID          string          `json:"id"`
-	MissionID   string          `json:"mission_id"`
-	TaskID      string          `json:"task_id,omitempty"`
-	RunID       string          `json:"run_id,omitempty"`
-	Kind        string          `json:"kind"`
-	Status      ApprovalStatus  `json:"status"`
-	RequestJSON json.RawMessage `json:"request_json,omitempty"`
+	ID           string          `json:"id"`
+	MissionID    string          `json:"mission_id"`
+	TaskID       string          `json:"task_id,omitempty"`
+	RunID        string          `json:"run_id,omitempty"`
+	Kind         string          `json:"kind"`
+	Status       ApprovalStatus  `json:"status"`
+	RequestJSON  json.RawMessage `json:"request_json,omitempty"`
 	ResponseJSON json.RawMessage `json:"response_json,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	ResolvedAt  *time.Time      `json:"resolved_at,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	ResolvedAt   *time.Time      `json:"resolved_at,omitempty"`
 }
 
 // Event represents an append-only event in the mission log.
@@ -253,12 +253,12 @@ type IntegrationResult struct {
 
 // CreateMissionRequest contains the parameters for creating a new mission.
 type CreateMissionRequest struct {
-	Title      string   `json:"title"`
-	Goal       string   `json:"goal"`
-	RepoRoot   string   `json:"repo_root"`
-	BaseCommit string   `json:"base_commit"`
-	BaseBranch string   `json:"base_branch"`
-	Budget     Budget   `json:"budget,omitempty"`
+	Title      string `json:"title"`
+	Goal       string `json:"goal"`
+	RepoRoot   string `json:"repo_root"`
+	BaseCommit string `json:"base_commit"`
+	BaseBranch string `json:"base_branch"`
+	Budget     Budget `json:"budget,omitempty"`
 }
 
 // PlanResult represents the output of a planning run.
@@ -284,10 +284,31 @@ type PlanTask struct {
 
 // MissionSummary provides a concise view of mission state for the TUI.
 type MissionSummary struct {
-	Mission      *Mission `json:"mission"`
-	TaskCounts   TaskCounts `json:"task_counts"`
-	ActiveRuns   int      `json:"active_runs"`
-	PendingApprovals int  `json:"pending_approvals"`
+	Mission              *Mission          `json:"mission"`
+	TaskCounts           TaskCounts        `json:"task_counts"`
+	ActiveRuns           int               `json:"active_runs"`
+	PendingApprovals     int               `json:"pending_approvals"`
+	DependencyEdges      int               `json:"dependency_edges"`
+	PhaseLabel           string            `json:"phase_label,omitempty"`
+	NextAction           string            `json:"next_action,omitempty"`
+	Attention            string            `json:"attention,omitempty"`
+	FocusTask            *MissionTaskView  `json:"focus_task,omitempty"`
+	NextTask             *MissionTaskView  `json:"next_task,omitempty"`
+	RunningTasks         []MissionTaskView `json:"running_tasks,omitempty"`
+	ReviewTasks          []MissionTaskView `json:"review_tasks,omitempty"`
+	ReadyTasks           []MissionTaskView `json:"ready_tasks,omitempty"`
+	BlockedTasks         []MissionTaskView `json:"blocked_tasks,omitempty"`
+	PendingApprovalItems []MissionTaskView `json:"pending_approval_items,omitempty"`
+}
+
+// MissionTaskView is a compact task snapshot used in mission summaries.
+type MissionTaskView struct {
+	ID             string     `json:"id"`
+	Title          string     `json:"title"`
+	Status         TaskStatus `json:"status"`
+	BlockingReason string     `json:"blocking_reason,omitempty"`
+	DependsOn      []string   `json:"depends_on,omitempty"`
+	ApprovalKind   string     `json:"approval_kind,omitempty"`
 }
 
 // TaskCounts aggregates task states for display.
@@ -302,4 +323,99 @@ type TaskCounts struct {
 	Done           int `json:"done"`
 	Blocked        int `json:"blocked"`
 	Failed         int `json:"failed"`
+}
+
+// Completed returns the number of tasks that are fully through review/integration.
+func (tc TaskCounts) Completed() int {
+	return tc.Done + tc.Integrated + tc.Accepted
+}
+
+// Remaining returns the number of tasks not yet completed.
+func (tc TaskCounts) Remaining() int {
+	remaining := tc.Total - tc.Completed()
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+// HasApprovalGate returns true when the mission lifecycle itself is paused at an approval gate.
+func (s *MissionSummary) HasApprovalGate() bool {
+	if s == nil || s.Mission == nil {
+		return false
+	}
+	return s.Mission.Status == MissionAwaitingApproval
+}
+
+// HasPendingApprovals returns true when any approval items remain unresolved.
+func (s *MissionSummary) HasPendingApprovals() bool {
+	if s == nil {
+		return false
+	}
+	return s.PendingApprovals > 0
+}
+
+// HasBlockers returns true when the mission lifecycle itself is blocked.
+func (s *MissionSummary) HasBlockers() bool {
+	if s == nil || s.Mission == nil {
+		return false
+	}
+	return s.Mission.Status == MissionBlocked
+}
+
+// HasBlockedTasks returns true when one or more tasks are blocked.
+func (s *MissionSummary) HasBlockedTasks() bool {
+	if s == nil {
+		return false
+	}
+	return s.TaskCounts.Blocked > 0 || len(s.BlockedTasks) > 0
+}
+
+// PrimaryRunningTask returns the first running task in the summary, if any.
+func (s *MissionSummary) PrimaryRunningTask() *MissionTaskView {
+	if s == nil || len(s.RunningTasks) == 0 {
+		return nil
+	}
+	return &s.RunningTasks[0]
+}
+
+// PrimaryReviewTask returns the first task awaiting review, if any.
+func (s *MissionSummary) PrimaryReviewTask() *MissionTaskView {
+	if s == nil || len(s.ReviewTasks) == 0 {
+		return nil
+	}
+	return &s.ReviewTasks[0]
+}
+
+// PrimaryBlockedTask returns the first blocked task, if any.
+func (s *MissionSummary) PrimaryBlockedTask() *MissionTaskView {
+	if s == nil || len(s.BlockedTasks) == 0 {
+		return nil
+	}
+	return &s.BlockedTasks[0]
+}
+
+// PrimaryReadyTask returns the first ready task, if any.
+func (s *MissionSummary) PrimaryReadyTask() *MissionTaskView {
+	if s == nil || len(s.ReadyTasks) == 0 {
+		return nil
+	}
+	return &s.ReadyTasks[0]
+}
+
+// FillDisplayDefaults populates derived display fields when a summary was
+// loaded directly from a store implementation that does not compute them.
+func (s *MissionSummary) FillDisplayDefaults() {
+	if s == nil {
+		return
+	}
+	if s.PhaseLabel == "" {
+		s.PhaseLabel = missionPhaseLabel(s)
+	}
+	if s.NextAction == "" {
+		s.NextAction = missionNextAction(s)
+	}
+	if s.Attention == "" {
+		s.Attention = missionAttention(s)
+	}
 }

@@ -162,8 +162,12 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	sections := make([]sectionSpec, 0, 6)
 	if m.hasMissionState() {
 		priority := 0
-		if summary := m.missionPanelSummary(); strings.Contains(summary, "blocked") || strings.Contains(summary, "approval") {
-			priority = -2
+		if ctrl := m.missionController(); ctrl != nil {
+			if summary, err := ctrl.GetMissionSummary(m.appCtx, m.activeMissionID); err == nil && summary != nil {
+				if summary.HasApprovalGate() || summary.HasBlockers() || summary.HasBlockedTasks() || summary.HasPendingApprovals() {
+					priority = -2
+				}
+			}
 		}
 		sections = append(sections, sectionSpec{priority: priority, target: 6, render: func(limit int) []string {
 			return m.renderMissionPanelLines(limit, contentWidth)

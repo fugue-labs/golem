@@ -22,8 +22,6 @@ func (m *Model) missionController() *mission.Controller {
 		return m.missionCtrl
 	}
 
-	// Use a local SQLite database for mission state — no external server needed.
-	// Falls back to in-memory store if SQLite fails (e.g. read-only filesystem).
 	store, err := mission.OpenSQLiteStore(mission.ResolveSQLitePath())
 	if err != nil {
 		m.missionCtrl = mission.NewController(mission.NewInMemoryStore())
@@ -49,29 +47,24 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 	if err != nil {
 		return []string{m.sty.Panel.Progress.Render("Mission: error")}
 	}
+	if summary == nil {
+		return nil
+	}
+	summary.FillDisplayDefaults()
 
 	ms := summary.Mission
-	tc := summary.TaskCounts
 	tasks, _ := ctrl.Store().ListTasks(ctx, m.activeMissionID)
 	runs, _ := ctrl.Store().ListRuns(ctx, m.activeMissionID)
-	approvals, _ := ctrl.Store().ListApprovals(ctx, m.activeMissionID)
+	focusTask := missionTaskByID(tasks, missionSummaryTaskID(summary.FocusTask))
+	nextTask := missionTaskByID(tasks, missionSummaryTaskID(summary.NextTask))
 
-	focusTask := missionFocusTask(tasks)
-	nextTask := missionNextTask(tasks, focusTask)
-	statusIcon := missionStatusIcon(ms.Status)
-	header := fmt.Sprintf("Mission %s %s", statusIcon, ms.Status)
-	if ms.Status == mission.MissionBlocked {
-		header = fmt.Sprintf("Mission %s blocked", styles.BlockedIcon)
-	} else if ms.Status == mission.MissionAwaitingApproval || pendingApprovalsCount(approvals) > 0 || summary.PendingApprovals > 0 {
-		header = "Mission ⏳ awaiting approval"
-	}
-	lines := []string{m.workflowProgressLine(header, width)}
+	lines := []string{m.workflowProgressLine(missionPanelHeader(summary), width)}
 	if limit == 1 {
 		return lines
 	}
 
-	if focusTask != nil {
-		lines = append(lines, m.renderMissionSpotlight(ms.Status, focusTask, approvals, width))
+	if focusTask != nil || summary.NextAction != "" {
+		lines = append(lines, m.renderMissionSpotlight(summary, focusTask, width))
 	}
 	if len(lines) >= limit {
 		return lines[:limit]
@@ -84,16 +77,15 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 		return lines[:limit]
 	}
 
-	progress := missionProgressSummary(tc)
-	if progress != "" {
+	if progress := missionProgressSummary(summary); progress != "" {
 		lines = append(lines, m.workflowProgressLine(progress, width))
 	}
 	if len(lines) >= limit {
 		return lines[:limit]
 	}
 
-	title := ms.Title
-	if strings.TrimSpace(title) == "" {
+	title := strings.TrimSpace(ms.Title)
+	if title == "" {
 		title = ms.Goal
 	}
 	lines = append(lines, m.workflowBullet(m.sty.Panel.IconPending.Render(styles.HollowIcon), title, width, false))
@@ -101,28 +93,27 @@ func (m *Model) renderMissionPanelLines(limit, width int) []string {
 		return lines[:limit]
 	}
 
-	activeRuns := filterActiveRuns(runs)
-	for i := 0; i < len(activeRuns) && len(lines) < limit; i++ {
-		task := missionTaskByID(tasks, activeRuns[i].TaskID)
-		lines = append(lines, m.renderWorkerCard(activeRuns[i], task, width))
-	}
-	for i := range tasks {
+	for _, run := range filterActiveRuns(runs) {
 		if len(lines) >= limit {
 			break
 		}
-		task := tasks[i]
+		lines = append(lines, m.renderWorkerCard(run, missionTaskByID(tasks, run.TaskID), width))
+	}
+	for _, task := range tasks {
+		if len(lines) >= limit {
+			break
+		}
 		if focusTask != nil && task.ID == focusTask.ID {
 			continue
 		}
 		if nextTask != nil && task.ID == nextTask.ID {
 			continue
 		}
-		icon := m.taskIcon(task.Status)
 		done := task.Status == mission.TaskDone || task.Status == mission.TaskIntegrated || task.Status == mission.TaskAccepted
-		lines = append(lines, m.workflowBullet(icon, task.Title, width, done))
+		lines = append(lines, m.workflowBullet(m.taskIcon(task.Status), task.Title, width, done))
 	}
 	if len(lines) < limit {
-		remaining := len(tasks) + len(activeRuns) + 4 - len(lines)
+		remaining := len(tasks) + len(filterActiveRuns(runs)) + 4 - len(lines)
 		if remaining > 0 {
 			lines = append(lines, m.sty.Muted.Render(ansi.Truncate(fmt.Sprintf("… +%d mission details", remaining), max(1, width), "…")))
 		}
@@ -138,25 +129,30 @@ func (m *Model) missionPanelSummary() string {
 	if !m.hasMissionState() {
 		return ""
 	}
-
 	ctrl := m.missionController()
 	if ctrl == nil {
 		return ""
 	}
-
-	ctx := m.appCtx
-	summary, err := ctrl.GetMissionSummary(ctx, m.activeMissionID)
+	summary, err := ctrl.GetMissionSummary(m.appCtx, m.activeMissionID)
 	if err != nil {
 		return ""
 	}
+	if summary == nil {
+		return ""
+	}
+	summary.FillDisplayDefaults()
 
 	tc := summary.TaskCounts
-	done := tc.Done + tc.Integrated + tc.Accepted
-	switch summary.Mission.Status {
-	case mission.MissionBlocked:
-		return fmt.Sprintf("mission blocked · %d/%d", done, tc.Total)
-	case mission.MissionAwaitingApproval:
+	done := tc.Completed()
+	switch {
+	case summary.HasApprovalGate():
 		return fmt.Sprintf("mission awaiting approval · %d/%d", done, tc.Total)
+	case summary.HasBlockers():
+		return fmt.Sprintf("mission blocked · %d/%d", done, tc.Total)
+	case summary.HasBlockedTasks():
+		return fmt.Sprintf("mission attention · %d/%d (%d blocked)", done, tc.Total, tc.Blocked)
+	case summary.HasPendingApprovals():
+		return fmt.Sprintf("mission attention · %d/%d (%d approvals)", done, tc.Total, summary.PendingApprovals)
 	}
 	base := fmt.Sprintf("mission %d/%d", done, tc.Total)
 	if summary.ActiveRuns > 0 {
@@ -187,47 +183,36 @@ func missionStatusIcon(s mission.MissionStatus) string {
 }
 
 // renderWorkerCard renders a compact status card for a running worker.
-// Format: " ◐ TaskTitle (2m13s) [worktree-dir]"
 func (m *Model) renderWorkerCard(run *mission.Run, task *mission.Task, width int) string {
 	icon := m.sty.Panel.IconInProgress.Render(styles.InProgressIcon)
-
-	var label string
+	label := run.TaskID
 	if task != nil {
 		label = task.Title
-	} else {
-		label = run.TaskID
 	}
-
 	var dur string
 	if run.StartedAt != nil {
 		dur = formatDuration(time.Since(*run.StartedAt))
 	}
-
 	var wtDir string
 	if run.WorktreePath != "" {
 		wtDir = filepath.Base(run.WorktreePath)
 	}
-
-	var suffix string
-	if dur != "" && wtDir != "" {
+	suffix := ""
+	switch {
+	case dur != "" && wtDir != "":
 		suffix = fmt.Sprintf(" (%s) [%s]", dur, wtDir)
-	} else if dur != "" {
+	case dur != "":
 		suffix = fmt.Sprintf(" (%s)", dur)
-	} else if wtDir != "" {
+	case wtDir != "":
 		suffix = fmt.Sprintf(" [%s]", wtDir)
 	}
-
 	maxLabel := max(1, width-4-len(suffix))
-	label = ansi.Truncate(label, maxLabel, "…")
-	label = m.sty.Panel.TaskText.Render(label)
-	suffix = m.sty.Muted.Render(suffix)
-
-	return fmt.Sprintf(" %s %s%s", icon, label, suffix)
+	label = m.sty.Panel.TaskText.Render(ansi.Truncate(label, maxLabel, "…"))
+	return fmt.Sprintf(" %s %s%s", icon, label, m.sty.Muted.Render(suffix))
 }
 
-// filterActiveRuns returns only runs with status RunRunning.
 func filterActiveRuns(runs []*mission.Run) []*mission.Run {
-	var active []*mission.Run
+	active := make([]*mission.Run, 0, len(runs))
 	for _, r := range runs {
 		if r.Status == mission.RunRunning {
 			active = append(active, r)
@@ -253,66 +238,29 @@ func (m *Model) taskIcon(s mission.TaskStatus) string {
 	}
 }
 
-func missionFocusTask(tasks []*mission.Task) *mission.Task {
-	for i := range tasks {
-		if tasks[i].Status == mission.TaskBlocked {
-			return tasks[i]
-		}
-	}
-	for i := range tasks {
-		if tasks[i].Status == mission.TaskRunning || tasks[i].Status == mission.TaskLeased {
-			return tasks[i]
-		}
-	}
-	for i := range tasks {
-		if tasks[i].Status == mission.TaskAwaitingReview {
-			return tasks[i]
-		}
-	}
-	for i := range tasks {
-		if tasks[i].Status == mission.TaskReady {
-			return tasks[i]
-		}
-	}
-	for i := range tasks {
-		if tasks[i].Status == mission.TaskPending {
-			return tasks[i]
-		}
-	}
-	if len(tasks) == 0 {
-		return nil
-	}
-	return tasks[0]
-}
-
-func missionNextTask(tasks []*mission.Task, focus *mission.Task) *mission.Task {
-	for i := range tasks {
-		if focus != nil && tasks[i].ID == focus.ID {
-			continue
-		}
-		if tasks[i].Status == mission.TaskReady || tasks[i].Status == mission.TaskPending {
-			return tasks[i]
-		}
-	}
-	return nil
-}
-
 func missionTaskByID(tasks []*mission.Task, id string) *mission.Task {
-	for i := range tasks {
-		if tasks[i].ID == id {
-			return tasks[i]
+	for _, task := range tasks {
+		if task.ID == id {
+			return task
 		}
 	}
 	return nil
 }
 
-func missionProgressSummary(tc mission.TaskCounts) string {
-	parts := []string{}
-	if tc.Total > 0 {
-		parts = append(parts, fmt.Sprintf("Tasks %d/%d", tc.Done+tc.Integrated+tc.Accepted, tc.Total))
+func missionProgressSummary(summary *mission.MissionSummary) string {
+	if summary == nil {
+		return ""
 	}
-	if tc.Done+tc.Integrated+tc.Accepted > 0 {
-		parts = append(parts, fmt.Sprintf("%d✓", tc.Done+tc.Integrated+tc.Accepted))
+	tc := summary.TaskCounts
+	parts := make([]string, 0, 8)
+	if tc.Total > 0 {
+		parts = append(parts, fmt.Sprintf("Tasks %d/%d", tc.Completed(), tc.Total))
+	}
+	if summary.DependencyEdges > 0 {
+		parts = append(parts, fmt.Sprintf("DAG %d edge(s)", summary.DependencyEdges))
+	}
+	if tc.Completed() > 0 {
+		parts = append(parts, fmt.Sprintf("%d✓", tc.Completed()))
 	}
 	if tc.Running > 0 {
 		parts = append(parts, fmt.Sprintf("%d◐", tc.Running))
@@ -329,33 +277,77 @@ func missionProgressSummary(tc mission.TaskCounts) string {
 	if tc.AwaitingReview > 0 {
 		parts = append(parts, fmt.Sprintf("%d◎", tc.AwaitingReview))
 	}
+	if summary.PendingApprovals > 0 {
+		parts = append(parts, fmt.Sprintf("%d⏳", summary.PendingApprovals))
+	}
 	return strings.Join(parts, " · ")
 }
 
-func pendingApprovalsCount(approvals []*mission.Approval) int {
-	count := 0
-	for _, approval := range approvals {
-		if approval.Status == mission.ApprovalPending {
-			count++
-		}
+func missionSummaryTaskID(task *mission.MissionTaskView) string {
+	if task == nil {
+		return ""
 	}
-	return count
+	return task.ID
 }
 
-func (m *Model) renderMissionSpotlight(status mission.MissionStatus, task *mission.Task, approvals []*mission.Approval, width int) string {
+func missionPanelHeader(summary *mission.MissionSummary) string {
+	if summary == nil || summary.Mission == nil {
+		return "Mission"
+	}
+	icon := missionStatusIcon(summary.Mission.Status)
+	switch {
+	case summary.HasApprovalGate():
+		return "Mission ⏳ awaiting approval"
+	case summary.HasBlockers():
+		return fmt.Sprintf("Mission %s blocked", styles.BlockedIcon)
+	case strings.TrimSpace(summary.PhaseLabel) != "":
+		return fmt.Sprintf("Mission %s %s", icon, strings.ToLower(summary.PhaseLabel))
+	default:
+		return fmt.Sprintf("Mission %s %s", icon, summary.Mission.Status)
+	}
+}
+
+func (m *Model) renderMissionSpotlight(summary *mission.MissionSummary, task *mission.Task, width int) string {
+	if summary == nil {
+		return ""
+	}
+	if task == nil {
+		icon := m.sty.Panel.IconPending.Render(styles.PendingIcon)
+		prefix := "Next action: "
+		if summary.HasApprovalGate() {
+			icon = m.sty.Panel.IconPending.Render("⏳")
+			prefix = "Approval: "
+		} else if summary.HasPendingApprovals() {
+			icon = m.sty.Panel.IconPending.Render("⏳")
+			prefix = "Attention: "
+		} else if summary.HasBlockedTasks() {
+			icon = m.sty.Panel.IconBlocked.Render(styles.BlockedIcon)
+			prefix = "Blocked: "
+		}
+		label := strings.TrimSpace(summary.NextAction)
+		if label == "" {
+			label = "Mission state is up to date"
+		}
+		return m.workflowBullet(icon, prefix+label, width, false)
+	}
+
 	icon := m.taskIcon(task.Status)
 	prefix := "Focus: "
 	label := task.Title
 	switch {
-	case status == mission.MissionAwaitingApproval || pendingApprovalsCount(approvals) > 0:
+	case summary.HasApprovalGate():
 		icon = m.sty.Panel.IconPending.Render("⏳")
 		prefix = "Approval: "
-		label = "Review mission plan and approve start"
+		label = summary.NextAction
 	case task.Status == mission.TaskBlocked:
 		prefix = "Blocked: "
 		if task.BlockingReason != "" {
 			label += " — " + task.BlockingReason
 		}
+	case summary.HasPendingApprovals() && task.Status != mission.TaskRunning && task.Status != mission.TaskLeased:
+		icon = m.sty.Panel.IconPending.Render("⏳")
+		prefix = "Attention: "
+		label = summary.NextAction
 	case task.Status == mission.TaskRunning || task.Status == mission.TaskLeased:
 		prefix = "In progress: "
 	case task.Status == mission.TaskAwaitingReview:
@@ -370,5 +362,9 @@ func (m *Model) renderMissionSpotlight(status mission.MissionStatus, task *missi
 	case task.Status == mission.TaskDone || task.Status == mission.TaskIntegrated || task.Status == mission.TaskAccepted:
 		prefix = "Done: "
 	}
-	return m.workflowBullet(icon, prefix+label, width, task.Status == mission.TaskDone || task.Status == mission.TaskIntegrated || task.Status == mission.TaskAccepted)
+	if strings.TrimSpace(summary.NextAction) != "" && (summary.HasApprovalGate() || (summary.HasPendingApprovals() && task.Status != mission.TaskRunning && task.Status != mission.TaskLeased) || task.Status == mission.TaskReady || task.Status == mission.TaskPending) {
+		label = summary.NextAction
+	}
+	done := task.Status == mission.TaskDone || task.Status == mission.TaskIntegrated || task.Status == mission.TaskAccepted
+	return m.workflowBullet(icon, prefix+label, width, done)
 }

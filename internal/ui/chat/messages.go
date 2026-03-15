@@ -132,11 +132,15 @@ func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string 
 	}
 
 	body := common.RenderMarkdown(sty, msg.Content, width-4)
-	extras := []string{"    " + sty.Chat.AssistantMeta.Render("markdown response")}
+	header := sty.Chat.AssistantTag.Render(" ASSISTANT ")
+	meta := []string{sty.Chat.AssistantMeta.Render("markdown response")}
 	if msg.Streaming {
-		extras = append([]string{"    " + sty.Chat.Streaming.Render("LIVE")}, extras...)
+		meta = append([]string{sty.Chat.Streaming.Render("LIVE")}, meta...)
 	}
-	return renderRoleBlock(sty.Chat.AssistantTag.Render(" ASSISTANT "), body, "  ", extras...)
+	if len(meta) > 0 {
+		header += " " + strings.Join(meta, " ")
+	}
+	return renderRoleBlock(header, body, "  ")
 }
 
 func renderToolCall(msg *Message, sty *styles.Styles, width int) string {

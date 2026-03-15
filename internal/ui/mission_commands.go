@@ -133,20 +133,37 @@ func (m *Model) handleMissionStatus() *chat.Message {
 }
 
 func renderMissionSummaryMessage(summary *mission.MissionSummary) *chat.Message {
+	summary.FillDisplayDefaults()
 	m := summary.Mission
 	tc := summary.TaskCounts
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Mission**: %s\n", m.Title)
 	fmt.Fprintf(&b, "**Status**: %s\n", m.Status)
+	fmt.Fprintf(&b, "**Phase**: %s\n", summary.PhaseLabel)
 	fmt.Fprintf(&b, "**ID**: `%s`\n\n", m.ID)
 
 	if m.Goal != m.Title {
 		fmt.Fprintf(&b, "**Goal**: %s\n\n", m.Goal)
 	}
+	if summary.Attention != "" {
+		fmt.Fprintf(&b, "**Attention**: %s\n", summary.Attention)
+	}
+	if summary.NextAction != "" {
+		fmt.Fprintf(&b, "**Next action**: %s\n", summary.NextAction)
+	}
+	if summary.FocusTask != nil {
+		fmt.Fprintf(&b, "**Focus task**: %s [%s]\n", summary.FocusTask.Title, summary.FocusTask.Status)
+	}
+	if summary.NextTask != nil {
+		fmt.Fprintf(&b, "**Queued next**: %s [%s]\n", summary.NextTask.Title, summary.NextTask.Status)
+	}
+	if summary.Attention != "" || summary.NextAction != "" || summary.FocusTask != nil || summary.NextTask != nil {
+		b.WriteString("\n")
+	}
 
 	if tc.Total > 0 {
-		b.WriteString("**Tasks**\n\n")
+		b.WriteString("**Task DAG**\n\n")
 		b.WriteString("| Status | Count |\n")
 		b.WriteString("|--------|-------|\n")
 		if tc.Ready > 0 {
@@ -157,6 +174,12 @@ func renderMissionSummaryMessage(summary *mission.MissionSummary) *chat.Message 
 		}
 		if tc.AwaitingReview > 0 {
 			fmt.Fprintf(&b, "| Awaiting Review | %d |\n", tc.AwaitingReview)
+		}
+		if tc.Accepted > 0 {
+			fmt.Fprintf(&b, "| Accepted | %d |\n", tc.Accepted)
+		}
+		if tc.Integrated > 0 {
+			fmt.Fprintf(&b, "| Integrated | %d |\n", tc.Integrated)
 		}
 		if tc.Done > 0 {
 			fmt.Fprintf(&b, "| Done | %d |\n", tc.Done)
@@ -171,14 +194,43 @@ func renderMissionSummaryMessage(summary *mission.MissionSummary) *chat.Message 
 			fmt.Fprintf(&b, "| Pending | %d |\n", tc.Pending)
 		}
 		fmt.Fprintf(&b, "| **Total** | **%d** |\n\n", tc.Total)
+		fmt.Fprintf(&b, "Progress: **%d/%d** complete · **%d** dependency edge(s)\n\n", tc.Completed(), tc.Total, summary.DependencyEdges)
+	}
+
+	writeMissionTaskSection := func(label string, tasks []mission.MissionTaskView, formatLine func(mission.MissionTaskView) string) {
+		if len(tasks) == 0 {
+			return
+		}
+		fmt.Fprintf(&b, "**%s: %d**\n", label, len(tasks))
+		for _, task := range tasks {
+			fmt.Fprintf(&b, "%s\n", formatLine(task))
+		}
 	}
 
 	if summary.ActiveRuns > 0 {
 		fmt.Fprintf(&b, "**Active runs**: %d\n", summary.ActiveRuns)
+		for _, task := range summary.RunningTasks {
+			fmt.Fprintf(&b, "- Running: %s\n", task.Title)
+		}
 	}
-	if summary.PendingApprovals > 0 {
-		fmt.Fprintf(&b, "**Pending approvals**: %d\n", summary.PendingApprovals)
-	}
+	writeMissionTaskSection("Pending approvals", summary.PendingApprovalItems, func(task mission.MissionTaskView) string {
+		if task.ApprovalKind != "" {
+			return fmt.Sprintf("- Approval: %s (%s)", task.Title, task.ApprovalKind)
+		}
+		return fmt.Sprintf("- Approval: %s", task.Title)
+	})
+	writeMissionTaskSection("Blocked tasks", summary.BlockedTasks, func(task mission.MissionTaskView) string {
+		if task.BlockingReason != "" {
+			return fmt.Sprintf("- Blocked: %s — %s", task.Title, task.BlockingReason)
+		}
+		return fmt.Sprintf("- Blocked: %s", task.Title)
+	})
+	writeMissionTaskSection("Awaiting review", summary.ReviewTasks, func(task mission.MissionTaskView) string {
+		return fmt.Sprintf("- Review: %s", task.Title)
+	})
+	writeMissionTaskSection("Ready queue", summary.ReadyTasks, func(task mission.MissionTaskView) string {
+		return fmt.Sprintf("- Ready: %s", task.Title)
+	})
 
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
@@ -328,7 +380,7 @@ func (m *Model) handleMissionApprove() *chat.Message {
 
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Mission `%s` approved and started. Orchestrator is running.", m.activeMissionID),
+		Content: fmt.Sprintf("Mission `%s` approved and started. Orchestrator is running the DAG.", m.activeMissionID),
 	}
 }
 
@@ -380,7 +432,7 @@ func (m *Model) handleMissionStart() *chat.Message {
 
 	return &chat.Message{
 		Kind:    chat.KindAssistant,
-		Content: fmt.Sprintf("Mission `%s` started. Orchestrator is running.", m.activeMissionID),
+		Content: fmt.Sprintf("Mission `%s` started. Orchestrator resumed mission execution.", m.activeMissionID),
 	}
 }
 
@@ -401,7 +453,7 @@ func (m *Model) handleMissionPause() *chat.Message {
 		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to pause mission: %v", err)}
 	}
 
-	return &chat.Message{Kind: chat.KindAssistant, Content: "Mission paused. Orchestrator stopped."}
+	return &chat.Message{Kind: chat.KindAssistant, Content: "Mission paused. No new tasks will be leased until you resume with `/mission start`."}
 }
 
 func (m *Model) handleMissionCancel() *chat.Message {
