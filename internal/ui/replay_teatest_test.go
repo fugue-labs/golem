@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
@@ -291,5 +292,24 @@ func TestReplayStreamingRespectsUserScrollPosition(t *testing.T) {
 	}
 	if m.scroll < scrolled-2 {
 		t.Fatalf("scroll moved too far during replay append: got %d want >= %d", m.scroll, scrolled-2)
+	}
+}
+
+func TestReplaySpinnerTickRefreshesRunningToolTranscript(t *testing.T) {
+	m := newReplayTestModel(t)
+	m.messages = []*chat.Message{{Kind: chat.KindToolCall, ToolName: "bash", ToolArgs: "sleep 1", Status: chat.ToolRunning, StartedAt: time.Now().Add(-1500 * time.Millisecond)}}
+	m.ensureTranscriptViewport(m.width, m.height)
+	before := strings.Join(m.transcriptLines, "\n")
+	time.Sleep(1100 * time.Millisecond)
+
+	updated, _ := m.Update(spinner.TickMsg{Time: time.Now()})
+	m = updated.(*Model)
+	after := strings.Join(m.transcriptLines, "\n")
+
+	if before == after {
+		t.Fatal("expected replay/live transcript tick to refresh running tool output")
+	}
+	if !strings.Contains(stripANSI(after), "elapsed") {
+		t.Fatalf("expected elapsed text after spinner refresh\n%s", stripANSI(after))
 	}
 }

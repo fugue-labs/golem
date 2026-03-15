@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/lipgloss/v2"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
@@ -556,6 +558,32 @@ func TestVisibleChatLinesKeepsBottomWindowWithoutRenderingEntireTranscriptSlice(
 	}
 }
 
+func TestTranscriptScrollKeysDoNotMutateTextareaWhenConsumed(t *testing.T) {
+	m := newAppTestModel(t)
+	m.width = 72
+	m.height = 14
+	fillTranscriptMessages(m, 160)
+	m.input.SetValue("draft")
+	m.ensureTranscriptViewport(m.width, m.height)
+
+	before := m.input.Value()
+	updated, _ := m.Update(tea.KeyPressMsg{Text: "pgup"})
+	m = updated.(*Model)
+	if m.scroll == 0 {
+		t.Fatal("expected PgUp to scroll transcript")
+	}
+	if got := m.input.Value(); got != before {
+		t.Fatalf("textarea changed after consumed PgUp: got %q want %q", got, before)
+	}
+
+	m.busy = true
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp, Text: "up"})
+	m = updated.(*Model)
+	if got := m.input.Value(); got != before {
+		t.Fatalf("textarea changed after consumed Up during busy scroll: got %q want %q", got, before)
+	}
+}
+
 func TestTranscriptViewportTracksResizeWithoutResettingScroll(t *testing.T) {
 	m := newAppTestModel(t)
 	m.width = 96
@@ -580,6 +608,27 @@ func TestTranscriptViewportTracksResizeWithoutResettingScroll(t *testing.T) {
 	view := stripANSI(m.renderChat(6, 72))
 	if !strings.Contains(view, "Transcript") || !strings.Contains(view, "message") {
 		t.Fatalf("resized transcript missing expected content\n%s", view)
+	}
+}
+
+func TestTranscriptViewportRefreshesLiveToolElapsedOnSpinnerTick(t *testing.T) {
+	m := newAppTestModel(t)
+	m.width = 72
+	m.height = 12
+	m.messages = []*chat.Message{{Kind: chat.KindToolCall, ToolName: "bash", ToolArgs: "sleep 1", Status: chat.ToolRunning, StartedAt: time.Now().Add(-1500 * time.Millisecond)}}
+	m.ensureTranscriptViewport(m.width, m.height)
+	before := strings.Join(m.transcriptLines, "\n")
+	time.Sleep(1100 * time.Millisecond)
+
+	updated, _ := m.Update(spinner.TickMsg{Time: time.Now()})
+	m = updated.(*Model)
+	after := strings.Join(m.transcriptLines, "\n")
+
+	if before == after {
+		t.Fatal("expected spinner tick to refresh live transcript content")
+	}
+	if !strings.Contains(stripANSI(after), "elapsed") {
+		t.Fatalf("expected refreshed transcript to show elapsed text\n%s", stripANSI(after))
 	}
 }
 
