@@ -26,5 +26,5 @@ func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 	if err != nil {
 		return content
 	}
-	return strings.TrimSuffix(result, "\n")
+	return strings.TrimRight(result, "\n")
 }
