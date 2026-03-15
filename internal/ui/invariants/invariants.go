@@ -62,6 +62,44 @@ func (s *State) Counts() (hardTotal, hardPass, hardFail, hardUnresolved, softTot
 	return
 }
 
+// Focus returns the first blocking or in-progress invariant that needs attention.
+func (s *State) Focus() *Item {
+	for i := range s.Items {
+		if s.Items[i].Status == "fail" {
+			return &s.Items[i]
+		}
+	}
+	for i := range s.Items {
+		if s.Items[i].Status == "in_progress" {
+			return &s.Items[i]
+		}
+	}
+	for i := range s.Items {
+		if s.Items[i].Status != "pass" {
+			return &s.Items[i]
+		}
+	}
+	if len(s.Items) == 0 {
+		return nil
+	}
+	return &s.Items[0]
+}
+
+// Next returns the next unresolved invariant after the focused one.
+func (s *State) Next() *Item {
+	for i := range s.Items {
+		if s.Items[i].Status == "unknown" {
+			return &s.Items[i]
+		}
+	}
+	for i := range s.Items {
+		if s.Items[i].Status == "in_progress" {
+			return &s.Items[i]
+		}
+	}
+	return nil
+}
+
 func normalizeKind(kind string) string {
 	if strings.EqualFold(strings.TrimSpace(kind), "soft") {
 		return "soft"

@@ -69,6 +69,42 @@ func (s *State) Counts() (total, pass, fail, stale, inProgress int) {
 	return
 }
 
+// Focus returns the most urgent verification entry.
+func (s *State) Focus() *Entry {
+	for i := range s.Entries {
+		if s.Entries[i].Status == "fail" {
+			return &s.Entries[i]
+		}
+	}
+	for i := range s.Entries {
+		if s.Entries[i].Status == "in_progress" {
+			return &s.Entries[i]
+		}
+	}
+	for i := range s.Entries {
+		if s.Entries[i].Freshness == "stale" {
+			return &s.Entries[i]
+		}
+	}
+	if len(s.Entries) == 0 {
+		return nil
+	}
+	return &s.Entries[0]
+}
+
+// Next returns the next command that should likely run after the focus entry.
+func (s *State) Next() *Entry {
+	for i := range s.Entries {
+		if s.Entries[i].Status == "in_progress" {
+			continue
+		}
+		if s.Entries[i].Status == "fail" || s.Entries[i].Freshness == "stale" {
+			return &s.Entries[i]
+		}
+	}
+	return nil
+}
+
 // Badge returns a compact status indicator for the status bar.
 func (s *State) Badge() string {
 	if len(s.Entries) == 0 {

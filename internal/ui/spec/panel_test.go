@@ -17,8 +17,6 @@ func updatePanel(p Panel, msg tea.Msg) Panel {
 	return m.(Panel)
 }
 
-// --- 1. Spec panel rendering ---
-
 func TestPanelRenderEmpty(t *testing.T) {
 	p := NewPanel()
 	view := panelView(p)
@@ -32,14 +30,10 @@ func TestPanelRenderWithSpec(t *testing.T) {
 	p = updatePanel(p, LoadSpecMsg{FilePath: "design.md"})
 	view := panelView(p)
 
-	if !strings.Contains(view, "Spec") {
-		t.Error("expected 'Spec' header in view")
-	}
-	if !strings.Contains(view, "Reviewing spec") {
-		t.Errorf("expected phase label 'Reviewing spec', got: %q", view)
-	}
-	if !strings.Contains(view, "0/3 gates") {
-		t.Errorf("expected '0/3 gates' summary, got: %q", view)
+	for _, want := range []string{"Spec", "Reviewing spec", "0/3 gates", "Next: approve Spec Approval", "File: design.md"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in view, got: %q", want, view)
+		}
 	}
 }
 
@@ -48,12 +42,13 @@ func TestPanelRenderGateIcons(t *testing.T) {
 	p = updatePanel(p, LoadSpecMsg{FilePath: "spec.md"})
 
 	view := panelView(p)
-	// All gates pending → hollow icons.
 	if strings.Count(view, "○") != 3 {
 		t.Errorf("expected 3 pending gate icons, got view: %q", view)
 	}
+	if !strings.Contains(view, "Gate: Spec Approval") {
+		t.Fatalf("expected focused gate label, got: %q", view)
+	}
 
-	// Advance one gate.
 	p = updatePanel(p, AdvanceGateMsg{Name: "Spec Approval"})
 	view = panelView(p)
 	if !strings.Contains(view, "✓") {
@@ -61,6 +56,9 @@ func TestPanelRenderGateIcons(t *testing.T) {
 	}
 	if strings.Count(view, "○") != 2 {
 		t.Errorf("expected 2 remaining pending icons, got view: %q", view)
+	}
+	if !strings.Contains(view, "Gate: Task Decomposition") {
+		t.Fatalf("expected next focused gate label, got: %q", view)
 	}
 }
 
@@ -79,8 +77,6 @@ func TestPanelRenderAllGatesPassed(t *testing.T) {
 		t.Error("no pending icons should remain when all gates passed")
 	}
 }
-
-// --- 2. Spec loading and display ---
 
 func TestPanelLoadSpec(t *testing.T) {
 	p := NewPanel()
@@ -124,7 +120,6 @@ func TestPanelReloadSpec(t *testing.T) {
 	p = updatePanel(p, AdvanceGateMsg{Name: "Spec Approval"})
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseApproved})
 
-	// Reload with a new spec — state should reset.
 	p = updatePanel(p, LoadSpecMsg{FilePath: "new.md"})
 	state := p.State()
 	if state.FilePath != "new.md" {
@@ -140,62 +135,48 @@ func TestPanelReloadSpec(t *testing.T) {
 	}
 }
 
-// --- 3. Spec-to-task conversion flow ---
-
 func TestPanelWorkflowProgression(t *testing.T) {
 	p := NewPanel()
 	p = updatePanel(p, LoadSpecMsg{FilePath: "spec.md"})
 
-	// Phase 1: Draft → Approved.
 	p = updatePanel(p, AdvanceGateMsg{Name: "Spec Approval"})
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseApproved})
 	view := panelView(p)
-	if !strings.Contains(view, "Spec approved") {
-		t.Errorf("expected 'Spec approved' after approval, got: %q", view)
-	}
-	if !strings.Contains(view, "1/3 gates") {
-		t.Errorf("expected '1/3 gates', got: %q", view)
+	for _, want := range []string{"Spec approved", "1/3 gates", "Next: approve Task Decomposition"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q after approval, got: %q", want, view)
+		}
 	}
 
-	// Phase 2: Approved → Decomposed (task extraction).
 	p = updatePanel(p, AdvanceGateMsg{Name: "Task Decomposition"})
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseDecomposed})
 	p = updatePanel(p, SetProgressMsg{Completed: 0, Total: 5})
 	view = panelView(p)
-	if !strings.Contains(view, "Tasks extracted") {
-		t.Errorf("expected 'Tasks extracted', got: %q", view)
-	}
-	if !strings.Contains(view, "Tasks: 0/5") {
-		t.Errorf("expected 'Tasks: 0/5', got: %q", view)
+	for _, want := range []string{"Tasks extracted", "Tasks: 0/5", "Next: approve Final Diff Review"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q after decomposition, got: %q", want, view)
+		}
 	}
 
-	// Phase 3: Implementing — partial progress.
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseImplementing})
 	p = updatePanel(p, SetProgressMsg{Completed: 3, Total: 5})
 	view = panelView(p)
-	if !strings.Contains(view, "Implementing") {
-		t.Errorf("expected 'Implementing', got: %q", view)
-	}
-	if !strings.Contains(view, "Tasks: 3/5") {
-		t.Errorf("expected 'Tasks: 3/5', got: %q", view)
+	for _, want := range []string{"Implementing", "Tasks: 3/5", "Next: approve Final Diff Review"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q during implementation, got: %q", want, view)
+		}
 	}
 
-	// Phase 4: Reviewing.
 	p = updatePanel(p, AdvanceGateMsg{Name: "Final Diff Review"})
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseReviewing})
 	p = updatePanel(p, SetProgressMsg{Completed: 5, Total: 5})
 	view = panelView(p)
-	if !strings.Contains(view, "Final review") {
-		t.Errorf("expected 'Final review', got: %q", view)
-	}
-	if !strings.Contains(view, "3/3 gates") {
-		t.Errorf("expected '3/3 gates', got: %q", view)
-	}
-	if !strings.Contains(view, "Tasks: 5/5") {
-		t.Errorf("expected 'Tasks: 5/5', got: %q", view)
+	for _, want := range []string{"Final review", "3/3 gates", "Tasks: 5/5", "Next: keep spec and implementation aligned"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in review phase, got: %q", want, view)
+		}
 	}
 
-	// Phase 5: Complete.
 	p = updatePanel(p, SetPhaseMsg{Phase: PhaseComplete})
 	view = panelView(p)
 	if !strings.Contains(view, "Complete") {
@@ -229,13 +210,10 @@ func TestPanelTaskProgressUpdates(t *testing.T) {
 	}
 }
 
-// --- 4. Spec validation display ---
-
 func TestPanelGateValidation(t *testing.T) {
 	p := NewPanel()
 	p = updatePanel(p, LoadSpecMsg{FilePath: "spec.md"})
 
-	// Verify each gate can be individually advanced.
 	gates := []string{"Spec Approval", "Task Decomposition", "Final Diff Review"}
 	for i, name := range gates {
 		p = updatePanel(p, AdvanceGateMsg{Name: name})
@@ -276,15 +254,7 @@ func TestPanelPhaseLabelsInView(t *testing.T) {
 	tests := []struct {
 		phase Phase
 		label string
-	}{
-		{PhaseDraft, "Reviewing spec"},
-		{PhaseApproved, "Spec approved"},
-		{PhaseDecomposed, "Tasks extracted"},
-		{PhaseAccepted, "Plan accepted"},
-		{PhaseImplementing, "Implementing"},
-		{PhaseReviewing, "Final review"},
-		{PhaseComplete, "Complete"},
-	}
+	}{{PhaseDraft, "Reviewing spec"}, {PhaseApproved, "Spec approved"}, {PhaseDecomposed, "Tasks extracted"}, {PhaseAccepted, "Plan accepted"}, {PhaseImplementing, "Implementing"}, {PhaseReviewing, "Final review"}, {PhaseComplete, "Complete"}}
 	for _, tt := range tests {
 		p := NewPanel()
 		p = updatePanel(p, LoadSpecMsg{FilePath: "spec.md"})
@@ -295,8 +265,6 @@ func TestPanelPhaseLabelsInView(t *testing.T) {
 		}
 	}
 }
-
-// --- Window resize ---
 
 func TestPanelWindowResize(t *testing.T) {
 	p := NewPanel()

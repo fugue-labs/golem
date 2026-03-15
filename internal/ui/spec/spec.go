@@ -2,6 +2,7 @@ package spec
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -87,6 +88,56 @@ func (s *State) GateSummary() string {
 		}
 	}
 	return fmt.Sprintf("%d/%d gates", passed, total)
+}
+
+// FocusGateName returns the next gate that needs attention.
+func (s *State) FocusGateName() string {
+	for _, g := range s.Gates {
+		if g.Status != "passed" {
+			return g.Name
+		}
+	}
+	return ""
+}
+
+// Headline returns a concise workflow summary emphasizing the current bottleneck.
+func (s *State) Headline() string {
+	phase := s.PhaseLabel()
+	if gate := s.FocusGateName(); gate != "" {
+		return fmt.Sprintf("%s · awaiting %s", phase, gate)
+	}
+	completed, total := s.Progress()
+	if total > 0 {
+		return fmt.Sprintf("%s · tasks %d/%d", phase, completed, total)
+	}
+	return fmt.Sprintf("%s · %s", phase, s.GateSummary())
+}
+
+// NextAction returns the most useful operator-facing next step.
+func (s *State) NextAction() string {
+	if gate := s.FocusGateName(); gate != "" {
+		return "Next: approve " + gate
+	}
+	completed, total := s.Progress()
+	if total > 0 && completed < total {
+		return fmt.Sprintf("Next: finish implementation (%d remaining)", total-completed)
+	}
+	if s.IsActive() {
+		return "Next: keep spec and implementation aligned"
+	}
+	return ""
+}
+
+// FileLabel returns a compact file label for the rail.
+func (s *State) FileLabel() string {
+	if strings.TrimSpace(s.FilePath) == "" {
+		return ""
+	}
+	base := filepath.Base(s.FilePath)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return s.FilePath
+	}
+	return "File: " + base
 }
 
 // AdvanceGate marks the named gate as passed and advances the phase.
