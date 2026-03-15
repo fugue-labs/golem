@@ -82,15 +82,22 @@ func (m *Model) beginApprovalMode(req toolApprovalRequest) {
 	m.approvalRespCh = req.response
 }
 
-func (m *Model) resolveApproval(approved bool) {
+func (m *Model) resolveApproval(approved bool, remember bool) {
+	tool := m.approvalTool
 	if m.approvalRespCh != nil {
 		select {
 		case m.approvalRespCh <- approved:
 		default:
 		}
 	}
-	if approved && m.approvalTool != "" {
-		m.approvalAlways[m.approvalTool] = true
+	if remember && tool != "" {
+		if approved {
+			m.approvalAlways[tool] = true
+			delete(m.approvalNever, tool)
+		} else {
+			m.approvalNever[tool] = true
+			delete(m.approvalAlways, tool)
+		}
 	}
 	m.approvalMode = false
 	m.approvalTool = ""
@@ -102,14 +109,16 @@ func (m *Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	switch key {
 	case "y", "Y", "enter":
-		m.resolveApproval(true)
+		m.resolveApproval(true, false)
 		return m, m.input.Focus()
 	case "n", "N", "escape":
-		m.resolveApproval(false)
+		m.resolveApproval(false, false)
 		return m, m.input.Focus()
 	case "a", "A":
-		// Always allow this tool for the session.
-		m.resolveApproval(true)
+		m.resolveApproval(true, true)
+		return m, m.input.Focus()
+	case "d", "D":
+		m.resolveApproval(false, true)
 		return m, m.input.Focus()
 	}
 	return m, nil
@@ -143,7 +152,7 @@ func (m *Model) renderApproval() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(m.sty.Subtle.Render("  [y]es  [n]o  [a]lways allow"))
+	b.WriteString(m.sty.Subtle.Render("  [y]es  [n]o  [a]lways allow  [d]always deny"))
 	return b.String()
 }
 
