@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	refreshInterval      = 2 * time.Second
-	minDashboardWidth    = 40
-	minDashboardHeight   = 14
-	narrowDashboardWidth = 96
+	refreshInterval        = 2 * time.Second
+	minDashboardWidth      = 40
+	minDashboardHeight     = 14
+	narrowDashboardWidth   = 96
+	dashboardFooterLines   = 1
+	dashboardSeparatorLine = 1
 )
 
 // pane identifies which pane has focus for scrolling.
@@ -142,12 +144,10 @@ func (m *Model) paneAt(x, y int) (pane, bool) {
 		return paneTasks, false
 	}
 	if layout.narrow {
-		cursorY := layout.headerLines + 1
 		for _, section := range layout.sections {
-			if y >= cursorY && y < cursorY+section.height {
+			if y >= section.startY && y < section.startY+section.height {
 				return section.pane, true
 			}
-			cursorY += section.height + 1
 		}
 		return paneTasks, false
 	}
@@ -443,16 +443,21 @@ type paneSection struct {
 }
 
 type dashboardLayout struct {
-	tooSmall    bool
-	stateOnly   bool
-	narrow      bool
-	headerLines int
-	leftWidth   int
-	rightWidth  int
-	bodyHeight  int
-	taskHeight  int
-	eventHeight int
-	sections    []paneSection
+	tooSmall         bool
+	stateOnly        bool
+	narrow           bool
+	headerLines      int
+	footerLines      int
+	separatorLines   int
+	availableBody    int
+	leftWidth        int
+	rightWidth       int
+	bodyHeight       int
+	taskHeight       int
+	evidenceHeight   int
+	evidenceEmbedded bool
+	eventHeight      int
+	sections         []paneSection
 }
 
 func (m *Model) computeLayout() dashboardLayout {
@@ -466,23 +471,28 @@ func (m *Model) currentLayout() dashboardLayout {
 		return layout
 	}
 	layout.headerLines = len(m.renderHeader())
+	layout.footerLines = dashboardFooterLines
+	layout.separatorLines = dashboardSeparatorLine
 	if m.missionObj == nil {
 		layout.stateOnly = true
 		return layout
 	}
-	layout.narrow = m.width < narrowDashboardWidth
-	if layout.narrow {
-		layout.sections = m.narrowSections(layout.headerLines)
+
+	layout.availableBody = m.height - layout.headerLines - layout.footerLines
+	if layout.availableBody < 4 {
+		layout.tooSmall = true
 		return layout
 	}
-	layout.eventHeight = 3
-	if m.height < 18 {
-		layout.eventHeight = 2
+
+	layout.narrow = m.width < narrowDashboardWidth
+	if layout.narrow {
+		layout.sections = m.narrowSections(layout.headerLines, layout.availableBody)
+		if len(layout.sections) == 0 {
+			layout.tooSmall = true
+		}
+		return layout
 	}
-	layout.bodyHeight = m.height - layout.headerLines - 1 - layout.eventHeight - 1
-	if layout.bodyHeight < 4 {
-		layout.bodyHeight = 4
-	}
+
 	layout.leftWidth = m.width * 3 / 5
 	layout.rightWidth = m.width - layout.leftWidth - 1
 	if layout.rightWidth < 10 {
@@ -493,38 +503,99 @@ func (m *Model) currentLayout() dashboardLayout {
 		layout.leftWidth = 1
 		layout.rightWidth = max(1, m.width-layout.leftWidth-1)
 	}
-	layout.taskHeight = layout.bodyHeight * 3 / 5
+
+	contentBudget := layout.availableBody - 2*layout.separatorLines
+	if contentBudget < 9 {
+		layout.narrow = true
+		layout.sections = m.narrowSections(layout.headerLines, layout.availableBody)
+		if len(layout.sections) == 0 {
+			layout.tooSmall = true
+		}
+		return layout
+	}
+
+	layout.eventHeight = clampInt(3, 4, contentBudget/4)
+	layout.bodyHeight = contentBudget - layout.eventHeight
+	if layout.bodyHeight < 6 {
+		layout.eventHeight = max(2, contentBudget/5)
+		layout.bodyHeight = contentBudget - layout.eventHeight
+	}
+	if layout.bodyHeight < 6 {
+		layout.narrow = true
+		layout.sections = m.narrowSections(layout.headerLines, layout.availableBody)
+		if len(layout.sections) == 0 {
+			layout.tooSmall = true
+		}
+		return layout
+	}
+
+	layout.taskHeight = clampInt(5, layout.bodyHeight-3, (layout.bodyHeight*3)/5)
+	layout.evidenceHeight = layout.bodyHeight - layout.taskHeight
+	layout.evidenceEmbedded = true
+	if layout.evidenceHeight < 4 {
+		layout.taskHeight = layout.bodyHeight
+		layout.evidenceHeight = 0
+		layout.evidenceEmbedded = false
+	}
 	return layout
 }
 
-func (m *Model) narrowSections(headerLines int) []paneSection {
-	available := m.height - headerLines - 1 - 3 - 1
-	if available < 8 {
-		available = 8
+func (m *Model) narrowSections(headerLines, availableBody int) []paneSection {
+	type paneBudget struct {
+		pane      pane
+		min       int
+		preferred int
 	}
-	baseHeights := []int{6, 6, 5, 4}
-	panes := []pane{paneTasks, paneWorkers, paneEvidence, paneEvents}
-	sections := make([]paneSection, 0, len(baseHeights))
-	used := 0
-	remaining := len(baseHeights)
-	cursorY := headerLines + 2
-	for i, base := range baseHeights {
+
+	specs := []paneBudget{
+		{pane: paneTasks, min: 4, preferred: 7},
+		{pane: paneWorkers, min: 4, preferred: 6},
+		{pane: paneEvidence, min: 4, preferred: 5},
+		{pane: paneEvents, min: 3, preferred: 4},
+	}
+
+	visible := len(specs)
+	for visible > 0 {
+		contentBudget := availableBody - visible*dashboardSeparatorLine
+		minRequired := 0
+		for _, spec := range specs[:visible] {
+			minRequired += spec.min
+		}
+		if contentBudget >= minRequired {
+			break
+		}
+		visible--
+	}
+	if visible == 0 {
+		return nil
+	}
+
+	specs = specs[:visible]
+	contentBudget := availableBody - visible*dashboardSeparatorLine
+	heights := make([]int, len(specs))
+	remaining := contentBudget
+	for i, spec := range specs {
+		heights[i] = spec.min
+		remaining -= spec.min
+	}
+	for i, spec := range specs {
+		if remaining <= 0 {
+			break
+		}
+		grow := min(spec.preferred-spec.min, remaining)
+		heights[i] += grow
+		remaining -= grow
+	}
+	for i := 0; remaining > 0; i = (i + 1) % len(heights) {
+		heights[i]++
 		remaining--
-		height := base
-		left := available - used
-		minRemaining := remaining * 3
-		if height > left-minRemaining {
-			height = max(3, left-minRemaining)
-		}
-		if i == len(baseHeights)-1 {
-			height = max(3, left)
-		}
-		if height < 3 {
-			height = 3
-		}
-		sections = append(sections, paneSection{pane: panes[i], height: height, startY: cursorY})
-		used += height
-		cursorY += height + 1
+	}
+
+	sections := make([]paneSection, 0, len(specs))
+	cursorY := headerLines + dashboardSeparatorLine
+	for i, spec := range specs {
+		sections = append(sections, paneSection{pane: spec.pane, height: heights[i], startY: cursorY})
+		cursorY += heights[i] + dashboardSeparatorLine
 	}
 	return sections
 }
@@ -533,7 +604,10 @@ func (m *Model) renderWideLayout(layout dashboardLayout) string {
 	lines := append([]string{}, m.renderHeader()...)
 	lines = append(lines, m.renderSeparator())
 
-	leftLines := append(m.renderTaskPane(layout.taskHeight, layout.leftWidth), m.renderEvidencePane(layout.bodyHeight-layout.taskHeight, layout.leftWidth)...)
+	leftLines := m.renderTaskPane(layout.taskHeight, layout.leftWidth)
+	if layout.evidenceEmbedded {
+		leftLines = append(leftLines, m.renderEvidencePane(layout.evidenceHeight, layout.leftWidth, true)...)
+	}
 	rightLines := m.renderWorkerPane(layout.bodyHeight, layout.rightWidth)
 	divider := m.sty.Muted.Render("│")
 	for i := 0; i < layout.bodyHeight; i++ {
@@ -564,7 +638,7 @@ func (m *Model) renderNarrowLayout(layout dashboardLayout) string {
 		case paneWorkers:
 			lines = append(lines, m.renderWorkerPane(section.height, m.width)...)
 		case paneEvidence:
-			lines = append(lines, m.renderEvidencePane(section.height, m.width)...)
+			lines = append(lines, m.renderEvidencePane(section.height, m.width, false)...)
 		case paneEvents:
 			lines = append(lines, m.renderEventPane(section.height, m.width)...)
 		}
@@ -864,11 +938,18 @@ func (m *Model) renderWorkerPane(height, width int) []string {
 }
 
 // renderEvidencePane renders review decisions, verification, and approvals.
-func (m *Model) renderEvidencePane(height, width int) []string {
-	sep := m.sty.Panel.Separator.Render(strings.Repeat(styles.Separator, max(1, width)))
+func (m *Model) renderEvidencePane(height, width int, leadingSeparator bool) []string {
+	if height <= 0 {
+		return nil
+	}
 	header := m.renderPaneHeader("Evidence", m.focusPane == paneEvidence, width)
-	lines := []string{sep, header}
-	budget := height - 2
+	lines := []string{header}
+	budget := height - 1
+	if leadingSeparator {
+		sep := m.sty.Panel.Separator.Render(strings.Repeat(styles.Separator, max(1, width)))
+		lines = append([]string{sep}, lines...)
+		budget = height - 2
+	}
 	if budget <= 0 {
 		return padLines(lines, height)
 	}
@@ -978,9 +1059,12 @@ func (m *Model) renderSeparator() string {
 }
 
 func (m *Model) renderFooter() string {
+	layout := m.currentLayout()
 	mode := "wide layout"
-	if m.width < narrowDashboardWidth {
+	scrollHint := "j/k:scroll"
+	if layout.narrow {
 		mode = "narrow layout"
+		scrollHint = "j/k:scroll stacked lanes"
 	}
 	status := "live"
 	if m.refreshing {
@@ -992,7 +1076,7 @@ func (m *Model) renderFooter() string {
 		"r:refresh",
 		"tab:switch pane",
 		"shift+tab:back",
-		"j/k:scroll",
+		scrollHint,
 		"1-4:jump to pane",
 	}
 	return m.sty.Muted.Render(ansi.Truncate(strings.Join(keys, "  •  "), max(1, m.width), "…"))
@@ -1291,6 +1375,19 @@ func padLines(lines []string, height int) []string {
 		lines = lines[:height]
 	}
 	return lines
+}
+
+func clampInt(minValue, maxValue, value int) int {
+	if maxValue < minValue {
+		maxValue = minValue
+	}
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 func clampVisible(items []string, scroll *int, budget int) []string {
