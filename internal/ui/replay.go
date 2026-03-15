@@ -252,6 +252,7 @@ func (m *Model) handleReplayDone() (tea.Model, tea.Cmd) {
 	m.busy = false
 	m.activeToolName = ""
 	m.activeToolArgs = ""
+	m.finishAssistantStreaming()
 	m.messages = append(m.messages, &chat.Message{
 		Kind:    chat.KindSystem,
 		Content: "Replay complete.",
@@ -268,6 +269,7 @@ func (m *Model) stopReplay() {
 	m.busy = false
 	m.activeToolName = ""
 	m.activeToolArgs = ""
+	m.finishAssistantStreaming()
 	m.messages = append(m.messages, &chat.Message{
 		Kind:    chat.KindSystem,
 		Content: "Replay stopped.",

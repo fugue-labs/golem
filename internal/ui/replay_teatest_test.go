@@ -109,7 +109,11 @@ func (m replayTUIModel) View() tea.View {
 		case chat.KindUser:
 			b.WriteString("[USER] " + msg.Content + "\n")
 		case chat.KindAssistant:
-			b.WriteString("[ASSISTANT streaming] " + msg.Content + "\n")
+			label := "[ASSISTANT] "
+			if msg.Streaming {
+				label = "[ASSISTANT live] "
+			}
+			b.WriteString(label + msg.Content + "\n")
 		case chat.KindThinking:
 			b.WriteString("[THINKING] " + msg.Content + "\n")
 		case chat.KindToolCall:
@@ -470,7 +474,7 @@ func TestTeatestReplayThinkingAndToolStates(t *testing.T) {
 			strings.Contains(s, "[USER] list files") &&
 			strings.Contains(s, "[THINKING] I'll use bash") &&
 			strings.Contains(s, "[TOOL done] bash (ls -la) => file1.go | file2.go") &&
-			strings.Contains(s, "[ASSISTANT streaming] Found 2 Go files.") &&
+			strings.Contains(s, "[ASSISTANT] Found 2 Go files.") &&
 			strings.Contains(s, "2000") &&
 			strings.Contains(s, "1 tools") &&
 			strings.Contains(s, "Replay complete.")
@@ -567,7 +571,7 @@ func TestTeatestReplayTextDeltaStreaming(t *testing.T) {
 
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
 		s := string(bts)
-		return strings.Contains(s, "[ASSISTANT streaming] Hello World!") && strings.Contains(s, "Replay complete.")
+		return strings.Contains(s, "[ASSISTANT] Hello World!") && strings.Contains(s, "Replay complete.")
 	}, teatest.WithDuration(5*time.Second))
 
 	tm.Quit()

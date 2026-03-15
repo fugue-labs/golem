@@ -78,6 +78,7 @@ type Styles struct {
 		Streaming       lipgloss.Style
 		Running         lipgloss.Style
 		Summary         lipgloss.Style
+		AssistantMeta   lipgloss.Style
 		UserTag         lipgloss.Style
 		AssistantTag    lipgloss.Style
 		ThinkingTag     lipgloss.Style
@@ -260,9 +261,10 @@ func New(_ color.Color) *Styles {
 		BorderForeground(border).
 		PaddingLeft(1)
 	s.Chat.ThinkingFooter = meta.Italic(true)
-	s.Chat.Streaming = lipgloss.NewStyle().Foreground(primary).Bold(true)
+	s.Chat.Streaming = lipgloss.NewStyle().Foreground(bgBase).Background(primary).Padding(0, 1).Bold(true)
 	s.Chat.Running = lipgloss.NewStyle().Foreground(yellow).Bold(true)
 	s.Chat.Summary = lipgloss.NewStyle().Foreground(secondary).Bold(true)
+	s.Chat.AssistantMeta = meta.Italic(true)
 	s.Chat.UserTag = tagStyle(blue, bgBase)
 	s.Chat.AssistantTag = tagStyle(primary, bgBase)
 	s.Chat.ThinkingTag = tagStyle(surface, fgStrong)

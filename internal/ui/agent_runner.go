@@ -372,6 +372,7 @@ func (m *Model) appendOrUpdateAssistant(delta string) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].Kind == chat.KindAssistant {
 			m.messages[i].Content += delta
+			m.messages[i].Streaming = true
 			return
 		}
 		if m.messages[i].Kind == chat.KindUser {
@@ -379,11 +380,24 @@ func (m *Model) appendOrUpdateAssistant(delta string) {
 		}
 	}
 	m.messages = append(m.messages, &chat.Message{
-		Kind:    chat.KindAssistant,
-		Content: delta,
+		Kind:      chat.KindAssistant,
+		Content:   delta,
+		Streaming: true,
 	})
 	msg := m.messages[len(m.messages)-1]
 	m.currentRunMessages = append(m.currentRunMessages, msg)
+}
+
+func (m *Model) finishAssistantStreaming() {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Kind == chat.KindAssistant {
+			m.messages[i].Streaming = false
+			return
+		}
+		if m.messages[i].Kind == chat.KindUser {
+			return
+		}
+	}
 }
 
 // appendOrUpdateThinking appends a thinking delta to the last thinking message

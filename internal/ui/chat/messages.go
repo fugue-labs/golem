@@ -27,46 +27,54 @@ const (
 
 // Message is a displayable chat entry.
 type Message struct {
-	Kind    MessageKind
-	Content string
+	Kind      MessageKind
+	Content   string
+	Streaming bool // true only while assistant text is actively streaming live
 
 	// Tool-specific fields.
-	CallID   string // Provider-assigned tool call ID for exact matching.
-	ToolName string
-	ToolArgs string
-	RawArgs  string // Full JSON args for rich rendering (diffs, etc.)
-	Status   ToolStatus
+	CallID    string // Provider-assigned tool call ID for exact matching.
+	ToolName  string
+	ToolArgs  string
+	RawArgs   string // Full JSON args for rich rendering (diffs, etc.)
+	Status    ToolStatus
 	StartedAt time.Time     // when the tool call started
 	Duration  time.Duration // elapsed time for completed tool calls
 
 	// Render cache — avoids re-rendering unchanged messages every frame.
-	cachedRender   string
-	cachedWidth    int
-	cachedContent  string
-	cachedStatus   ToolStatus
-	cachedDuration time.Duration
-	cachedLines    int // number of lines in cachedRender
+	cachedRender    string
+	cachedWidth     int
+	cachedContent   string
+	cachedStatus    ToolStatus
+	cachedDuration  time.Duration
+	cachedStreaming bool
+	cachedLines     int // number of lines in cachedRender
 }
 
 // Render returns the rendered string for this message, using a cache to avoid
 // re-rendering unchanged messages. The cache is invalidated when the message
 // content, status, or rendering width changes.
 func (msg *Message) Render(sty *styles.Styles, width int, allMessages []*Message) string {
-	if msg.cachedRender != "" && msg.cachedWidth == width &&
+	live := msg.Streaming || (msg.Kind == KindToolCall && msg.Status == ToolRunning)
+	if !live && msg.cachedRender != "" && msg.cachedWidth == width &&
 		msg.cachedContent == msg.Content && msg.cachedStatus == msg.Status &&
-		msg.cachedDuration == msg.Duration {
+		msg.cachedDuration == msg.Duration && msg.cachedStreaming == msg.Streaming {
 		return msg.cachedRender
 	}
 	rendered := RenderMessage(msg, sty, width, allMessages)
+	msg.cachedLines = strings.Count(rendered, "\n") + 1
+	if rendered == "" {
+		msg.cachedLines = 0
+	}
+	if live {
+		msg.cachedRender = ""
+		return rendered
+	}
 	msg.cachedRender = rendered
 	msg.cachedWidth = width
 	msg.cachedContent = msg.Content
 	msg.cachedStatus = msg.Status
 	msg.cachedDuration = msg.Duration
-	msg.cachedLines = strings.Count(rendered, "\n") + 1
-	if rendered == "" {
-		msg.cachedLines = 0
-	}
+	msg.cachedStreaming = msg.Streaming
 	return rendered
 }
 
@@ -124,8 +132,11 @@ func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string 
 	}
 
 	body := common.RenderMarkdown(sty, msg.Content, width-4)
-	meta := sty.Chat.Streaming.Render("streaming")
-	return renderRoleBlock(sty.Chat.AssistantTag.Render(" ASSISTANT "), body, "  ", meta)
+	extras := []string{"    " + sty.Chat.AssistantMeta.Render("markdown response")}
+	if msg.Streaming {
+		extras = append([]string{"    " + sty.Chat.Streaming.Render("LIVE")}, extras...)
+	}
+	return renderRoleBlock(sty.Chat.AssistantTag.Render(" ASSISTANT "), body, "  ", extras...)
 }
 
 func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
@@ -203,11 +214,15 @@ func toolStatusLine(msg *Message, sty *styles.Styles) string {
 	case ToolPending:
 		return "    " + sty.Tool.StateWaiting.Render("Waiting for approval or execution slot.")
 	case ToolRunning:
-		started := ""
+		elapsed := ""
 		if !msg.StartedAt.IsZero() {
-			started = " · " + sty.Muted.Render("started " + formatDuration(time.Since(msg.StartedAt)))
+			elapsed = " · " + sty.Chat.Running.Render(formatDuration(time.Since(msg.StartedAt)) + " elapsed")
 		}
-		return "    " + sty.Tool.StateRunning.Render("Working… result will appear inline") + started
+		return "    " + sty.Tool.StateRunning.Render("Working… result will appear inline") + elapsed
+	case ToolSuccess:
+		if msg.Duration > 0 {
+			return "    " + sty.Tool.StateSuccess.Render("Completed inline in " + formatDuration(msg.Duration))
+		}
 	case ToolError:
 		if strings.TrimSpace(msg.Content) == "" {
 			return "    " + sty.Tool.StateError.Render("Tool failed before producing output.")
@@ -823,9 +838,10 @@ func renderThinking(msg *Message, sty *styles.Styles, width int) string {
 }
 
 func renderSystem(msg *Message, sty *styles.Styles, width int) string {
-	meta := sty.Chat.Summary.Render(classifySystemMessage(msg.Content))
+	kind := classifySystemMessage(msg.Content)
+	meta := sty.Chat.Summary.Render(kind)
 	body := renderPlainBlock(sty.Chat.SystemText, msg.Content, width)
-	return renderRoleBlock(sty.Chat.SystemTag.Render(" SUMMARY "), body, "  ", meta)
+	return renderRoleBlock(sty.Chat.SystemTag.Render(" SUMMARY "), body, "  ", "    "+meta)
 }
 
 func renderError(msg *Message, sty *styles.Styles, width int) string {

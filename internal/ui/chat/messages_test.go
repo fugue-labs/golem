@@ -1,8 +1,10 @@
 package chat
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
@@ -69,13 +71,19 @@ func TestFindToolCallFor_NoMatch(t *testing.T) {
 	}
 }
 
+func stripANSI(s string) string {
+	re := regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+	return re.ReplaceAllString(s, "")
+}
+
 func TestRenderMessageRoles(t *testing.T) {
 	sty := styles.New(nil)
 	messages := []*Message{
 		{Kind: KindUser, Content: "ship it"},
 		{Kind: KindAssistant, Content: "# Heading\n\n- bullet"},
+		{Kind: KindAssistant, Content: "Still working", Streaming: true},
 		{Kind: KindThinking, Content: "considering options"},
-		{Kind: KindToolCall, ToolName: "bash", ToolArgs: "go test ./...", Status: ToolRunning},
+		{Kind: KindToolCall, ToolName: "bash", ToolArgs: "go test ./...", Status: ToolRunning, StartedAt: time.Now().Add(-1500 * time.Millisecond)},
 		{Kind: KindSystem, Content: "1200↓ 300↑ · 1 tools"},
 		{Kind: KindError, Content: "boom"},
 	}
@@ -86,16 +94,17 @@ func TestRenderMessageRoles(t *testing.T) {
 		want []string
 	}{
 		{"user", messages[0], []string{"USER", "ship it"}},
-		{"assistant", messages[1], []string{"ASSISTANT", "Heading", "bullet", "streaming"}},
-		{"thinking", messages[2], []string{"THINKING", "considering options", "thinking"}},
-		{"tool", messages[3], []string{"TOOL", "running", "go test ./...", "Working"}},
-		{"system", messages[4], []string{"SUMMARY", "usage", "1200"}},
-		{"error", messages[5], []string{"ERROR", "boom"}},
+		{"assistant", messages[1], []string{"ASSISTANT", "Heading", "bullet", "markdown response"}},
+		{"assistant_live", messages[2], []string{"ASSISTANT", "Still working", "LIVE"}},
+		{"thinking", messages[3], []string{"THINKING", "considering options", "thinking"}},
+		{"tool", messages[4], []string{"TOOL", "running", "go test ./...", "Working", "elapsed"}},
+		{"system", messages[5], []string{"SUMMARY", "usage", "1200"}},
+		{"error", messages[6], []string{"ERROR", "boom"}},
 	}
 
 	for _, tc := range checks {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.msg.Render(sty, 80, messages)
+			got := stripANSI(tc.msg.Render(sty, 80, messages))
 			for _, want := range tc.want {
 				if !strings.Contains(got, want) {
 					t.Fatalf("render missing %q in %q", want, got)
@@ -108,7 +117,7 @@ func TestRenderMessageRoles(t *testing.T) {
 func TestRenderSystemClassifiesReplay(t *testing.T) {
 	sty := styles.New(nil)
 	msg := &Message{Kind: KindSystem, Content: "Replay complete."}
-	got := msg.Render(sty, 80, []*Message{msg})
+	got := stripANSI(msg.Render(sty, 80, []*Message{msg}))
 	for _, want := range []string{"SUMMARY", "replay", "Replay complete."} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("render missing %q in %q", want, got)
@@ -161,5 +170,14 @@ func TestParseGrepLine(t *testing.T) {
 					tt.line, path, num, code, ok, tt.path, tt.lineNum, tt.code, tt.ok)
 			}
 		})
+	}
+}
+
+func TestRenderAssistantCompletedOmitsLiveBadge(t *testing.T) {
+	sty := styles.New(nil)
+	msg := &Message{Kind: KindAssistant, Content: "done"}
+	got := stripANSI(msg.Render(sty, 80, []*Message{msg}))
+	if strings.Contains(got, "LIVE") {
+		t.Fatalf("completed assistant unexpectedly rendered LIVE badge: %q", got)
 	}
 }
