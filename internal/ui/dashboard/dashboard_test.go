@@ -421,12 +421,41 @@ func TestRenderHeaderNoMissionShowsReadableIdleState(t *testing.T) {
 
 func TestRenderFocusTabsShowsActivePane(t *testing.T) {
 	m := New("")
+	m.width = 80
+	m.height = 24
 	m.focusPane = paneEvidence
 	plain := stripANSITest(m.renderFocusTabs(80))
 	for _, want := range []string{"[1] Tasks", "[2] Workers", "[3] Evidence", "[4] Events"} {
 		if !containsAny(plain, want) {
 			t.Fatalf("expected %q in focus tabs, got %q", want, plain)
 		}
+	}
+}
+
+func TestPaneAtUsesRenderedLayouts(t *testing.T) {
+	m := New("")
+	m.width = 120
+	m.height = 40
+	if _, ok := m.paneAt(5, 5); ok {
+		t.Fatal("expected no hit-testing in no-mission state")
+	}
+
+	m.lastErr = fmt.Errorf("store offline")
+	if _, ok := m.paneAt(5, 5); ok {
+		t.Fatal("expected no hit-testing in error state")
+	}
+
+	m.lastErr = nil
+	m.missionObj = &mission.Mission{ID: "m1", Title: "Mission", Goal: "Goal", Status: mission.MissionRunning}
+	m.summary = &mission.MissionSummary{}
+	m.width = 72
+	m.height = 20
+	m.focusPane = paneWorkers
+	if got, ok := m.paneAt(10, len(m.renderCompactHeader())+3); !ok || got != paneWorkers {
+		t.Fatalf("compact paneAt should hit focused pane, got (%v,%v)", got, ok)
+	}
+	if got, ok := m.paneAt(2, len(m.renderCompactHeader())); !ok || got != paneTasks {
+		t.Fatalf("tab row click should map to tasks tab, got (%v,%v)", got, ok)
 	}
 }
 

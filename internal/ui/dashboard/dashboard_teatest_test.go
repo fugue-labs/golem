@@ -545,6 +545,9 @@ func TestTeatestCompactLayoutTracksFocusedPane(t *testing.T) {
 	if !strings.Contains(view, "Tasks") {
 		t.Fatalf("expected tasks pane in compact view, got:\n%s", view)
 	}
+	if !strings.Contains(view, "Compact") {
+		t.Fatalf("expected compact support copy in compact view, got:\n%s", view)
+	}
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: '2'})
 	m = updated.(*Model)
@@ -685,6 +688,20 @@ func TestTeatestMouseClickFocusesPaneAndWheelScrolls(t *testing.T) {
 	m = updated.(*Model)
 	if m.scrollPos[paneWorkers] != 0 {
 		t.Fatalf("wheel up should scroll back toward top, got %d", m.scrollPos[paneWorkers])
+	}
+
+	m.width = 72
+	m.height = 20
+	m.focusPane = paneEvidence
+	updated, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 15, Y: len(m.renderCompactHeader()) + 3, Button: tea.MouseLeft}))
+	m = updated.(*Model)
+	if m.focusPane != paneEvidence {
+		t.Fatalf("compact body click should keep focused pane, got %d", m.focusPane)
+	}
+	updated, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: len(m.renderCompactHeader()), Button: tea.MouseLeft}))
+	m = updated.(*Model)
+	if m.focusPane != paneTasks {
+		t.Fatalf("tab row click should focus tasks in compact view, got %d", m.focusPane)
 	}
 }
 

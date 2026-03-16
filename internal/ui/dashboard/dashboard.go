@@ -20,6 +20,38 @@ const (
 	compactDashboardHeight = 22
 )
 
+// dashboardRenderMode tracks the operator-visible dashboard mode so hit-testing matches rendering.
+type dashboardRenderMode int
+
+const (
+	dashboardRenderNone dashboardRenderMode = iota
+	dashboardRenderNoMission
+	dashboardRenderError
+	dashboardRenderCompact
+	dashboardRenderFull
+)
+
+type dashboardRect struct {
+	x int
+	y int
+	w int
+	h int
+}
+
+func (r dashboardRect) contains(x, y int) bool {
+	return x >= r.x && y >= r.y && x < r.x+r.w && y < r.y+r.h
+}
+
+type dashboardLayout struct {
+	mode     dashboardRenderMode
+	tabs     dashboardRect
+	body     dashboardRect
+	tasks    dashboardRect
+	workers  dashboardRect
+	evidence dashboardRect
+	events   dashboardRect
+}
+
 // pane identifies which pane has focus for scrolling.
 type pane int
 
@@ -134,42 +166,139 @@ func (m *Model) paneAt(x, y int) (pane, bool) {
 	if x < 0 || y < 0 || m.width <= 0 || m.height <= 0 {
 		return paneTasks, false
 	}
-	headerLines := len(m.renderHeader())
-	bodyStartY := headerLines + 1
+	layout := m.currentLayout()
+	if p, ok := m.paneFromTabs(x, y); ok {
+		return p, true
+	}
+	switch layout.mode {
+	case dashboardRenderFull:
+		switch {
+		case layout.tasks.contains(x, y):
+			return paneTasks, true
+		case layout.workers.contains(x, y):
+			return paneWorkers, true
+		case layout.evidence.contains(x, y):
+			return paneEvidence, true
+		case layout.events.contains(x, y):
+			return paneEvents, true
+		}
+	case dashboardRenderCompact:
+		if !layout.body.contains(x, y) {
+			return paneTasks, false
+		}
+		return m.focusPane, true
+	case dashboardRenderNoMission, dashboardRenderError, dashboardRenderNone:
+		return paneTasks, false
+	}
+	return paneTasks, false
+}
+
+func (m *Model) currentLayout() dashboardLayout {
+	if m.width <= 0 || m.height <= 0 {
+		return dashboardLayout{mode: dashboardRenderNone}
+	}
+	if m.missionObj == nil {
+		if m.lastErr != nil && !isNoMissionError(m.lastErr) {
+			return dashboardLayout{mode: dashboardRenderError}
+		}
+		return dashboardLayout{mode: dashboardRenderNoMission}
+	}
+	if m.useCompactLayout() {
+		return m.compactDashboardLayout()
+	}
+	return m.fullDashboardLayout()
+}
+
+func (m *Model) fullDashboardLayout() dashboardLayout {
+	headerHeight := len(m.renderHeader())
+	tabsY := headerHeight
+	separatorY := tabsY + 1
+	bodyY := separatorY + 1
 	eventHeight := 2
 	if m.height >= 18 {
 		eventHeight = 3
 	}
-	bodyHeight := m.height - headerLines - 1 - eventHeight - 1
+	bodyHeight := m.height - (headerHeight + 1 + 1) - 1 - eventHeight - 1
 	if bodyHeight < 4 {
 		bodyHeight = 4
 	}
-	eventStartY := bodyStartY + bodyHeight + 1
-	if y < bodyStartY {
+	eventsY := bodyY + bodyHeight + 1
+
+	leftWidth := m.width * 3 / 5
+	rightWidth := m.width - leftWidth - 1
+	if rightWidth < 10 {
+		rightWidth = 10
+		leftWidth = m.width - rightWidth - 1
+	}
+	if leftWidth < 1 {
+		leftWidth = 1
+		rightWidth = max(1, m.width-leftWidth-1)
+	}
+	if rightWidth < 1 {
+		rightWidth = 1
+	}
+
+	taskHeight := bodyHeight * 3 / 5
+	if taskHeight < 1 {
+		taskHeight = 1
+	}
+	evidenceHeight := bodyHeight - taskHeight
+	if evidenceHeight < 1 {
+		evidenceHeight = 1
+	}
+
+	return dashboardLayout{
+		mode:     dashboardRenderFull,
+		tabs:     dashboardRect{x: 0, y: tabsY, w: m.width, h: 1},
+		body:     dashboardRect{x: 0, y: bodyY, w: m.width, h: bodyHeight},
+		tasks:    dashboardRect{x: 0, y: bodyY, w: leftWidth, h: taskHeight},
+		evidence: dashboardRect{x: 0, y: bodyY + taskHeight, w: leftWidth, h: evidenceHeight},
+		workers:  dashboardRect{x: leftWidth + 1, y: bodyY, w: rightWidth, h: bodyHeight},
+		events:   dashboardRect{x: 0, y: eventsY, w: m.width, h: eventHeight},
+	}
+}
+
+func (m *Model) compactDashboardLayout() dashboardLayout {
+	headerHeight := len(m.renderCompactHeader())
+	tabsY := headerHeight
+	separatorY := tabsY + 1
+	bodyY := separatorY + 1
+	paneHeight := max(1, m.height-(headerHeight+1+1)-2)
+	return dashboardLayout{
+		mode: dashboardRenderCompact,
+		tabs: dashboardRect{x: 0, y: tabsY, w: m.width, h: 1},
+		body: dashboardRect{x: 0, y: bodyY, w: m.width, h: paneHeight},
+	}
+}
+
+func (m *Model) paneFromTabs(x, y int) (pane, bool) {
+	layout := m.currentLayout()
+	if !layout.tabs.contains(x, y) {
 		return paneTasks, false
 	}
-	if y >= eventStartY && y < eventStartY+eventHeight {
-		return paneEvents, true
+	joinerWidth := lipgloss.Width(m.sty.Panel.Separator.Render(" "))
+	cursor := 0
+	tabs := []struct {
+		title string
+		pane  pane
+	}{
+		{title: "[1] Tasks", pane: paneTasks},
+		{title: "[2] Workers", pane: paneWorkers},
+		{title: "[3] Evidence", pane: paneEvidence},
+		{title: "[4] Events", pane: paneEvents},
 	}
-	if y >= bodyStartY && y < bodyStartY+bodyHeight {
-		leftWidth := m.width * 3 / 5
-		rightWidth := m.width - leftWidth - 1
-		if rightWidth < 10 {
-			rightWidth = 10
-			leftWidth = m.width - rightWidth - 1
+	for _, tab := range tabs {
+		style := m.sty.Panel.FocusTabInactive
+		if m.focusPane == tab.pane {
+			style = m.sty.Panel.FocusTabActive
 		}
-		if leftWidth < 1 {
-			leftWidth = 1
+		tabWidth := lipgloss.Width(style.Render(tab.title))
+		if x >= cursor && x < cursor+tabWidth {
+			return tab.pane, true
 		}
-		if x < leftWidth {
-			taskHeight := bodyHeight * 3 / 5
-			if y < bodyStartY+taskHeight {
-				return paneTasks, true
-			}
-			return paneEvidence, true
-		}
-		if x > leftWidth {
-			return paneWorkers, true
+		cursor += tabWidth + joinerWidth
+		if cursor >= m.width {
+			break
 		}
 	}
 	return paneTasks, false
@@ -440,7 +569,7 @@ func (m *Model) renderCompactDashboardView() tea.View {
 
 	paneHeight := max(1, m.height-len(lines)-2) // compact hint + footer
 	lines = append(lines, m.renderFocusedPaneLines(paneHeight, m.width, true)...)
-	lines = append(lines, m.sty.Panel.EmptyBody.Render(ansi.Truncate("Compact layout · resize wider for the full four-pane Mission Control view.", max(1, m.width), "…")))
+	lines = append(lines, m.renderCompactSupportLine(max(1, m.width)))
 	lines = append(lines, m.renderFooter())
 	return m.finalizeView(lines)
 }
@@ -475,6 +604,7 @@ func (m *Model) renderCompactHeader() []string {
 	return []string{
 		titleLine,
 		m.sty.Bold.Render(ansi.Truncate(missionTitle, max(1, m.width), "…")),
+		m.sty.HalfMuted.Render(ansi.Truncate(ms.Goal, max(1, m.width), "…")),
 		m.sty.HalfMuted.Render(ansi.Truncate(summaryLine, max(1, m.width), "…")),
 	}
 }
@@ -582,6 +712,13 @@ func (m *Model) windowTitle() string {
 		title += " — unfocused"
 	}
 	return title
+}
+
+func (m *Model) renderCompactSupportLine(width int) string {
+	segments := []string{"Compact layout", "resize wider for the full four-pane Mission Control view"}
+	return renderDashboardHelpSurfaceLine(width, "Compact", segments, func(text string) string {
+		return m.sty.Panel.EmptyBody.Render(text)
+	})
 }
 
 func (m *Model) renderHeaderHelpHint(width int) string {
