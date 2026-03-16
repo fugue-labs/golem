@@ -16,14 +16,18 @@ import (
 )
 
 const (
-	workflowPanelWidth              = styles.WorkflowRailWidth
-	workflowPanelWideMinWidth       = styles.WorkflowRailInlineMinWidth
-	workflowPanelStackMinWidth      = styles.WorkflowRailStackMinWidth
-	workflowPanelStackMinHeight     = styles.WorkflowRailStackMinHeight
-	workflowPanelStackMinLines      = styles.WorkflowRailStackMinLines
-	workflowPanelStackMaxLines      = styles.WorkflowRailStackMaxLines
-	workflowPanelStackHeightDivisor = styles.WorkflowRailStackHeightDivisor
-	workflowPanelMinimumChatHeight  = styles.WorkflowRailMinimumChatHeight
+	workflowPanelWidth                  = styles.WorkflowRailWidth
+	workflowPanelWideMinWidth           = styles.WorkflowRailInlineMinWidth
+	workflowPanelStackMinWidth          = styles.WorkflowRailStackMinWidth
+	workflowPanelStackMinHeight         = styles.WorkflowRailStackMinHeight
+	workflowPanelStackMinLines          = styles.WorkflowRailStackMinLines
+	workflowPanelStackMaxLines          = styles.WorkflowRailStackMaxLines
+	workflowPanelStackHeightDivisor     = styles.WorkflowRailStackHeightDivisor
+	workflowPanelMinimumChatHeight      = styles.WorkflowRailMinimumChatHeight
+	workflowPanelHorizontalChrome       = styles.WorkflowRailHorizontalChrome
+	workflowPanelVerticalChrome         = styles.WorkflowRailVerticalChrome
+	workflowPanelHeaderGapMin           = styles.WorkflowRailHeaderGapMin
+	workflowPanelSectionSeparatorHeight = styles.WorkflowRailSectionSeparatorHeight
 
 	workflowSectionCount         = styles.WorkflowSectionCount
 	workflowMissionTargetLines   = styles.WorkflowMissionTargetLines
@@ -166,7 +170,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	if height < 1 {
 		height = 1
 	}
-	contentWidth := max(1, width-2)
+	contentWidth := max(1, width-workflowPanelHorizontalChrome)
 	borderStr := lipgloss.NewStyle().Foreground(m.sty.BgSubtle).Render(styles.BorderThin) + " "
 	sep := m.sty.Panel.Separator.Render(strings.Repeat(styles.Separator, contentWidth))
 
@@ -174,7 +178,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	headerRightText := workflowPanelSummary(m)
 	headerRight := ""
 	if headerRightText != "" {
-		maxRight := contentWidth - lipgloss.Width(headerLeft) - 1
+		maxRight := contentWidth - lipgloss.Width(headerLeft) - workflowPanelHeaderGapMin
 		if maxRight > 0 {
 			headerRightText = ansi.Truncate(headerRightText, maxRight, "…")
 		}

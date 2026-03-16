@@ -1381,9 +1381,9 @@ func (m *Model) renderChatRegion(height int) string {
 func (m *Model) renderCompactHeader() string {
 	shellWidth := m.shellWidth()
 	left := m.sty.Shell.SectionLabel.Render(" Context ") + " " + m.shellIdentityLine()
-	right := m.renderShellLocation(max(12, shellWidth/3))
+	right := m.renderShellLocation(max(shellCompactLocationMinWidth, shellWidth/3))
 	if right == "" {
-		right = m.sty.Header.Model.Render(styles.ModelIcon + " " + truncateText(m.cfg.Model, max(8, shellWidth/3)))
+		right = m.sty.Header.Model.Render(styles.ModelIcon + " " + truncateText(m.cfg.Model, max(shellCompactModelMinWidth, shellWidth/3)))
 	}
 	return lipgloss.NewStyle().Width(shellWidth).MaxWidth(shellWidth).Render(joinShellLine(left, right, shellWidth))
 }
@@ -1404,7 +1404,7 @@ func (m *Model) renderCompactInput() string {
 func (m *Model) renderCompactStatusBar() string {
 	shellWidth := m.shellWidth()
 	meta := m.compactStatusMeta(shellWidth)
-	content := m.sty.Shell.HeroBadge.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-9)))
+	content := m.sty.Shell.HeroBadge.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-shellCompactStatusReservedWidth)))
 	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
 
@@ -1417,8 +1417,17 @@ const (
 )
 
 const (
-	minShellWidth  = styles.ShellMinimumWidth
-	minShellHeight = styles.ShellMinimumHeight
+	minShellWidth                   = styles.ShellMinimumWidth
+	minShellHeight                  = styles.ShellMinimumHeight
+	shellCompactLocationMinWidth    = styles.ShellCompactLocationMinWidth
+	shellCompactModelMinWidth       = styles.ShellCompactModelMinWidth
+	shellSectionMetaMinWidth        = styles.ShellSectionMetaMinWidth
+	shellHeaderSummaryMinWidth      = styles.ShellHeaderSummaryMinWidth
+	shellWelcomeBodyMinWidth        = styles.ShellWelcomeBodyMinWidth
+	shellWelcomeHorizontalPadding   = styles.ShellWelcomeHorizontalPadding
+	shellCompactStatusReservedWidth = styles.ShellCompactStatusReservedWidth
+	shellActiveToolArgsMinWidth     = styles.ShellActiveToolArgsMinWidth
+	shellActiveToolArgsReserved     = styles.ShellActiveToolArgsReservedWidth
 )
 
 func (m *Model) shellWidth() int {
@@ -1429,10 +1438,10 @@ func (m *Model) shellWidth() int {
 }
 
 func (m *Model) belowMinimumShellSize() bool {
-	if m.width > 0 && m.width < styles.ShellMinimumWidth {
+	if m.width > 0 && m.width < minShellWidth {
 		return true
 	}
-	if m.height > 0 && m.height < styles.ShellMinimumHeight {
+	if m.height > 0 && m.height < minShellHeight {
 		return true
 	}
 	return false
@@ -1498,15 +1507,15 @@ func (m *Model) renderMinimumSizeView() tea.View {
 	shellWidth := max(1, m.shellWidth())
 	lineWidth := max(1, shellWidth)
 	recovery := "Resize the terminal to restore transcript, workflow, and input."
-	sizeLine := fmt.Sprintf("Current %dx%d · need at least %dx%d", max(0, m.width), max(0, m.height), styles.ShellMinimumWidth, styles.ShellMinimumHeight)
+	sizeLine := fmt.Sprintf("Current %dx%d · need at least %dx%d", max(0, m.width), max(0, m.height), minShellWidth, minShellHeight)
 	helpLine := "/help when resized · Esc cancel · Ctrl+L clear"
 	shellState := truncateText("Shell state · "+m.shellLayoutLabel(), lineWidth)
 	switch {
-	case m.width > 0 && m.width < styles.ShellMinimumWidth && m.height > 0 && m.height < styles.ShellMinimumHeight:
+	case m.width > 0 && m.width < minShellWidth && m.height > 0 && m.height < minShellHeight:
 		recovery = "Resize wider and taller to restore transcript, workflow, and input."
-	case m.width > 0 && m.width < styles.ShellMinimumWidth:
+	case m.width > 0 && m.width < minShellWidth:
 		recovery = "Resize wider to restore transcript, workflow, and input."
-	case m.height > 0 && m.height < styles.ShellMinimumHeight:
+	case m.height > 0 && m.height < minShellHeight:
 		recovery = "Resize taller to restore transcript, workflow, and input."
 	}
 	lines := []string{
@@ -1530,7 +1539,7 @@ func (m *Model) renderSectionHeader(label, meta string, width int) string {
 	if meta == "" {
 		return left
 	}
-	right := m.sty.Shell.SectionMeta.Render(truncateText(meta, max(12, width/2)))
+	right := m.sty.Shell.SectionMeta.Render(truncateText(meta, max(shellSectionMetaMinWidth, width/2)))
 	return joinShellLine(left, right, width)
 }
 
@@ -1652,8 +1661,8 @@ func (m *Model) renderHeader() string {
 	headerLines := []string{
 		joinShellLine(contextBadge+" "+m.shellIdentityLine(), modelLine, shellWidth),
 		joinShellLine(
-			m.sty.Muted.Render(truncateText("Context · "+m.renderContextSummary(), max(28, shellWidth/2))),
-			m.sty.HalfMuted.Render(truncateText("Activity · "+m.currentActivitySummary(), max(28, shellWidth/2))),
+			m.sty.Muted.Render(truncateText("Context · "+m.renderContextSummary(), max(shellHeaderSummaryMinWidth, shellWidth/2))),
+			m.sty.HalfMuted.Render(truncateText("Activity · "+m.currentActivitySummary(), max(shellHeaderSummaryMinWidth, shellWidth/2))),
 			shellWidth,
 		),
 		m.renderSectionRule(shellWidth),

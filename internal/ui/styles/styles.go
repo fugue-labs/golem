@@ -29,29 +29,42 @@ const (
 
 // Shared layout policy used across shell, workflow rail, and dashboard surfaces.
 const (
-	ShellDefaultWidth         = 72
-	ShellMinimumWidth         = 56
-	ShellMinimumHeight        = 6
-	ShellHeaderLines          = 3
-	ShellChatChromeMinHeight  = 4
-	ShellContextualHelpHeight = 10
+	ShellDefaultWidth                = 72
+	ShellMinimumWidth                = 56
+	ShellMinimumHeight               = 6
+	ShellHeaderLines                 = 3
+	ShellChatChromeMinHeight         = 4
+	ShellContextualHelpHeight        = 10
+	ShellCompactLocationMinWidth     = 12
+	ShellCompactModelMinWidth        = 8
+	ShellSectionMetaMinWidth         = 12
+	ShellHeaderSummaryMinWidth       = 28
+	ShellWelcomeBodyMinWidth         = 20
+	ShellWelcomeHorizontalPadding    = 4
+	ShellCompactStatusReservedWidth  = 9
+	ShellActiveToolArgsMinWidth      = 8
+	ShellActiveToolArgsReservedWidth = 22
 
-	WorkflowRailWidth               = 38
-	WorkflowRailInlineMinWidth      = 110
-	WorkflowRailStackMinWidth       = 72
-	WorkflowRailStackMinHeight      = 8
-	WorkflowRailStackMinLines       = 3
-	WorkflowRailStackMaxLines       = 6
-	WorkflowRailStackHeightDivisor  = 3
-	WorkflowRailMinimumChatHeight   = 4
-	WorkflowSummaryStatusMaxHeight  = ShellMinimumHeight + 1
-	WorkflowMissionTargetLines      = 6
-	WorkflowSpecTargetLines         = 5
-	WorkflowPlanTargetLines         = 5
-	WorkflowVerificationTargetLines = 5
-	WorkflowInvariantTargetLines    = 4
-	WorkflowTeamTargetLines         = 3
-	WorkflowSectionCount            = 6
+	WorkflowRailWidth                  = 38
+	WorkflowRailInlineMinWidth         = 110
+	WorkflowRailStackMinWidth          = 72
+	WorkflowRailStackMinHeight         = 8
+	WorkflowRailStackMinLines          = 3
+	WorkflowRailStackMaxLines          = 6
+	WorkflowRailStackHeightDivisor     = 3
+	WorkflowRailMinimumChatHeight      = 4
+	WorkflowRailHorizontalChrome       = 2
+	WorkflowRailVerticalChrome         = 2
+	WorkflowRailHeaderGapMin           = 1
+	WorkflowRailSectionSeparatorHeight = 1
+	WorkflowSummaryStatusMaxHeight     = ShellMinimumHeight + 1
+	WorkflowMissionTargetLines         = 6
+	WorkflowSpecTargetLines            = 5
+	WorkflowPlanTargetLines            = 5
+	WorkflowVerificationTargetLines    = 5
+	WorkflowInvariantTargetLines       = 4
+	WorkflowTeamTargetLines            = 3
+	WorkflowSectionCount               = 6
 
 	DashboardCompactWidth             = 88
 	DashboardCompactHeight            = 22
@@ -67,6 +80,9 @@ const (
 	DashboardPrimaryPaneRatioNum      = 3
 	DashboardPrimaryPaneRatioDen      = 5
 	DashboardMinimumSidebarWidth      = 10
+	DashboardColumnGapWidth           = 1
+	DashboardSectionGapHeight         = 1
+	DashboardFooterHeight             = 1
 	DashboardFocusAccentMinWidth      = 24
 	DashboardFocusAccentMaxWidth      = 2
 	DashboardFocusAccentDivisor       = 18
@@ -439,7 +455,7 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Panel.EmptyHint = filledBadgeStyle(palette.surface, palette.info, noColor)
 	s.Panel.FocusTabActive = filledBadgeStyle(palette.primary, palette.accentText, noColor)
 	s.Panel.FocusTabInactive = lipgloss.NewStyle().Foreground(palette.fgMuted).Background(palette.surface).Padding(0, 1)
-	s.Panel.SectionLabel = s.Panel.Progress
+	s.Panel.SectionLabel = lipgloss.NewStyle().Foreground(palette.secondary).Bold(true)
 	s.Panel.StatusRunning = filledBadgeStyle(palette.blue, readableText(palette.blue), noColor)
 	s.Panel.StatusWaiting = filledBadgeStyle(palette.yellow, readableText(palette.yellow), noColor)
 	s.Panel.StatusBlocked = filledBadgeStyle(palette.red, readableText(palette.red), noColor)
