@@ -90,6 +90,7 @@ type Model struct {
 	focusPane       pane
 	scrollPos       [paneCount]int
 	terminalFocused bool
+	refreshing      bool
 	lastErr         error
 	quitting        bool
 }
@@ -132,6 +133,7 @@ type refreshDoneMsg struct {
 }
 
 func (m *Model) Init() tea.Cmd {
+	m.refreshing = true
 	return tea.Batch(tea.RequestBackgroundColor, m.initStore(), tickCmd())
 }
 
@@ -274,8 +276,9 @@ func (m *Model) compactDashboardLayout() dashboardLayout {
 	headerHeight := len(m.renderCompactHeader())
 	tabsY := headerHeight
 	separatorY := tabsY + 1
-	bodyY := separatorY + 1
-	paneHeight := max(1, m.height-(headerHeight+1+1)-2)
+	supportY := separatorY + 1
+	bodyY := supportY + 1
+	paneHeight := max(1, m.height-bodyY-1)
 	return dashboardLayout{
 		mode: dashboardRenderCompact,
 		tabs: dashboardRect{x: 0, y: tabsY, w: m.width, h: 1},
@@ -456,12 +459,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		m.refreshing = true
 		return m, tea.Batch(
 			func() tea.Msg { return m.doRefresh() },
 			tickCmd(),
 		)
 
 	case refreshDoneMsg:
+		m.refreshing = false
 		m.lastErr = msg.err
 		return m, nil
 
@@ -475,6 +480,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "r":
+			m.refreshing = true
 			return m, func() tea.Msg { return m.doRefresh() }
 		case "tab":
 			m.setFocusPane((m.focusPane + 1) % paneCount)
@@ -523,6 +529,9 @@ func (m *Model) View() tea.View {
 	if m.missionObj == nil {
 		if m.lastErr != nil && !isNoMissionError(m.lastErr) {
 			return m.renderErrorView()
+		}
+		if m.refreshing {
+			return m.renderLoadingView()
 		}
 		return m.renderNoMissionView()
 	}
@@ -635,6 +644,24 @@ func (m *Model) renderCompactHeader() []string {
 	}
 }
 
+func (m *Model) renderLoadingView() tea.View {
+	lines := []string{
+		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("loading", "Refreshing"),
+	}
+	lines = append(lines, m.renderStateCard(
+		max(1, m.width),
+		"Loading mission state",
+		"Mission Control is connecting to durable mission state and preparing the latest operator snapshot.",
+		[]string{
+			"Stay here while the dashboard refresh completes.",
+			"Press q to quit if you meant to leave Mission Control.",
+		},
+	)...)
+	lines = append(lines, m.renderDashboardHelpLine(max(1, m.width), "/mission status in shell"))
+	lines = append(lines, m.renderFooter())
+	return m.finalizeView(lines)
+}
+
 func (m *Model) renderNoMissionView() tea.View {
 	lines := []string{
 		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("idle", "No mission"),
@@ -655,8 +682,13 @@ func (m *Model) renderNoMissionView() tea.View {
 
 func (m *Model) renderErrorView() tea.View {
 	body := "Mission Control could not load durable mission state."
+	actions := []string{
+		"Press r to retry the refresh.",
+		"Press q to quit if the mission store is unavailable.",
+	}
 	if m.lastErr != nil {
 		body = body + " " + m.lastErr.Error()
+		actions = append(actions, "Latest error: "+m.lastErr.Error())
 	}
 	lines := []string{
 		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("error", "Dashboard error"),
@@ -665,10 +697,7 @@ func (m *Model) renderErrorView() tea.View {
 		max(1, m.width),
 		"Unable to load dashboard",
 		body,
-		[]string{
-			"Press r to retry the refresh.",
-			"Press q to quit if the mission store is unavailable.",
-		},
+		actions,
 	)...)
 	lines = append(lines, m.renderDashboardHelpLine(max(1, m.width), "/mission status in shell"))
 	lines = append(lines, m.renderFooter())
@@ -858,12 +887,22 @@ func (m *Model) renderDashboardHelpLine(width int, shellHint string) string {
 }
 
 func (m *Model) renderStateCard(width int, title, body string, actions []string) []string {
-	lines := []string{m.sty.Panel.EmptyTitle.Render(ansi.Truncate(title, max(1, width), "…"))}
-	for _, line := range wrapPlainText(body, max(1, width-2)) {
-		lines = append(lines, m.sty.Panel.EmptyBody.Render(" "+line))
+	if width <= 0 {
+		width = 1
+	}
+	badge := m.sty.Panel.StateBadge.Render(" Mission Control ")
+	header := lipgloss.JoinHorizontal(lipgloss.Left,
+		badge,
+		" ",
+		m.sty.Panel.StateTitle.Render(ansi.Truncate(title, max(1, width-lipgloss.Width(badge)-1), "…")),
+	)
+	lines := []string{ansi.Truncate(header, width, "…")}
+	lines = append(lines, m.sty.Panel.StateBorder.Render(strings.Repeat(styles.Separator, max(1, width))))
+	for _, line := range wrapPlainText(body, max(1, width-4)) {
+		lines = append(lines, m.sty.Panel.StateBody.Render("  "+ansi.Truncate(line, max(1, width-2), "…")))
 	}
 	for _, action := range actions {
-		lines = append(lines, m.sty.Panel.EmptyHint.Render(" → "+ansi.Truncate(action, max(1, width-4), "…")))
+		lines = append(lines, m.sty.Panel.StateAction.Render("  → "+ansi.Truncate(action, max(1, width-4), "…")))
 	}
 	return lines
 }
@@ -1366,6 +1405,10 @@ func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
 	}
 	label := fmt.Sprintf("%s %s %s", indicator, paneShortcut(title), title)
 	line := headStyle.Render(label) + " " + metaStyle.Render(meta)
+	if focused && width >= 24 {
+		accentWidth := min(2, max(1, width/18))
+		line = strings.Repeat(styles.BorderThick, accentWidth) + " " + line
+	}
 	return ansi.Truncate(line, max(1, width), "…")
 }
 

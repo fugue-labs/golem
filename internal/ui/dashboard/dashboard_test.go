@@ -443,6 +443,35 @@ func TestRenderCompactSupportLineReflectsFocusedPane(t *testing.T) {
 	}
 }
 
+func TestCompactDashboardLayoutStartsBodyAfterSupportLine(t *testing.T) {
+	m := New("")
+	m.width = 72
+	m.height = 20
+	m.missionObj = &mission.Mission{ID: "m1", Title: "Mission", Goal: "Goal", Status: mission.MissionRunning}
+	m.summary = &mission.MissionSummary{}
+	layout := m.compactDashboardLayout()
+	wantBodyY := len(m.renderCompactHeader()) + 3
+	if layout.body.y != wantBodyY {
+		t.Fatalf("body y = %d, want %d", layout.body.y, wantBodyY)
+	}
+	if layout.body.h != m.height-layout.body.y-1 {
+		t.Fatalf("body height = %d, want %d", layout.body.h, m.height-layout.body.y-1)
+	}
+}
+
+func TestRenderLoadingViewUsesReadableStateCard(t *testing.T) {
+	m := New("")
+	m.width = 72
+	m.height = 18
+	m.refreshing = true
+	plain := stripANSITest(viewString(m))
+	for _, want := range []string{"Mission Control", "Refreshing", "Loading mission state", "latest operator snapshot"} {
+		if !containsAny(plain, want) {
+			t.Fatalf("expected %q in loading view, got %q", want, plain)
+		}
+	}
+}
+
 func TestRefreshFailureKeepsSelectedMissionID(t *testing.T) {
 	m := New("mission-123")
 	m.width = 72

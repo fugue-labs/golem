@@ -149,6 +149,11 @@ type Styles struct {
 		HeaderInactive   lipgloss.Style
 		HeaderMeta       lipgloss.Style
 		HeaderKey        lipgloss.Style
+		StateBorder      lipgloss.Style
+		StateBadge       lipgloss.Style
+		StateTitle       lipgloss.Style
+		StateBody        lipgloss.Style
+		StateAction      lipgloss.Style
 		EmptyTitle       lipgloss.Style
 		EmptyBody        lipgloss.Style
 		EmptyHint        lipgloss.Style
@@ -349,6 +354,11 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Panel.HeaderInactive = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.bgSubtle).Padding(0, 1).Bold(true)
 	s.Panel.HeaderMeta = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Panel.HeaderKey = lipgloss.NewStyle().Foreground(palette.blue).Bold(true)
+	s.Panel.StateBorder = lipgloss.NewStyle().Foreground(palette.border)
+	s.Panel.StateBadge = lipgloss.NewStyle().Foreground(palette.primary).Background(palette.surface).Padding(0, 1).Bold(true)
+	s.Panel.StateTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
+	s.Panel.StateBody = lipgloss.NewStyle().Foreground(palette.fgMuted)
+	s.Panel.StateAction = lipgloss.NewStyle().Foreground(palette.info).Bold(true)
 	s.Panel.EmptyTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.bgSubtle).Padding(0, 1).Bold(true)
 	s.Panel.EmptyBody = lipgloss.NewStyle().Foreground(palette.fgMuted).Background(palette.surface).Padding(0, 1)
 	s.Panel.EmptyHint = lipgloss.NewStyle().Foreground(palette.info).Background(palette.surface).Padding(0, 1).Bold(true)

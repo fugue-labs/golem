@@ -1086,6 +1086,19 @@ func TestTeatestZeroDimensionView(t *testing.T) {
 	}
 }
 
+func TestTeatestLoadingStateIsReadable(t *testing.T) {
+	m := New("")
+	m.width = 72
+	m.height = 18
+	m.refreshing = true
+	view := viewString(m)
+	for _, want := range []string{"Mission Control", "Refreshing", "Loading mission state", "Stay here while the dashboard refresh completes"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in loading view, got:\n%s", want, view)
+		}
+	}
+}
+
 func TestTeatestUltraCompactMissionViewRemainsReadable(t *testing.T) {
 	m, ctrl := setupTeatestModel(t, 46, 12)
 	ms := createTestMission(t, ctrl)
