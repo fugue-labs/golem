@@ -88,11 +88,16 @@ type Styles struct {
 		Summary         lipgloss.Style
 		AssistantMeta   lipgloss.Style
 		UserTag         lipgloss.Style
+		UserRail        lipgloss.Style
 		AssistantTag    lipgloss.Style
+		AssistantRail   lipgloss.Style
 		ThinkingTag     lipgloss.Style
+		ThinkingRail    lipgloss.Style
 		SystemTag       lipgloss.Style
+		SystemRail      lipgloss.Style
 		SystemText      lipgloss.Style
 		ErrorTag        lipgloss.Style
+		ErrorRail       lipgloss.Style
 		ErrorTitle      lipgloss.Style
 		ErrorDetails    lipgloss.Style
 	}
@@ -113,6 +118,8 @@ type Styles struct {
 		OutputBorder  lipgloss.Style
 		ResultPrefix  lipgloss.Style
 		OutputMeta    lipgloss.Style
+		OutputLabel   lipgloss.Style
+		OutputFrame   lipgloss.Style
 		Truncation    lipgloss.Style
 		StateWaiting  lipgloss.Style
 		StateRunning  lipgloss.Style
@@ -281,11 +288,16 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Chat.Summary = lipgloss.NewStyle().Foreground(palette.secondary).Bold(true)
 	s.Chat.AssistantMeta = meta.Italic(true)
 	s.Chat.UserTag = tagStyle(palette.blue, palette.tagOnBlue, noColor)
+	s.Chat.UserRail = lipgloss.NewStyle().Foreground(palette.blue)
 	s.Chat.AssistantTag = tagStyle(palette.primary, palette.tagOnPrimary, noColor)
+	s.Chat.AssistantRail = lipgloss.NewStyle().Foreground(palette.primary)
 	s.Chat.ThinkingTag = tagStyle(palette.surface, palette.fgStrong, noColor)
+	s.Chat.ThinkingRail = lipgloss.NewStyle().Foreground(palette.border)
 	s.Chat.SystemTag = tagStyle(palette.secondary, palette.tagOnSecondary, noColor)
+	s.Chat.SystemRail = lipgloss.NewStyle().Foreground(palette.secondary)
 	s.Chat.SystemText = meta
 	s.Chat.ErrorTag = tagStyle(palette.errColor, palette.tagOnError, noColor)
+	s.Chat.ErrorRail = lipgloss.NewStyle().Foreground(palette.errColor)
 	s.Chat.ErrorTitle = lipgloss.NewStyle().Foreground(palette.red).Bold(true)
 	s.Chat.ErrorDetails = meta
 
@@ -304,6 +316,8 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Tool.OutputBorder = borderStyle
 	s.Tool.ResultPrefix = meta
 	s.Tool.OutputMeta = meta.Italic(true)
+	s.Tool.OutputLabel = lipgloss.NewStyle().Foreground(palette.secondary).Bold(true)
+	s.Tool.OutputFrame = lipgloss.NewStyle().Foreground(palette.border)
 	s.Tool.Truncation = subtle.Italic(true)
 	s.Tool.StateWaiting = meta.Italic(true)
 	s.Tool.StateRunning = lipgloss.NewStyle().Foreground(palette.yellow).Italic(true)

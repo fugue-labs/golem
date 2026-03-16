@@ -123,7 +123,7 @@ func RenderMessage(msg *Message, sty *styles.Styles, width int, allMessages []*M
 }
 
 func renderUserMessage(msg *Message, sty *styles.Styles, width int) string {
-	return renderRoleBlock(sty.Chat.UserTag.Render(" USER "), renderPlainBlock(sty.Base, msg.Content, width), "  ")
+	return renderRoleBlock(sty.Chat.UserTag.Render(" USER "), renderPlainBlock(sty.Base, msg.Content, width), "  ", sty.Chat.UserRail)
 }
 
 func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string {
@@ -140,7 +140,7 @@ func renderAssistantMessage(msg *Message, sty *styles.Styles, width int) string 
 	if len(meta) > 0 {
 		header += " " + strings.Join(meta, " ")
 	}
-	return renderRoleBlock(header, body, "  ")
+	return renderRoleBlock(header, body, "  ", sty.Chat.AssistantRail)
 }
 
 func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
@@ -178,11 +178,11 @@ func renderToolCall(msg *Message, sty *styles.Styles, width int) string {
 	}
 	if msg.Content != "" {
 		if body := renderToolCallResult(msg, sty, width); body != "" {
-			bodyLines = append(bodyLines, body)
+			bodyLines = append(bodyLines, renderToolOutputBlock(sty, body))
 		}
 	}
 	body := strings.Join(bodyLines, "\n")
-	return renderRoleBlock(sty.Tool.Summary.Render(" TOOL "), header, "  ", body)
+	return renderRoleBlock(sty.Tool.Summary.Render(" TOOL "), header, "  ", sty.Tool.OutputFrame, body)
 }
 
 func toolStatusParts(msg *Message, sty *styles.Styles) (string, lipgloss.Style, lipgloss.Style) {
@@ -838,14 +838,14 @@ func renderThinking(msg *Message, sty *styles.Styles, width int) string {
 		label += " · latest excerpt"
 	}
 	footer := sty.Chat.ThinkingFooter.Render("    " + label)
-	return renderRoleBlock(sty.Chat.ThinkingTag.Render(" THINKING "), body, "  ", footer)
+	return renderRoleBlock(sty.Chat.ThinkingTag.Render(" THINKING "), body, "  ", sty.Chat.ThinkingRail, footer)
 }
 
 func renderSystem(msg *Message, sty *styles.Styles, width int) string {
 	kind := classifySystemMessage(msg.Content)
 	meta := sty.Chat.Summary.Render(kind)
 	body := renderPlainBlock(sty.Chat.SystemText, msg.Content, width)
-	return renderRoleBlock(sty.Chat.SystemTag.Render(" SUMMARY "), body, "  ", "    "+meta)
+	return renderRoleBlock(sty.Chat.SystemTag.Render(" SUMMARY "), body, "  ", sty.Chat.SystemRail, "    "+meta)
 }
 
 func renderError(msg *Message, sty *styles.Styles, width int) string {
@@ -855,7 +855,7 @@ func renderError(msg *Message, sty *styles.Styles, width int) string {
 
 	if len(lines) <= 1 {
 		title := ansi.Truncate(content, available, "...")
-		return renderRoleBlock(sty.Chat.ErrorTag.Render(" ERROR "), sty.Chat.ErrorTitle.Render(title), "  ")
+		return renderRoleBlock(sty.Chat.ErrorTag.Render(" ERROR "), sty.Chat.ErrorTitle.Render(title), "  ", sty.Chat.ErrorRail)
 	}
 
 	var rendered []string
@@ -870,29 +870,63 @@ func renderError(msg *Message, sty *styles.Styles, width int) string {
 		rendered = append(rendered, sty.Chat.ErrorDetails.Render(
 			fmt.Sprintf("... (%d more lines)", len(lines)-maxDetail-1)))
 	}
-	return renderRoleBlock(sty.Chat.ErrorTag.Render(" ERROR "), strings.Join(rendered, "\n"), "  ")
+	return renderRoleBlock(sty.Chat.ErrorTag.Render(" ERROR "), strings.Join(rendered, "\n"), "  ", sty.Chat.ErrorRail)
 }
 
-func renderRoleBlock(tag, body, indent string, extras ...string) string {
+func renderRoleBlock(tag, body, indent string, railStyle lipgloss.Style, extras ...string) string {
 	if tag == "" && strings.TrimSpace(body) == "" && len(extras) == 0 {
 		return ""
 	}
+	rail := railStyle.Render(styles.BorderThin)
+	if strings.TrimSpace(rail) == "" {
+		rail = styles.BorderThin
+	}
+
 	var rendered []string
 	if tag != "" {
 		rendered = append(rendered, indent+tag)
 	}
 	if strings.TrimSpace(body) != "" {
-		for _, line := range strings.Split(body, "\n") {
-			rendered = append(rendered, indent+"  "+line)
-		}
+		rendered = appendRoleBlockLines(rendered, body, indent, rail)
 	}
 	for _, extra := range extras {
 		if strings.TrimSpace(extra) == "" {
 			continue
 		}
-		for _, line := range strings.Split(extra, "\n") {
-			rendered = append(rendered, indent+line)
+		rendered = appendRoleBlockLines(rendered, extra, indent, rail)
+	}
+	return strings.Join(rendered, "\n")
+}
+
+func appendRoleBlockLines(dst []string, block, indent, rail string) []string {
+	for _, line := range strings.Split(block, "\n") {
+		prefix := indent + "  " + rail
+		if strings.TrimSpace(line) == "" {
+			dst = append(dst, prefix)
+			continue
 		}
+		dst = append(dst, prefix+" "+line)
+	}
+	return dst
+}
+
+func renderToolOutputBlock(sty *styles.Styles, body string) string {
+	if strings.TrimSpace(body) == "" {
+		return ""
+	}
+	frame := sty.Tool.OutputFrame.Render(styles.BorderThin)
+	if strings.TrimSpace(frame) == "" {
+		frame = styles.BorderThin
+	}
+	lines := strings.Split(body, "\n")
+	rendered := make([]string, 0, len(lines)+1)
+	rendered = append(rendered, sty.Tool.OutputLabel.Render("output"))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			rendered = append(rendered, "  "+frame)
+			continue
+		}
+		rendered = append(rendered, "  "+frame+" "+line)
 	}
 	return strings.Join(rendered, "\n")
 }
