@@ -1349,11 +1349,11 @@ func (m *Model) renderChatRegion(height int) string {
 		return ""
 	}
 
-	if m.hasWorkflowPanel() && m.width >= workflowPanelWideMinWidth {
-		chatWidth := max(1, m.width-workflowPanelWidth)
+	if m.hasWorkflowPanel() && m.width >= styles.WorkflowRailInlineMinWidth {
+		chatWidth := max(1, m.width-styles.WorkflowRailWidth)
 		chatSection := m.renderChat(height, chatWidth)
 		chatLines := strings.Split(chatSection, "\n")
-		panelLines := strings.Split(m.renderWorkflowPanel(height, workflowPanelWidth), "\n")
+		panelLines := strings.Split(m.renderWorkflowPanel(height, styles.WorkflowRailWidth), "\n")
 		combined := make([]string, height)
 		for i := range combined {
 			cl, pl := "", ""
@@ -1417,22 +1417,22 @@ const (
 )
 
 const (
-	minShellWidth  = 56
-	minShellHeight = 6
+	minShellWidth  = styles.ShellMinimumWidth
+	minShellHeight = styles.ShellMinimumHeight
 )
 
 func (m *Model) shellWidth() int {
 	if m.width > 0 {
 		return m.width
 	}
-	return 72
+	return styles.ShellDefaultWidth
 }
 
 func (m *Model) belowMinimumShellSize() bool {
-	if m.width > 0 && m.width < minShellWidth {
+	if m.width > 0 && m.width < styles.ShellMinimumWidth {
 		return true
 	}
-	if m.height > 0 && m.height < minShellHeight {
+	if m.height > 0 && m.height < styles.ShellMinimumHeight {
 		return true
 	}
 	return false
@@ -1445,8 +1445,7 @@ func (m *Model) shellLayoutMode() shellLayoutMode {
 	if m.height <= 0 {
 		return shellLayoutCompact
 	}
-	const headerHeight = 3
-	fixedHeight := headerHeight + lipgloss.Height(m.renderInput()) + lipgloss.Height(m.renderStatusBar())
+	fixedHeight := styles.ShellHeaderLines + lipgloss.Height(m.renderInput()) + lipgloss.Height(m.renderStatusBar())
 	if fixedHeight >= m.height {
 		return shellLayoutCompact
 	}
@@ -1499,15 +1498,15 @@ func (m *Model) renderMinimumSizeView() tea.View {
 	shellWidth := max(1, m.shellWidth())
 	lineWidth := max(1, shellWidth)
 	recovery := "Resize the terminal to restore transcript, workflow, and input."
-	sizeLine := fmt.Sprintf("Current %dx%d · need at least %dx%d", max(0, m.width), max(0, m.height), minShellWidth, minShellHeight)
+	sizeLine := fmt.Sprintf("Current %dx%d · need at least %dx%d", max(0, m.width), max(0, m.height), styles.ShellMinimumWidth, styles.ShellMinimumHeight)
 	helpLine := "/help when resized · Esc cancel · Ctrl+L clear"
 	shellState := truncateText("Shell state · "+m.shellLayoutLabel(), lineWidth)
 	switch {
-	case m.width > 0 && m.width < minShellWidth && m.height > 0 && m.height < minShellHeight:
+	case m.width > 0 && m.width < styles.ShellMinimumWidth && m.height > 0 && m.height < styles.ShellMinimumHeight:
 		recovery = "Resize wider and taller to restore transcript, workflow, and input."
-	case m.width > 0 && m.width < minShellWidth:
+	case m.width > 0 && m.width < styles.ShellMinimumWidth:
 		recovery = "Resize wider to restore transcript, workflow, and input."
-	case m.height > 0 && m.height < minShellHeight:
+	case m.height > 0 && m.height < styles.ShellMinimumHeight:
 		recovery = "Resize taller to restore transcript, workflow, and input."
 	}
 	lines := []string{
@@ -1779,7 +1778,10 @@ func (m *Model) compactStatusMeta(width int) string {
 }
 
 func (m *Model) shouldShowWorkflowStatusSummary() bool {
-	return m.hasWorkflowPanel() && m.width >= workflowPanelStackMinWidth && m.width < workflowPanelWideMinWidth && m.height <= minShellHeight+1
+	return m.hasWorkflowPanel() &&
+		m.width >= styles.WorkflowRailStackMinWidth &&
+		m.width < styles.WorkflowRailInlineMinWidth &&
+		m.height <= styles.WorkflowSummaryStatusMaxHeight
 }
 
 func (m *Model) renderChat(height, width int) string {
@@ -1787,7 +1789,7 @@ func (m *Model) renderChat(height, width int) string {
 		return ""
 	}
 
-	showChrome := height >= 4
+	showChrome := height >= styles.ShellChatChromeMinHeight
 	bodyHeight := height
 	if showChrome {
 		bodyHeight = height - 2
@@ -1822,7 +1824,7 @@ func (m *Model) visibleChatLines(bodyHeight, width int) []string {
 		return strings.Split(m.renderWelcome(bodyHeight, width), "\n")
 	}
 
-	compactMode := bodyHeight <= 4
+	compactMode := bodyHeight <= styles.ShellChatChromeMinHeight
 	allLines := make([]string, 0, len(m.messages)*4)
 	for i, msg := range m.messages {
 		rendered := msg.Render(m.sty, width, m.messages)
@@ -1975,10 +1977,12 @@ func RenderHelpSurfaceLine(width int, title string, segments []string, style fun
 }
 
 func (m *Model) shouldRenderContextualHelpLine() bool {
-	if m.height > 0 && m.height < 10 {
+	if m.height > 0 && m.height < styles.ShellContextualHelpHeight {
 		return false
 	}
-	if m.hasWorkflowPanel() && m.width >= workflowPanelStackMinWidth && m.width < workflowPanelWideMinWidth {
+	if m.hasWorkflowPanel() &&
+		m.width >= styles.WorkflowRailStackMinWidth &&
+		m.width < styles.WorkflowRailInlineMinWidth {
 		return false
 	}
 	return true

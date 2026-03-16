@@ -16,12 +16,20 @@ import (
 )
 
 const (
-	workflowPanelWidth          = 38
-	workflowPanelWideMinWidth   = 110
-	workflowPanelStackMinWidth  = 72
-	workflowPanelStackMinHeight = 8
-	workflowPanelStackMinLines  = 3
-	workflowPanelStackMaxLines  = 6
+	workflowPanelWidth          = styles.WorkflowRailWidth
+	workflowPanelWideMinWidth   = styles.WorkflowRailInlineMinWidth
+	workflowPanelStackMinWidth  = styles.WorkflowRailStackMinWidth
+	workflowPanelStackMinHeight = styles.WorkflowRailStackMinHeight
+	workflowPanelStackMinLines  = styles.WorkflowRailStackMinLines
+	workflowPanelStackMaxLines  = styles.WorkflowRailStackMaxLines
+
+	workflowSectionCount         = 6
+	workflowMissionTargetLines   = 6
+	workflowSpecTargetLines      = 5
+	workflowPlanTargetLines      = 5
+	workflowVerifyTargetLines    = 5
+	workflowInvariantTargetLines = 4
+	workflowTeamTargetLines      = 3
 )
 
 func (m *Model) cancelActiveRun(asyncCleanup bool) {
@@ -182,7 +190,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 		render   func(limit int) []string
 	}
 
-	sections := make([]sectionSpec, 0, 6)
+	sections := make([]sectionSpec, 0, workflowSectionCount)
 	if m.hasMissionState() {
 		priority := 0
 		if ctrl := m.missionController(); ctrl != nil {
@@ -192,7 +200,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 				}
 			}
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 6, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowMissionTargetLines, render: func(limit int) []string {
 			return m.renderMissionPanelLines(limit, contentWidth)
 		}})
 	}
@@ -201,7 +209,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 		if m.specState.WaitingGateName() != "" {
 			priority = -1
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowSpecTargetLines, render: func(limit int) []string {
 			return m.renderSpecPanelLines(limit, contentWidth)
 		}})
 	}
@@ -215,7 +223,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 				priority = 0
 			}
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowPlanTargetLines, render: func(limit int) []string {
 			return m.renderPlanPanelLines(limit, contentWidth)
 		}})
 	}
@@ -229,7 +237,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 				priority = 1
 			}
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowVerifyTargetLines, render: func(limit int) []string {
 			return m.renderVerificationPanelLines(limit, contentWidth)
 		}})
 	}
@@ -243,12 +251,12 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 				priority = 2
 			}
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 4, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowInvariantTargetLines, render: func(limit int) []string {
 			return m.renderInvariantPanelLines(limit, contentWidth)
 		}})
 	}
 	if m.hasTeamMembers() {
-		sections = append(sections, sectionSpec{priority: 5, target: 3, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: 5, target: workflowTeamTargetLines, render: func(limit int) []string {
 			return m.renderTeamPanelLines(limit, contentWidth)
 		}})
 	}

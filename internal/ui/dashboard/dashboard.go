@@ -16,9 +16,41 @@ import (
 
 const (
 	refreshInterval        = 2 * time.Second
-	compactDashboardWidth  = 88
-	compactDashboardHeight = 22
+	compactDashboardWidth  = styles.DashboardCompactWidth
+	compactDashboardHeight = styles.DashboardCompactHeight
 )
+
+func dashboardEventHeight(totalHeight int) int {
+	if totalHeight >= styles.DashboardTallEventsMinHeight {
+		return styles.DashboardEventsHeightTall
+	}
+	return styles.DashboardEventsHeightDefault
+}
+
+func dashboardSplitWidths(totalWidth int) (leftWidth, rightWidth int) {
+	leftWidth = totalWidth * styles.DashboardPrimaryPaneRatioNum / styles.DashboardPrimaryPaneRatioDen
+	rightWidth = totalWidth - leftWidth - 1
+	if rightWidth < styles.DashboardMinimumSidebarWidth {
+		rightWidth = styles.DashboardMinimumSidebarWidth
+		leftWidth = totalWidth - rightWidth - 1
+	}
+	if leftWidth < 1 {
+		leftWidth = 1
+		rightWidth = max(1, totalWidth-leftWidth-1)
+	}
+	if rightWidth < 1 {
+		rightWidth = 1
+	}
+	return leftWidth, rightWidth
+}
+
+func dashboardPrimaryPaneHeight(bodyHeight int) int {
+	height := bodyHeight * styles.DashboardPrimaryPaneRatioNum / styles.DashboardPrimaryPaneRatioDen
+	if height < 1 {
+		return 1
+	}
+	return height
+}
 
 // dashboardRenderMode tracks the operator-visible dashboard mode so hit-testing matches rendering.
 type dashboardRenderMode int
@@ -228,34 +260,15 @@ func (m *Model) fullDashboardLayout() dashboardLayout {
 	tabsY := headerHeight
 	separatorY := tabsY + 1
 	bodyY := separatorY + 1
-	eventHeight := 2
-	if m.height >= 18 {
-		eventHeight = 3
-	}
+	eventHeight := dashboardEventHeight(m.height)
 	bodyHeight := m.height - (headerHeight + 1 + 1) - 1 - eventHeight - 1
-	if bodyHeight < 4 {
-		bodyHeight = 4
+	if bodyHeight < styles.DashboardMinimumBodyHeight {
+		bodyHeight = styles.DashboardMinimumBodyHeight
 	}
 	eventsY := bodyY + bodyHeight + 1
 
-	leftWidth := m.width * 3 / 5
-	rightWidth := m.width - leftWidth - 1
-	if rightWidth < 10 {
-		rightWidth = 10
-		leftWidth = m.width - rightWidth - 1
-	}
-	if leftWidth < 1 {
-		leftWidth = 1
-		rightWidth = max(1, m.width-leftWidth-1)
-	}
-	if rightWidth < 1 {
-		rightWidth = 1
-	}
-
-	taskHeight := bodyHeight * 3 / 5
-	if taskHeight < 1 {
-		taskHeight = 1
-	}
+	leftWidth, rightWidth := dashboardSplitWidths(m.width)
+	taskHeight := dashboardPrimaryPaneHeight(bodyHeight)
 	evidenceHeight := bodyHeight - taskHeight
 	if evidenceHeight < 1 {
 		evidenceHeight = 1
@@ -546,27 +559,14 @@ func (m *Model) renderFullDashboardView() tea.View {
 	lines = append(lines, m.renderFocusTabs(max(1, m.width)))
 	lines = append(lines, m.renderSeparator())
 
-	eventHeight := 2
-	if m.height >= 18 {
-		eventHeight = 3
-	}
+	eventHeight := dashboardEventHeight(m.height)
 	bodyHeight := m.height - len(lines) - 1 - eventHeight - 1 // separator + events + footer
-	if bodyHeight < 4 {
-		bodyHeight = 4
+	if bodyHeight < styles.DashboardMinimumBodyHeight {
+		bodyHeight = styles.DashboardMinimumBodyHeight
 	}
 
-	leftWidth := m.width * 3 / 5
-	rightWidth := m.width - leftWidth - 1
-	if rightWidth < 10 {
-		rightWidth = 10
-		leftWidth = m.width - rightWidth - 1
-	}
-	if leftWidth < 1 {
-		leftWidth = 1
-		rightWidth = max(1, m.width-leftWidth-1)
-	}
-
-	taskHeight := bodyHeight * 3 / 5
+	leftWidth, rightWidth := dashboardSplitWidths(m.width)
+	taskHeight := dashboardPrimaryPaneHeight(bodyHeight)
 	evidenceHeight := bodyHeight - taskHeight
 
 	leftLines := append(m.renderTaskPane(taskHeight, leftWidth), m.renderEvidencePane(evidenceHeight, leftWidth)...)
@@ -648,6 +648,8 @@ func (m *Model) renderLoadingView() tea.View {
 	lines := []string{
 		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("loading", "Refreshing"),
 	}
+	lines = append(lines, m.renderFocusTabs(max(1, m.width)))
+	lines = append(lines, m.renderSeparator())
 	lines = append(lines, m.renderStateCard(
 		max(1, m.width),
 		"Loading mission state",
@@ -666,6 +668,8 @@ func (m *Model) renderNoMissionView() tea.View {
 	lines := []string{
 		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("idle", "No mission"),
 	}
+	lines = append(lines, m.renderFocusTabs(max(1, m.width)))
+	lines = append(lines, m.renderSeparator())
 	lines = append(lines, m.renderStateCard(
 		max(1, m.width),
 		"No active mission",
@@ -844,13 +848,13 @@ func (m *Model) renderCompactSupportLine(width int) string {
 		"q quit",
 		"j/k scroll",
 	}
-	ultraCompact := width < 54 || (m.height > 0 && m.height < 14)
+	ultraCompact := width < styles.DashboardCompactSupportWidth || (m.height > 0 && m.height < styles.DashboardUltraCompactHeight)
 	if !ultraCompact {
 		title = "Compact layout"
-		if width >= 64 {
+		if width >= styles.DashboardCompactTabsHintWidth {
 			segments = append(segments, "Tab panes")
 		}
-		if width >= 104 {
+		if width >= styles.DashboardFullLayoutHintWidth {
 			segments = append(segments, "resize wider for the full four-pane Mission Control view")
 		}
 	}
@@ -924,10 +928,12 @@ func (m *Model) renderFocusTabs(width int) string {
 	var rendered []string
 	for _, tab := range tabs {
 		style := m.sty.Panel.FocusTabInactive
+		label := tab.title
 		if m.focusPane == tab.pane {
 			style = m.sty.Panel.FocusTabActive
+			label = "▸ " + label
 		}
-		rendered = append(rendered, style.Render(tab.title))
+		rendered = append(rendered, style.Render(label))
 	}
 	return ansi.Truncate(strings.Join(rendered, joiner), width, "…")
 }
@@ -1405,8 +1411,8 @@ func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
 	}
 	label := fmt.Sprintf("%s %s %s", indicator, paneShortcut(title), title)
 	line := headStyle.Render(label) + " " + metaStyle.Render(meta)
-	if focused && width >= 24 {
-		accentWidth := min(2, max(1, width/18))
+	if focused && width >= styles.DashboardFocusAccentMinWidth {
+		accentWidth := min(styles.DashboardFocusAccentMaxWidth, max(1, width/styles.DashboardFocusAccentDivisor))
 		line = strings.Repeat(styles.BorderThick, accentWidth) + " " + line
 	}
 	return ansi.Truncate(line, max(1, width), "…")
