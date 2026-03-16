@@ -18,6 +18,7 @@ const (
 	refreshInterval        = 2 * time.Second
 	compactDashboardWidth  = styles.DashboardCompactWidth
 	compactDashboardHeight = styles.DashboardCompactHeight
+	dashboardTabRowHeight  = styles.DashboardTabRowMinHeight
 )
 
 func dashboardEventHeight(totalHeight int) int {
@@ -288,25 +289,22 @@ func (m *Model) fullDashboardLayout() dashboardLayout {
 func (m *Model) compactDashboardLayout() dashboardLayout {
 	headerHeight := len(m.renderCompactHeader())
 	tabsY := headerHeight
-	separatorY := tabsY + 1
+	separatorY := tabsY + dashboardTabRowHeight
 	supportY := separatorY + 1
 	bodyY := supportY + 1
 	paneHeight := max(1, m.height-bodyY-1)
 	return dashboardLayout{
 		mode: dashboardRenderCompact,
-		tabs: dashboardRect{x: 0, y: tabsY, w: m.width, h: 1},
+		tabs: dashboardRect{x: 0, y: tabsY, w: m.width, h: dashboardTabRowHeight},
 		body: dashboardRect{x: 0, y: bodyY, w: m.width, h: paneHeight},
 	}
 }
 
-func (m *Model) paneFromTabs(x, y int) (pane, bool) {
-	layout := m.currentLayout()
-	if !layout.tabs.contains(x, y) {
-		return paneTasks, false
-	}
-	joinerWidth := lipgloss.Width(m.sty.Panel.Separator.Render(" "))
-	cursor := 0
-	tabs := []struct {
+func (m *Model) dashboardTabs() []struct {
+	title string
+	pane  pane
+} {
+	return []struct {
 		title string
 		pane  pane
 	}{
@@ -315,12 +313,42 @@ func (m *Model) paneFromTabs(x, y int) (pane, bool) {
 		{title: "[3] Evidence", pane: paneEvidence},
 		{title: "[4] Events", pane: paneEvents},
 	}
+}
+
+func (m *Model) renderedFocusTabs() []struct {
+	pane  pane
+	label string
+} {
+	tabs := m.dashboardTabs()
+	rendered := make([]struct {
+		pane  pane
+		label string
+	}, 0, len(tabs))
 	for _, tab := range tabs {
 		style := m.sty.Panel.FocusTabInactive
+		label := tab.title
 		if m.focusPane == tab.pane {
 			style = m.sty.Panel.FocusTabActive
+			label = "▸ " + label
 		}
-		tabWidth := lipgloss.Width(style.Render(tab.title))
+		rendered = append(rendered, struct {
+			pane  pane
+			label string
+		}{pane: tab.pane, label: style.Render(label)})
+	}
+	return rendered
+}
+
+func (m *Model) paneFromTabs(x, y int) (pane, bool) {
+	layout := m.currentLayout()
+	if !layout.tabs.contains(x, y) {
+		return paneTasks, false
+	}
+	joiner := m.sty.Panel.Separator.Render(" ")
+	joinerWidth := lipgloss.Width(joiner)
+	cursor := 0
+	for _, tab := range m.renderedFocusTabs() {
+		tabWidth := lipgloss.Width(tab.label)
 		if x >= cursor && x < cursor+tabWidth {
 			return tab.pane, true
 		}
@@ -805,7 +833,7 @@ func (m *Model) activeRunsCount() int {
 }
 
 func (m *Model) isUltraCompactLayout() bool {
-	return m.width < 56 || m.height < 14
+	return m.width < styles.DashboardUltraCompactWidth || m.height < styles.DashboardUltraCompactHeight
 }
 
 func (m *Model) useCompactLayout() bool {
@@ -848,7 +876,7 @@ func (m *Model) renderCompactSupportLine(width int) string {
 		"q quit",
 		"j/k scroll",
 	}
-	ultraCompact := width < styles.DashboardCompactSupportWidth || (m.height > 0 && m.height < styles.DashboardUltraCompactHeight)
+	ultraCompact := width < styles.DashboardUltraCompactSupportWidth || (m.height > 0 && m.height < styles.DashboardUltraCompactHeight)
 	if !ultraCompact {
 		title = "Compact layout"
 		if width >= styles.DashboardCompactTabsHintWidth {

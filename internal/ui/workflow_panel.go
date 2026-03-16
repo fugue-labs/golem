@@ -16,20 +16,22 @@ import (
 )
 
 const (
-	workflowPanelWidth          = styles.WorkflowRailWidth
-	workflowPanelWideMinWidth   = styles.WorkflowRailInlineMinWidth
-	workflowPanelStackMinWidth  = styles.WorkflowRailStackMinWidth
-	workflowPanelStackMinHeight = styles.WorkflowRailStackMinHeight
-	workflowPanelStackMinLines  = styles.WorkflowRailStackMinLines
-	workflowPanelStackMaxLines  = styles.WorkflowRailStackMaxLines
+	workflowPanelWidth              = styles.WorkflowRailWidth
+	workflowPanelWideMinWidth       = styles.WorkflowRailInlineMinWidth
+	workflowPanelStackMinWidth      = styles.WorkflowRailStackMinWidth
+	workflowPanelStackMinHeight     = styles.WorkflowRailStackMinHeight
+	workflowPanelStackMinLines      = styles.WorkflowRailStackMinLines
+	workflowPanelStackMaxLines      = styles.WorkflowRailStackMaxLines
+	workflowPanelStackHeightDivisor = styles.WorkflowRailStackHeightDivisor
+	workflowPanelMinimumChatHeight  = styles.WorkflowRailMinimumChatHeight
 
-	workflowSectionCount         = 6
-	workflowMissionTargetLines   = 6
-	workflowSpecTargetLines      = 5
-	workflowPlanTargetLines      = 5
-	workflowVerifyTargetLines    = 5
-	workflowInvariantTargetLines = 4
-	workflowTeamTargetLines      = 3
+	workflowSectionCount         = styles.WorkflowSectionCount
+	workflowMissionTargetLines   = styles.WorkflowMissionTargetLines
+	workflowSpecTargetLines      = styles.WorkflowSpecTargetLines
+	workflowPlanTargetLines      = styles.WorkflowPlanTargetLines
+	workflowVerifyTargetLines    = styles.WorkflowVerificationTargetLines
+	workflowInvariantTargetLines = styles.WorkflowInvariantTargetLines
+	workflowTeamTargetLines      = styles.WorkflowTeamTargetLines
 )
 
 func (m *Model) cancelActiveRun(asyncCleanup bool) {
@@ -117,9 +119,9 @@ func (m *Model) workflowStackedHeight(totalHeight int) int {
 	if !m.hasWorkflowPanel() || m.width < workflowPanelStackMinWidth || m.width >= workflowPanelWideMinWidth || totalHeight < workflowPanelStackMinHeight {
 		return 0
 	}
-	workflowHeight := min(workflowPanelStackMaxLines, max(workflowPanelStackMinLines, totalHeight/3))
-	if totalHeight-workflowHeight < 4 {
-		workflowHeight = max(workflowPanelStackMinLines, totalHeight-4)
+	workflowHeight := min(workflowPanelStackMaxLines, max(workflowPanelStackMinLines, totalHeight/workflowPanelStackHeightDivisor))
+	if totalHeight-workflowHeight < workflowPanelMinimumChatHeight {
+		workflowHeight = max(workflowPanelStackMinLines, totalHeight-workflowPanelMinimumChatHeight)
 	}
 	if workflowHeight < workflowPanelStackMinLines || totalHeight-workflowHeight < 1 {
 		return 0

@@ -1404,7 +1404,7 @@ func (m *Model) renderCompactInput() string {
 func (m *Model) renderCompactStatusBar() string {
 	shellWidth := m.shellWidth()
 	meta := m.compactStatusMeta(shellWidth)
-	content := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-9)))
+	content := m.sty.Shell.HeroBadge.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-9)))
 	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
 
@@ -1895,7 +1895,7 @@ func (m *Model) renderWelcome(height, width int) string {
 	bodyWidth := max(20, width-4)
 	lines := []string{
 		"",
-		m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.Bold.Render("Purpose-built for steady repo work"),
+		m.sty.Shell.HeroBadge.Render(" GOLEM ") + " " + m.sty.Bold.Render("Purpose-built for steady repo work"),
 		m.sty.Muted.Render("  " + truncateText("Model "+m.cfg.Model+" · "+m.currentActivitySummary(), bodyWidth)),
 		"",
 		m.sty.Bold.Render("  Start here"),
@@ -2240,7 +2240,7 @@ func compactMessages(ctx context.Context, messages []core.ModelMessage, model co
 
 func (m *Model) renderStatusBar() string {
 	shellWidth := m.shellWidth()
-	accent := m.sty.StatusBar.Accent.Render(" GOLEM ")
+	accent := m.sty.Shell.HeroBadge.Render(" GOLEM ")
 	divider := m.sty.StatusBar.Divider.Render(" │ ")
 
 	var leftParts []string
