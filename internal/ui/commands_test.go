@@ -65,8 +65,8 @@ func TestCommandHelp(t *testing.T) {
 		"/doctor",
 		"**Discoverability**",
 		"Input help stays visible while you work so the shell keeps teaching next actions",
-		"Start with `/help`, recover context with `/search <query>`, or check setup with `/doctor`",
-		"golem dashboard",
+		"From this prompt, start with `/help`, recover context with `/search <query>`, or check setup with `/doctor`",
+		"External terminal command: `golem dashboard` opens Mission Control; use `Tab`, `Shift+Tab`, `1-4`, and `j/k` to navigate panes",
 		"**Keys**",
 		"`Enter`",
 		"`Esc`",
@@ -83,7 +83,7 @@ func TestContextualHelpIdle(t *testing.T) {
 	m.sty = styles.New(nil)
 	m.width = 120
 	got := stripANSI(m.renderContextualHelpLine(m.width))
-	for _, want := range []string{"Help ·", "Try /help", "/search <query>", "/doctor", "golem dashboard", "Enter send", "Tab complete", "Esc cancel"} {
+	for _, want := range []string{"Help ·", "Try /help", "/search <query>", "/doctor", "Enter send", "Tab complete", "Esc cancel"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("contextual help missing %q in %q", want, got)
 		}

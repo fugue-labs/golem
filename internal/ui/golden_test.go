@@ -83,8 +83,8 @@ func expectedHelpMessage() string {
 		"**Discoverability**",
 		"",
 		"- Input help stays visible while you work so the shell keeps teaching next actions",
-		"- Start with `/help`, recover context with `/search <query>`, or check setup with `/doctor`",
-		"- Open Mission Control with `golem dashboard` and use `Tab`, `Shift+Tab`, `1-4`, and `j/k` to navigate panes",
+		"- From this prompt, start with `/help`, recover context with `/search <query>`, or check setup with `/doctor`",
+		"- External terminal command: `golem dashboard` opens Mission Control; use `Tab`, `Shift+Tab`, `1-4`, and `j/k` to navigate panes",
 		"",
 		"**Keys**",
 		"",
@@ -117,7 +117,7 @@ func TestShellLayoutViewGolden(t *testing.T) {
 	m.invariantState = uiinvariants.State{Extracted: true}
 
 	got := stripANSI(m.View().Content)
-	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Workflow", "Context ·", "Activity ·", "/help", " Context ", "Help ·", "/search <query>", "golem dashboard", "Tab complete"} {
+	for _, want := range []string{"GOLEM", "Transcript", "Input", "Status", "Workflow", "Context ·", "Activity ·", "/help", " Context ", "Help ·", "/search <query>", "Tab complete", "In another terminal run golem dashboard"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("shell layout missing %q\n%s", want, got)
 		}
