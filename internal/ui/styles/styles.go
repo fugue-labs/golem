@@ -63,6 +63,8 @@ type Styles struct {
 		SectionLabel lipgloss.Style
 		SectionMeta  lipgloss.Style
 		Rule         lipgloss.Style
+		Anchor       lipgloss.Style
+		LayoutBadge  lipgloss.Style
 	}
 
 	// Status bar.
@@ -254,6 +256,8 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Shell.SectionLabel = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.surface).Padding(0, 1).Bold(true)
 	s.Shell.SectionMeta = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Shell.Rule = lipgloss.NewStyle().Foreground(palette.border)
+	s.Shell.Anchor = lipgloss.NewStyle().Foreground(palette.accentText).Background(palette.primary).Padding(0, 1).Bold(true)
+	s.Shell.LayoutBadge = lipgloss.NewStyle().Foreground(palette.secondary).Background(palette.surface).Padding(0, 1).Bold(true)
 
 	// Status bar.
 	s.StatusBar.Base = lipgloss.NewStyle().Background(palette.bgSubtle).Foreground(palette.fgBase)
