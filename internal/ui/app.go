@@ -1260,20 +1260,20 @@ func (m *Model) View() tea.View {
 		m.configureView(&v)
 		return v
 	}
-	if m.belowMinimumShellSize() {
+
+	layout := m.shellLayoutMode()
+	switch layout {
+	case shellLayoutMinimum:
 		return m.renderMinimumSizeView()
+	case shellLayoutCompact:
+		return m.renderCompactView()
 	}
 
 	header := m.renderHeader()
 	input := m.renderInput()
 	status := m.renderStatusBar()
-	fixedHeight := lipgloss.Height(header) + lipgloss.Height(input) + lipgloss.Height(status)
-	if fixedHeight >= m.height {
-		return m.renderCompactView()
-	}
-
 	sections := []string{header}
-	if chatHeight := m.height - fixedHeight; chatHeight > 0 {
+	if chatHeight := m.height - (lipgloss.Height(header) + lipgloss.Height(input) + lipgloss.Height(status)); chatHeight > 0 {
 		sections = append(sections, m.renderChatRegion(chatHeight))
 	}
 	sections = append(sections, input, status)
@@ -1380,8 +1380,11 @@ func (m *Model) renderChatRegion(height int) string {
 
 func (m *Model) renderCompactHeader() string {
 	shellWidth := m.shellWidth()
-	left := m.sty.Shell.SectionLabel.Render(" Context ") + " " + m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.renderHeaderStateBadge()
-	right := m.sty.Header.Model.Render(styles.ModelIcon + " " + truncateText(m.cfg.Model, max(8, shellWidth/3)))
+	left := m.sty.Shell.SectionLabel.Render(" Context ") + " " + m.shellIdentityLine()
+	right := m.renderShellLocation(max(12, shellWidth/3))
+	if right == "" {
+		right = m.sty.Header.Model.Render(styles.ModelIcon + " " + truncateText(m.cfg.Model, max(8, shellWidth/3)))
+	}
 	return lipgloss.NewStyle().Width(shellWidth).MaxWidth(shellWidth).Render(joinShellLine(left, right, shellWidth))
 }
 
@@ -1405,6 +1408,14 @@ func (m *Model) renderCompactStatusBar() string {
 	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
 
+type shellLayoutMode string
+
+const (
+	shellLayoutMinimum shellLayoutMode = "minimum"
+	shellLayoutCompact shellLayoutMode = "compact"
+	shellLayoutNormal  shellLayoutMode = "normal"
+)
+
 const (
 	minShellWidth  = 56
 	minShellHeight = 6
@@ -1427,12 +1438,70 @@ func (m *Model) belowMinimumShellSize() bool {
 	return false
 }
 
+func (m *Model) shellLayoutMode() shellLayoutMode {
+	if m.belowMinimumShellSize() {
+		return shellLayoutMinimum
+	}
+	if m.height <= 0 {
+		return shellLayoutCompact
+	}
+	const headerHeight = 3
+	fixedHeight := headerHeight + lipgloss.Height(m.renderInput()) + lipgloss.Height(m.renderStatusBar())
+	if fixedHeight >= m.height {
+		return shellLayoutCompact
+	}
+	return shellLayoutNormal
+}
+
+func (m *Model) shellLayoutLabel() string {
+	switch m.shellLayoutMode() {
+	case shellLayoutMinimum:
+		return "Minimum-size"
+	case shellLayoutCompact:
+		return "Compact"
+	default:
+		return "Normal"
+	}
+}
+
+func (m *Model) shellAnchorLabel() string {
+	return m.sty.Shell.Anchor.Render(" GOLEM ")
+}
+
+func (m *Model) renderHeaderModeBadge() string {
+	return m.sty.Shell.LayoutBadge.Render(" " + m.shellLayoutLabel() + " ")
+}
+
+func (m *Model) shellIdentityLine() string {
+	return m.shellAnchorLabel() + " " + m.renderHeaderStateBadge() + " " + m.renderHeaderModeBadge()
+}
+
+func (m *Model) renderShellLocation(maxRunes int) string {
+	if m.cfg == nil {
+		return ""
+	}
+	var locationParts []string
+	if dir := m.cfg.ShortDir(); dir != "" {
+		locationParts = append(locationParts, dir)
+	}
+	if m.runtime.Git != nil {
+		if branch := m.runtime.Git.BranchDisplay(); branch != "" {
+			locationParts = append(locationParts, branch)
+		}
+	}
+	if len(locationParts) == 0 {
+		return ""
+	}
+	return m.sty.Header.WorkingDir.Render(truncateText(strings.Join(locationParts, " · "), maxRunes))
+}
+
 func (m *Model) renderMinimumSizeView() tea.View {
 	shellWidth := max(1, m.shellWidth())
 	lineWidth := max(1, shellWidth)
 	recovery := "Resize the terminal to restore transcript, workflow, and input."
 	sizeLine := fmt.Sprintf("Current %dx%d · need at least %dx%d", max(0, m.width), max(0, m.height), minShellWidth, minShellHeight)
 	helpLine := "/help when resized · Esc cancel · Ctrl+L clear"
+	shellState := truncateText("Shell state · "+m.shellLayoutLabel(), lineWidth)
 	switch {
 	case m.width > 0 && m.width < minShellWidth && m.height > 0 && m.height < minShellHeight:
 		recovery = "Resize wider and taller to restore transcript, workflow, and input."
@@ -1442,14 +1511,15 @@ func (m *Model) renderMinimumSizeView() tea.View {
 		recovery = "Resize taller to restore transcript, workflow, and input."
 	}
 	lines := []string{
-		ansi.Truncate(m.sty.StatusBar.Accent.Render(" GOLEM ")+" "+m.sty.Bold.Render("Terminal too small"), lineWidth, "…"),
+		ansi.Truncate(m.shellAnchorLabel()+" "+m.sty.Bold.Render("Terminal too small"), lineWidth, "…"),
+		m.sty.Muted.Render(ansi.Truncate(shellState, lineWidth, "…")),
 		m.sty.Muted.Render(ansi.Truncate(recovery, lineWidth, "…")),
 		m.sty.Muted.Render(ansi.Truncate(sizeLine, lineWidth, "…")),
 		m.sty.Muted.Render(ansi.Truncate(helpLine, lineWidth, "…")),
 	}
 	body := fitShellLines(lines, m.height, max(0, (m.height-len(lines))/2))
 	v := tea.NewView(body)
-	v.AltScreen = true
+	m.configureView(&v)
 	return v
 }
 
@@ -1576,34 +1646,17 @@ func fitShellLines(lines []string, height, topPad int) string {
 func (m *Model) renderHeader() string {
 	shellWidth := m.shellWidth()
 	contextBadge := m.sty.Shell.SectionLabel.Render(" Context ")
-	title := m.sty.StatusBar.Accent.Render(" GOLEM ")
-	mode := m.renderHeaderStateBadge()
-	model := m.sty.Header.Model.Render(styles.ModelIcon + " " + m.cfg.Model)
-	provider := ""
+	modelLine := m.sty.Header.Model.Render(styles.ModelIcon + " " + m.cfg.Model)
 	if m.cfg.Provider != "" {
-		provider = m.sty.Header.Separator.Render(" · ") + m.sty.Header.Provider.Render(string(m.cfg.Provider))
+		modelLine += m.sty.Header.Separator.Render(" · ") + m.sty.Header.Provider.Render(string(m.cfg.Provider))
 	}
-	leftTop := contextBadge + " " + title + " " + mode + " " + model + provider
-
-	var locationParts []string
-	if dir := m.cfg.ShortDir(); dir != "" {
-		locationParts = append(locationParts, dir)
-	}
-	if m.runtime.Git != nil {
-		if branch := m.runtime.Git.BranchDisplay(); branch != "" {
-			locationParts = append(locationParts, branch)
-		}
-	}
-	rightTop := ""
-	if len(locationParts) > 0 {
-		rightTop = m.sty.Header.WorkingDir.Render(truncateText(strings.Join(locationParts, " · "), max(18, shellWidth/3)))
-	}
-
-	lowerLeft := m.sty.Muted.Render(truncateText("Context · "+m.renderContextSummary(), max(28, shellWidth/2)))
-	lowerRight := m.sty.HalfMuted.Render(truncateText("Activity · "+m.currentActivitySummary(), max(28, shellWidth/2)))
 	headerLines := []string{
-		joinShellLine(leftTop, rightTop, shellWidth),
-		joinShellLine(lowerLeft, lowerRight, shellWidth),
+		joinShellLine(contextBadge+" "+m.shellIdentityLine(), modelLine, shellWidth),
+		joinShellLine(
+			m.sty.Muted.Render(truncateText("Context · "+m.renderContextSummary(), max(28, shellWidth/2))),
+			m.sty.HalfMuted.Render(truncateText("Activity · "+m.currentActivitySummary(), max(28, shellWidth/2))),
+			shellWidth,
+		),
 		m.renderSectionRule(shellWidth),
 	}
 	return strings.Join(headerLines, "\n")

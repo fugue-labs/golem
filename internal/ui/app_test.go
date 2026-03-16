@@ -559,3 +559,45 @@ func TestViewShortWindowDoesNotExceedTerminalHeight(t *testing.T) {
 		}
 	}
 }
+
+func TestShellLayoutModeIsExplicitAcrossSizeStates(t *testing.T) {
+	cases := []struct {
+		name           string
+		width          int
+		height         int
+		wantMode       shellLayoutMode
+		wantLabel      string
+		wantPromptHint bool
+	}{
+		{name: "minimum", width: minShellWidth - 1, height: 18, wantMode: shellLayoutMinimum, wantLabel: "Minimum-size"},
+		{name: "compact", width: 80, height: 6, wantMode: shellLayoutCompact, wantLabel: "Compact", wantPromptHint: true},
+		{name: "normal", width: 100, height: 22, wantMode: shellLayoutNormal, wantLabel: "Normal", wantPromptHint: true},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: "/tmp/project"})
+			m.sty = styles.New(nil)
+			m.width = tt.width
+			m.height = tt.height
+			m.messages = []*chat.Message{{Kind: chat.KindAssistant, Content: "layout probe"}}
+
+			if got := m.shellLayoutMode(); got != tt.wantMode {
+				t.Fatalf("shellLayoutMode() = %q, want %q", got, tt.wantMode)
+			}
+			if got := m.shellLayoutLabel(); got != tt.wantLabel {
+				t.Fatalf("shellLayoutLabel() = %q, want %q", got, tt.wantLabel)
+			}
+
+			rendered := stripANSI(m.View().Content)
+			for _, want := range []string{"GOLEM", tt.wantLabel} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("rendered layout missing %q\n%s", want, rendered)
+				}
+			}
+			if tt.wantPromptHint && !strings.Contains(rendered, "❯") && !strings.Contains(rendered, "Ask anything") {
+				t.Fatalf("rendered layout missing prompt affordance\n%s", rendered)
+			}
+		})
+	}
+}
