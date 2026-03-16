@@ -231,7 +231,7 @@ type Model struct {
 func New(cfg *config.Config) *Model {
 	ti := textarea.New()
 	ti.Prompt = ""
-	ti.Placeholder = "Ask anything… /help for commands"
+	ti.Placeholder = "Ask anything… /help, /search, /doctor"
 	ti.ShowLineNumbers = false
 	ti.SetHeight(1)
 	ti.Focus()
@@ -1558,7 +1558,7 @@ func (m *Model) renderTranscriptMeta() string {
 	if len(m.messages) > 0 {
 		return fmt.Sprintf("%d messages", len(m.messages))
 	}
-	return "Start with a request or /help"
+	return "Start with a request, /help, or /search <query>"
 }
 
 func (m *Model) renderInputMeta() string {
@@ -1572,7 +1572,7 @@ func (m *Model) renderInputMeta() string {
 	case !m.terminalFocused:
 		return "Input paused · refocus terminal to type"
 	default:
-		return "Enter send · Shift+Enter newline · Tab complete"
+		return "Enter send · Shift+Enter newline · Tab complete · /help or /search <query>"
 	}
 }
 
@@ -1758,7 +1758,7 @@ func (m *Model) currentActivitySummary() string {
 		parts = append(parts, "Esc cancels")
 		return strings.Join(parts, " · ")
 	default:
-		return "Ready · /help for commands · /search <query>"
+		return "Ready · try /help · /search <query>"
 	}
 }
 
@@ -1897,9 +1897,10 @@ func (m *Model) renderWelcome(height, width int) string {
 		m.sty.Muted.Render("  " + truncateText("Model "+m.cfg.Model+" · "+m.currentActivitySummary(), bodyWidth)),
 		"",
 		m.sty.Bold.Render("  Start here"),
-		m.sty.Muted.Render("  " + truncateText("/help — browse commands and keybindings", bodyWidth)),
-		m.sty.Muted.Render("  " + truncateText("/search <query> — search across all saved sessions", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("/help — browse commands, keybindings, and next-step hints", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("/search <query> — search across all saved sessions for earlier fixes and context", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("/doctor — inspect local setup before a long run", bodyWidth)),
+		m.sty.Muted.Render("  " + truncateText("Need mission visibility? In another terminal run golem dashboard", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("Input help stays visible so commands and keys remain discoverable", bodyWidth)),
 		m.sty.Muted.Render("  " + truncateText("Describe the change you want and press Enter to start", bodyWidth)),
 		"",

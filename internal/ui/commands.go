@@ -51,8 +51,8 @@ func (m *Model) renderHelpMessage() *chat.Message {
 	b.WriteString("- `/quit` or `/exit` — quit the app\n\n")
 	b.WriteString("**Discoverability**\n\n")
 	b.WriteString("- Input help stays visible while you work so the shell keeps teaching next actions\n")
-	b.WriteString("- Try `/help`, `/search <query>`, or `/doctor` from the main shell\n")
-	b.WriteString("- Open Mission Control with `golem dashboard` and use `Tab`, `Shift+Tab`, `1-4`, and `j/k` to navigate panes\n\n")
+	b.WriteString("- From this prompt, start with `/help`, recover context with `/search <query>`, or check setup with `/doctor`\n")
+	b.WriteString("- External terminal command: `golem dashboard` opens Mission Control; use `Tab`, `Shift+Tab`, `1-4`, and `j/k` to navigate panes\n\n")
 	b.WriteString("**Keys**\n\n")
 	b.WriteString("- `Enter` — send\n")
 	b.WriteString("- `Shift+Enter` — insert newline\n")
@@ -578,8 +578,8 @@ func (m *Model) handleSearchCommand(text string) *chat.Message {
 	query := strings.TrimSpace(strings.TrimPrefix(text, "/search"))
 	if query == "" {
 		return &chat.Message{
-			Kind:    chat.KindAssistant,
-			Content: "Usage: `/search <query>` — search across all saved sessions.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`",
+			Kind: chat.KindAssistant,
+			Content: "Usage: `/search <query>` — search across all saved sessions.\n\nSearches prompts, replies, and saved transcript snippets so you can recover earlier fixes and decisions.\n\nExamples:\n- `/search flaky test fix`\n- `/search database migration`\n- `/search authentication bug`",
 		}
 	}
 
