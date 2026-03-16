@@ -135,24 +135,27 @@ type Styles struct {
 
 	// Right-hand panel.
 	Panel struct {
-		Base           lipgloss.Style
-		Title          lipgloss.Style
-		Separator      lipgloss.Style
-		Progress       lipgloss.Style
-		TaskText       lipgloss.Style
-		TaskDone       lipgloss.Style
-		IconPending    lipgloss.Style
-		IconInProgress lipgloss.Style
-		IconCompleted  lipgloss.Style
-		IconBlocked    lipgloss.Style
-		HeaderActive   lipgloss.Style
-		HeaderInactive lipgloss.Style
-		HeaderMeta     lipgloss.Style
-		HeaderKey      lipgloss.Style
-		EmptyTitle     lipgloss.Style
-		EmptyBody      lipgloss.Style
-		MetricKey      lipgloss.Style
-		MetricValue    lipgloss.Style
+		Base             lipgloss.Style
+		Title            lipgloss.Style
+		Separator        lipgloss.Style
+		Progress         lipgloss.Style
+		TaskText         lipgloss.Style
+		TaskDone         lipgloss.Style
+		IconPending      lipgloss.Style
+		IconInProgress   lipgloss.Style
+		IconCompleted    lipgloss.Style
+		IconBlocked      lipgloss.Style
+		HeaderActive     lipgloss.Style
+		HeaderInactive   lipgloss.Style
+		HeaderMeta       lipgloss.Style
+		HeaderKey        lipgloss.Style
+		EmptyTitle       lipgloss.Style
+		EmptyBody        lipgloss.Style
+		EmptyHint        lipgloss.Style
+		FocusTabActive   lipgloss.Style
+		FocusTabInactive lipgloss.Style
+		MetricKey        lipgloss.Style
+		MetricValue      lipgloss.Style
 	}
 
 	// Spinner.
@@ -347,6 +350,9 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Panel.HeaderKey = lipgloss.NewStyle().Foreground(palette.blue).Bold(true)
 	s.Panel.EmptyTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
 	s.Panel.EmptyBody = lipgloss.NewStyle().Foreground(palette.fgHalf)
+	s.Panel.EmptyHint = lipgloss.NewStyle().Foreground(palette.info).Bold(true)
+	s.Panel.FocusTabActive = lipgloss.NewStyle().Foreground(palette.accentText).Background(palette.primary).Padding(0, 1).Bold(true)
+	s.Panel.FocusTabInactive = lipgloss.NewStyle().Foreground(palette.fgHalf).Background(palette.surface).Padding(0, 1)
 	s.Panel.MetricKey = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Panel.MetricValue = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
 

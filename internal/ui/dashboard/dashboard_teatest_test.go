@@ -412,6 +412,12 @@ func TestTeatestPanelResizeSmall(t *testing.T) {
 	if !strings.Contains(view, "Mission Control") {
 		t.Error("expected 'Mission Control' in small view")
 	}
+	if !strings.Contains(view, "Compact layout") {
+		t.Error("expected compact layout guidance in small view")
+	}
+	if !strings.Contains(view, "[1] Tasks") {
+		t.Error("expected focus tabs in compact view")
+	}
 
 	// View lines should not exceed terminal height.
 	lines := strings.Split(view, "\n")
@@ -502,6 +508,52 @@ func TestTeatestMinimalSize(t *testing.T) {
 	view := viewString(m)
 	if view == "" {
 		t.Error("expected non-empty view at minimal size")
+	}
+	if !strings.Contains(view, "Mission Control") {
+		t.Error("expected Mission Control identity at minimal size")
+	}
+	if !strings.Contains(view, "Compact") {
+		t.Error("expected compact rescue copy at minimal size")
+	}
+}
+
+func TestTeatestDashboardErrorStateIsReadable(t *testing.T) {
+	m := New("")
+	m.width = 70
+	m.height = 18
+	m.lastErr = fmt.Errorf("store offline")
+
+	view := viewString(m)
+	if !strings.Contains(view, "Mission Control") {
+		t.Fatal("expected Mission Control identity in error state")
+	}
+	for _, want := range []string{"Dashboard error", "Unable to load dashboard", "Press r to retry", "store offline"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in error view, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestTeatestCompactLayoutTracksFocusedPane(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 72, 20)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	refreshModel(t, m)
+
+	view := viewString(m)
+	if !strings.Contains(view, "Tasks") {
+		t.Fatalf("expected tasks pane in compact view, got:\n%s", view)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '2'})
+	m = updated.(*Model)
+	view = viewString(m)
+	if !strings.Contains(view, "Workers") {
+		t.Fatalf("expected workers pane after focus jump, got:\n%s", view)
+	}
+	if !strings.Contains(view, "[2] Workers") {
+		t.Fatalf("expected workers focus tab in compact view, got:\n%s", view)
 	}
 }
 

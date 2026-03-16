@@ -406,13 +406,35 @@ func TestRenderPaneHeaderFocusedCopy(t *testing.T) {
 func TestRenderHeaderNoMissionShowsReadableIdleState(t *testing.T) {
 	m := New("")
 	m.width = 80
-	lines := m.renderHeader()
-	joined := stripANSITest(stringsJoin(lines, "\n"))
+	m.height = 24
+	joined := stripANSITest(viewString(m))
 	if !containsAny(joined, "Mission Control", "No mission") {
 		t.Fatalf("expected Mission Control no-mission header, got %q", joined)
 	}
 	if !containsAny(joined, "No active mission", "/mission new", "Shift+Tab reverse") {
 		t.Fatalf("expected no-mission guidance, got %q", joined)
+	}
+	if !containsAny(joined, "Open the main shell", "press r to refresh") {
+		t.Fatalf("expected premium no-mission action guidance, got %q", joined)
+	}
+}
+
+func TestRenderFocusTabsShowsActivePane(t *testing.T) {
+	m := New("")
+	m.focusPane = paneEvidence
+	plain := stripANSITest(m.renderFocusTabs(80))
+	for _, want := range []string{"[1] Tasks", "[2] Workers", "[3] Evidence", "[4] Events"} {
+		if !containsAny(plain, want) {
+			t.Fatalf("expected %q in focus tabs, got %q", want, plain)
+		}
+	}
+}
+
+func TestRenderEmptyStateIncludesActionHint(t *testing.T) {
+	m := New("")
+	plain := stripANSITest(stringsJoin(m.renderEmptyState(60, "No active workers", "Mission Control is idle."), "\n"))
+	if !containsAny(plain, "Use /mission start", "No active workers") {
+		t.Fatalf("expected actionable empty state, got %q", plain)
 	}
 }
 
