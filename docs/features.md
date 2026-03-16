@@ -2,59 +2,82 @@
 
 Golem is a terminal-based coding agent with deep project awareness and a rich interactive experience. This document covers all user-facing features.
 
-## TUI superiority rubric and preserved UX contract
+## TUI execution baseline, rubric, and preserved UX contract
 
-Use this section as the shared scorecard for shell-oriented implementation work. It is derived from the current docs, UI code, and e2e-observed behavior so future improvements can reference one contract instead of re-deriving goals from scattered sources.
+Use this section as the shared execution baseline for shell-facing work. It maps the repo's current implementation onto the shipped surfaces that future TUI changes must preserve and improve.
 
-The pre-implementation gap analysis for this contract lives in `docs/tui-best-practices-audit.md`. Treat that audit as advisory guidance for polish work; this section and the existing e2e expectations remain the non-regression source of truth.
+The supporting pre-implementation audit lives in `docs/tui-best-practices-audit.md`. Treat that audit as the execution-order and gap-analysis companion to this feature contract.
 
-### Current TUI experience
+### Target shipped surfaces
 
-The current interface is organized around five user-visible regions that any future polish should respect:
+The current implementation is organized around five user-visible surfaces. Future work should score, discuss, and prioritize changes using these exact surfaces.
 
-- **Shell layout** — a two-line header, central transcript, always-visible input, and persistent `GOLEM` status bar.
-- **Chat rendering** — prompt-led user messages, markdown assistant responses, inline tool activity, and lightweight system summaries.
-- **Workflow panel** — a conditional right rail that appears on wider terminals to show mission, spec, team, plan, invariants, and verification state.
-- **Dashboard** — a separate `golem dashboard` Mission Control surface for tasks, workers, evidence, and events.
-- **Discoverability affordances** — `/help`, slash-command tab completion, launch-time tips, placeholder guidance, and status-bar key hints.
+1. **Shell**
+   - Entry path: `main.go` default launch into `ui.New(cfg)`.
+   - Core implementation: `internal/ui/app.go`, `internal/ui/styles/styles.go`.
+   - Shipped surface: header, transcript frame, input, status bar, visible `GOLEM` identity, minimum-size fallback, and shell responsiveness.
+
+2. **Transcript**
+   - Core implementation: `internal/ui/app.go`, `internal/ui/chat/messages.go`.
+   - Shipped surface: user/assistant/tool/system/error rendering, scroll behavior, busy-state output, and visible slash-command results.
+
+3. **Workflow rail**
+   - Core implementation: `internal/ui/workflow_panel.go` with state owned by `internal/ui/app.go`.
+   - Shipped surface: conditional workflow summary for mission, spec, plan, verification, invariants, and team state.
+
+4. **Dashboard**
+   - Entry path: `main.go` `dashboard` subcommand.
+   - Core implementation: `internal/ui/dashboard/dashboard.go`, `internal/ui/styles/styles.go`.
+   - Shipped surface: Mission Control header plus Tasks, Workers, Evidence, and Events panes.
+
+5. **Discoverability**
+   - Core implementation: `internal/ui/app.go`, `internal/ui/commands.go`, `internal/ui/dashboard/dashboard.go`.
+   - Shipped surface: `/help`, slash-command tab completion, placeholder guidance, welcome/status hints, and dashboard navigation hints.
 
 ### Superiority rubric by surface
 
 | Surface | What success means | Score 1 | Score 3 | Score 5 |
 |---|---|---|---|---|
-| Launch frame | The first frame makes identity, orientation, and next action obvious. | Looks unstable or under-explained. | `GOLEM`, input affordance, and basic shell regions are visible. | The shell feels immediately intentional, legible, and ready for action. |
-| Transcript readability | User, assistant, tool, system, and error turns are easy to scan over time. | Turns blur together. | Main roles are distinguishable but still dense. | Role separation, streaming state, and summaries are obvious at a glance. |
-| Workflow visibility | Active mission/workflow state is prioritized over raw detail. | State exists but is hard to rank. | Current work is visible with some effort. | Active work, blockers, next action, and proof surfaces are immediately clear. |
-| Dashboard readability | Mission Control reads clearly before the operator starts navigating. | Panes feel cramped or hard to parse. | Pane purpose and focus are understandable after brief inspection. | Pane headers, summaries, empty states, and focus affordances are obvious immediately. |
+| Shell | The first frame makes identity, orientation, and next action obvious. | Looks unstable or under-explained. | `GOLEM`, input affordance, and shell regions are visible. | The shell feels intentional, legible, and ready for action immediately. |
+| Transcript | User, assistant, tool, system, and error turns are easy to scan over time. | Turns blur together. | Main roles are distinguishable but still dense. | Role separation, streaming state, and summaries are obvious at a glance. |
+| Workflow rail | Active mission/workflow state is prioritized over raw detail. | State exists but is hard to rank. | Current work is visible with some effort. | Active work, blockers, next action, and proof surfaces are immediately clear. |
+| Dashboard | Mission Control reads clearly before the operator starts navigating. | Panes feel cramped or hard to parse. | Pane purpose and focus are understandable after brief inspection. | Pane headers, summaries, empty states, and focus affordances are obvious immediately. |
 | Discoverability | Help, slash commands, usage text, and key hints are easy to find from launch onward. | Requires prior product knowledge. | `/help` and some hints are visible. | The shell continuously teaches next actions without becoming noisy. |
-
-### How to prioritize improvements
-
-1. **Clarify shell hierarchy first**
-   - Make the header, transcript, workflow panel, and status bar read as one cohesive layout.
-   - Favor spacing, labels, and section emphasis over major structural churn.
-2. **Make chat states easier to scan**
-   - Increase separation between user turns, assistant output, tool activity, errors, and summaries.
-   - Preserve markdown quality while making long-running sessions easier to parse quickly.
-3. **Refocus the workflow panel on active work**
-   - Surface the current bottleneck, blocked state, next action, and in-progress work before secondary detail.
-   - Keep dense supporting state available without letting it dominate the rail.
-4. **Improve dashboard readability before extending scope**
-   - Strengthen Mission Control pane headers, summary metrics, focus indicators, and empty states.
-   - Prioritize first-glance comprehension over adding more dashboard controls.
-5. **Distribute discoverability across the shell**
-   - Keep `/help` as the canonical command index, but reinforce it with stronger empty-state cues, slash affordances, and status hints.
 
 ### Preserved e2e UX contract
 
-These behaviors are verified by end-to-end tests and must remain stable through visual polish:
+These behaviors are end-to-end verified and must remain explicitly linked to implementation work:
 
-- **Visible `GOLEM` launch anchor** — the shell must render with a visible `GOLEM` status bar and visible prompt/input affordance (`❯` or `Ask anything… /help for commands`).
-- **`/help` discoverability** — `/help` must continue surfacing `/help`, `/clear`, `/plan`, `/model`, `/cost`, `/replay`, `/search`, `/rewind`, `/mission`, `/quit`, `/spec`, and `/doctor`, plus the key hints `Enter`, `Esc`, and `Tab`.
-- **`/search` usage copy** — `/search` without arguments must continue showing `/search <query>`, `search across all saved sessions`, and `Examples`.
-- **Dashboard launch stability** — `golem dashboard` must continue to land in either `Mission Control` or a valid no-mission/error state while preserving pane navigation.
-- **Cancellation, scroll, and history behavior** — `Esc` cancellation, `PgUp/PgDn` transcript scrolling, and `↑/↓` input history recall must remain stable and readable.
-- **Other shell resilience** — unknown slash commands must still fail obviously; `/clear`, `/model`, `/doctor`, tab completion, and slash-command sequencing must remain intact.
+- **Visible `GOLEM` launch anchor** — the shell must render with visible `GOLEM` identity and a visible prompt/input affordance (`❯` or `Ask anything… /help for commands`).
+- **`/help` discoverability** — `/help` must continue surfacing `/help`, `/clear`, `/plan`, `/model`, `/cost`, `/replay`, `/search`, `/rewind`, `/mission`, `/quit`, `/spec`, and `/doctor`, plus `Enter`, `Esc`, and `Tab` hints.
+- **`/search <query>` usage copy** — `/search` without arguments must continue showing `/search <query>`, `search across all saved sessions`, and `Examples`.
+- **Dashboard launch and navigation stability** — `golem dashboard` must continue to land in `Mission Control` or a valid empty/error state while preserving pane navigation with `Tab`, `Shift+Tab`, `1-4`, and `j/k`.
+- **Cancellation** — `Esc` must continue cancelling active work without breaking shell responsiveness.
+- **Paging** — `PgUp/PgDn` transcript scrolling must remain stable and readable.
+- **Input history** — `↑/↓` recall must remain stable.
+- **Other shell resilience** — unknown slash commands, `/clear`, `/model`, `/doctor`, `/cost`, replay/rewind, slash-command sequencing, and tab completion must remain intact.
+
+### Prioritized execution order
+
+Implementation work should follow the current repo layout rather than an abstract design order.
+
+1. **Shell entry and frame first**
+   - `main.go`
+   - `internal/ui/app.go`
+   - `internal/ui/styles/styles.go`
+2. **Discoverability and command contract second**
+   - `internal/ui/commands.go`
+   - supporting slash-command handling in `internal/ui/app.go`
+3. **Transcript readability third**
+   - `internal/ui/chat/messages.go`
+   - transcript composition and scrolling in `internal/ui/app.go`
+4. **Workflow rail fourth**
+   - `internal/ui/workflow_panel.go`
+   - width-gating and summary integration in `internal/ui/app.go`
+5. **Dashboard fifth**
+   - `main.go` dashboard routing
+   - `internal/ui/dashboard/dashboard.go`
+   - supporting style alignment in `internal/ui/styles/styles.go`
 
 ### Task template for future TUI work
 
@@ -63,7 +86,7 @@ Implementation tasks should reference:
 1. the target **surface** from the rubric,
 2. the current and desired **score** for that surface,
 3. the preserved **e2e UX contract** bullets that cannot regress, and
-4. any additional mission/dashboard context from `docs/tui-comparison-prompt.md`.
+4. the primary implementation files in `main.go` or `internal/ui` being changed.
 
 ## Mission orchestration surfaces
 
