@@ -539,6 +539,37 @@ func TestRenderEmptyStateIncludesActionHint(t *testing.T) {
 	}
 }
 
+func TestDashboardResponsiveLayoutThresholds(t *testing.T) {
+	m := New("")
+	m.width = compactDashboardWidth - 1
+	m.height = compactDashboardHeight
+	if !m.useCompactLayout() {
+		t.Fatal("expected compact layout below compact width threshold")
+	}
+
+	m.width = compactDashboardWidth
+	m.height = compactDashboardHeight - 1
+	if !m.useCompactLayout() {
+		t.Fatal("expected compact layout below compact height threshold")
+	}
+
+	m.width = compactDashboardWidth
+	m.height = compactDashboardHeight
+	if m.useCompactLayout() {
+		t.Fatal("expected full layout at compact thresholds")
+	}
+}
+
+func TestRenderDashboardHelpLinePreservesNavigationHints(t *testing.T) {
+	m := New("")
+	plain := stripANSITest(m.renderDashboardHelpLine(120, "/mission new in shell"))
+	for _, want := range []string{"Help", "/mission new in shell", "Tab switch panes", "Shift+Tab reverse", "1-4 jump", "j/k scroll", "r refresh", "q quit"} {
+		if !containsAny(plain, want) {
+			t.Fatalf("expected %q in dashboard help line, got %q", want, plain)
+		}
+	}
+}
+
 func stringsJoin(parts []string, sep string) string {
 	if len(parts) == 0 {
 		return ""

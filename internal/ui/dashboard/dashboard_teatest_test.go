@@ -1228,3 +1228,18 @@ func TestTeatestFooterKeybindings(t *testing.T) {
 		}
 	}
 }
+
+func TestTeatestCompactDashboardSupportAndTabsStayVisible(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 72, 18)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+
+	refreshModel(t, m)
+	view := stripANSI(viewString(m))
+	for _, want := range []string{"Mission Control", "Compact layout", "[1] Tasks", "[2] Workers", "[3] Evidence", "[4] Events", "Focus Tasks", "q quit", "j/k scroll"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in compact dashboard view, got:\n%s", want, view)
+		}
+	}
+}

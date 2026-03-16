@@ -202,3 +202,25 @@ func TestRenderAssistantCompletedOmitsLiveBadge(t *testing.T) {
 		t.Fatalf("completed assistant unexpectedly rendered LIVE badge: %q", got)
 	}
 }
+
+func TestRenderAssistantHelpSurfacePreservesDiscoverabilityCopy(t *testing.T) {
+	sty := styles.New(nil)
+	msg := &Message{Kind: KindAssistant, Content: strings.Join([]string{
+		"**Commands**",
+		"",
+		"- `/help` — show available commands",
+		"- `/search <query>` — search across all saved sessions",
+		"- `/doctor` — diagnose setup issues",
+		"",
+		"**Discoverability**",
+		"",
+		"- External terminal command: `golem dashboard` opens Mission Control; use `Tab`, `Shift+Tab`, `1-4`, and `j/k` to navigate panes",
+	}, "\n")}
+
+	got := stripANSI(msg.Render(sty, 120, []*Message{msg}))
+	for _, want := range []string{"ASSISTANT", "/help", "/search <query>", "/doctor", "golem dashboard", "Tab", "Shift+", "1-4", "j/k", "markdown response"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help surface missing %q in %q", want, got)
+		}
+	}
+}

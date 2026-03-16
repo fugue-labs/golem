@@ -141,3 +141,15 @@ func TestShellLayoutShortWindowGolden(t *testing.T) {
 		}
 	}
 }
+
+func TestWelcomeDiscoverabilityGolden(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: "/tmp/project"})
+	m.sty = styles.New(nil)
+
+	got := stripANSI(m.renderWelcome(21, 100))
+	for _, want := range []string{"Start here", "/help", "/search <query>", "/doctor", "golem dashboard", "Input help stays visible", "Shell regions", "Keys"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("welcome discoverability view missing %q\n%s", want, got)
+		}
+	}
+}
