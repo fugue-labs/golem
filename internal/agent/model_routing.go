@@ -41,19 +41,20 @@ func routingConfigPath() string {
 }
 
 // LoadRoutingConfig loads routing configuration from ~/.golem/routing.json.
-// Returns sensible defaults if the file doesn't exist.
+// Returns sensible defaults if the file doesn't exist. Routing is off by
+// default; set enabled to "on" or "auto" in the config file to enable it.
 func LoadRoutingConfig() RoutingConfig {
 	path := routingConfigPath()
 	if path == "" {
-		return RoutingConfig{Enabled: "auto"}
+		return RoutingConfig{Enabled: "off"}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return RoutingConfig{Enabled: "auto"}
+		return RoutingConfig{Enabled: "off"}
 	}
 	var rc RoutingConfig
 	if err := json.Unmarshal(data, &rc); err != nil {
-		return RoutingConfig{Enabled: "auto"}
+		return RoutingConfig{Enabled: "off"}
 	}
 	rc.Enabled = normalizeRoutingEnabled(rc.Enabled)
 	return rc

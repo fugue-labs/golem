@@ -381,6 +381,67 @@ func (c *Controller) resolveReadyTasks(ctx context.Context, missionID string) er
 	return nil
 }
 
+// RetryTask resets a failed, blocked, or rejected task back to ready so it can
+// be re-dispatched. It clears the blocking reason and resets the attempt count.
+func (c *Controller) RetryTask(ctx context.Context, missionID, taskID string) error {
+	task, err := c.store.GetTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("retry: get task %s: %w", taskID, err)
+	}
+	if task == nil {
+		return fmt.Errorf("retry: task %s not found", taskID)
+	}
+	if task.MissionID != missionID {
+		return fmt.Errorf("retry: task %s does not belong to mission %s", taskID, missionID)
+	}
+
+	switch task.Status {
+	case TaskFailed, TaskBlocked, TaskRejected:
+		// OK to retry.
+	default:
+		return fmt.Errorf("retry: task %s is %s, not failed/blocked/rejected", taskID, task.Status)
+	}
+
+	now := time.Now().UTC()
+	task.Status = TaskReady
+	task.BlockingReason = ""
+	task.AttemptCount = 0
+	task.UpdatedAt = now
+	if err := c.store.UpdateTask(ctx, task); err != nil {
+		return fmt.Errorf("retry: update task %s: %w", taskID, err)
+	}
+
+	c.store.AppendEvent(ctx, &Event{ //nolint:errcheck
+		MissionID: missionID,
+		TaskID:    taskID,
+		Type:      "task.retried",
+		CreatedAt: now,
+	})
+
+	return nil
+}
+
+// RetryAllFailedTasks resets all failed/blocked/rejected tasks in a mission
+// back to ready. Returns the number of tasks retried.
+func (c *Controller) RetryAllFailedTasks(ctx context.Context, missionID string) (int, error) {
+	tasks, err := c.store.ListTasks(ctx, missionID)
+	if err != nil {
+		return 0, fmt.Errorf("retry all: list tasks: %w", err)
+	}
+
+	retried := 0
+	for _, task := range tasks {
+		switch task.Status {
+		case TaskFailed, TaskBlocked, TaskRejected:
+			if err := c.RetryTask(ctx, missionID, task.ID); err != nil {
+				return retried, err
+			}
+			retried++
+		}
+	}
+	return retried, nil
+}
+
 // Close releases controller resources.
 func (c *Controller) Close() error {
 	return c.store.Close()

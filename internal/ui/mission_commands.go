@@ -43,6 +43,9 @@ func (m *Model) handleMissionCommand(text string) (*chat.Message, tea.Cmd) {
 	case args == "cancel":
 		return m.handleMissionCancel(), nil
 
+	case args == "retry" || strings.HasPrefix(args, "retry "):
+		return m.handleMissionRetry(strings.TrimSpace(strings.TrimPrefix(args, "retry"))), nil
+
 	case args == "list":
 		return m.handleMissionList(), nil
 
@@ -65,6 +68,7 @@ func (m *Model) renderMissionHelpMessage() *chat.Message {
 	b.WriteString("- `/mission start` — start executing the mission\n")
 	b.WriteString("- `/mission pause` — pause the active mission\n")
 	b.WriteString("- `/mission cancel` — cancel the mission\n")
+	b.WriteString("- `/mission retry [task-id]` — retry failed/blocked tasks (all if no ID given)\n")
 	b.WriteString("- `/mission list` — list all missions\n")
 	return &chat.Message{Kind: chat.KindAssistant, Content: b.String()}
 }
@@ -515,6 +519,43 @@ func (m *Model) handleMissionCancel() *chat.Message {
 
 	m.activeMissionID = ""
 	return &chat.Message{Kind: chat.KindAssistant, Content: "Mission cancelled."}
+}
+
+func (m *Model) handleMissionRetry(taskID string) *chat.Message {
+	if m.activeMissionID == "" {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No active mission."}
+	}
+
+	ctrl := m.missionController()
+	if ctrl == nil {
+		return &chat.Message{Kind: chat.KindError, Content: "Mission store not available."}
+	}
+
+	ctx := m.appCtx
+
+	if taskID != "" {
+		// Retry a specific task.
+		if err := ctrl.RetryTask(ctx, m.activeMissionID, taskID); err != nil {
+			return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to retry task: %v", err)}
+		}
+		return &chat.Message{
+			Kind:    chat.KindAssistant,
+			Content: fmt.Sprintf("Task `%s` reset to ready. It will be dispatched on the next orchestrator tick.", taskID),
+		}
+	}
+
+	// Retry all failed/blocked tasks.
+	retried, err := ctrl.RetryAllFailedTasks(ctx, m.activeMissionID)
+	if err != nil {
+		return &chat.Message{Kind: chat.KindError, Content: fmt.Sprintf("Failed to retry tasks: %v", err)}
+	}
+	if retried == 0 {
+		return &chat.Message{Kind: chat.KindAssistant, Content: "No failed or blocked tasks to retry."}
+	}
+	return &chat.Message{
+		Kind:    chat.KindAssistant,
+		Content: fmt.Sprintf("Reset %d task(s) to ready. They will be dispatched on the next orchestrator tick.", retried),
+	}
 }
 
 func (m *Model) handleMissionList() *chat.Message {
