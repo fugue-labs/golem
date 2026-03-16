@@ -329,6 +329,39 @@ func TestPurgeStaleTeamNilsWhenAllWorkersStopped(t *testing.T) {
 	}
 }
 
+func TestWorkflowPanelSummaryIncludesDiscoverabilityState(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.specState = uispec.New("design.md")
+	m.specState.SetPhase(uispec.PhaseReviewing)
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "verify tests", Status: "in_progress"}}}
+	m.verificationState = uiverification.State{Entries: []uiverification.Entry{{ID: "V1", Command: "go test ./...", Status: "fail", Freshness: "fresh"}}}
+	m.invariantState = uiinvariants.State{Extracted: true, Items: []uiinvariants.Item{{ID: "I1", Description: "no TODOs", Kind: "hard", Status: "unknown"}}}
+
+	summary := workflowPanelSummary(m)
+	for _, want := range []string{"spec approval", "plan active", "verify failed", "inv open"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("workflow summary missing %q: %q", want, summary)
+		}
+	}
+}
+
+func TestWorkflowPanelMidWidthFallbackCombinesSpecAndPlanSignals(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.specState = uispec.New("design.md")
+	m.specState.SetPhase(uispec.PhaseImplementing)
+	m.specState.AdvanceGate("Spec Approval")
+	m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "verify tests", Status: "in_progress"}}}
+
+	summary := m.workflowCompactSummary(80)
+	for _, want := range []string{"workflow", "spec implementing", "plan active"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("mid-width summary missing %q: %q", want, summary)
+		}
+	}
+}
+
 func stripANSI(s string) string {
 	re := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	return re.ReplaceAllString(s, "")

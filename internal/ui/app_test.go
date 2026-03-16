@@ -601,3 +601,44 @@ func TestShellLayoutModeIsExplicitAcrossSizeStates(t *testing.T) {
 		})
 	}
 }
+
+func TestViewWelcomeSurfaceHighlightsDiscoverability(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: "/tmp/project"})
+	m.sty = styles.New(nil)
+
+	rendered := stripANSI(m.renderWelcome(21, 100))
+	for _, want := range []string{"GOLEM", "Start here", "/help", "/search <query>", "/doctor", "golem dashboard", "Shell regions", "Keys"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("welcome surface missing %q\n%s", want, rendered)
+		}
+	}
+}
+
+func TestShouldRenderContextualHelpLineResponsiveRules(t *testing.T) {
+	cases := []struct {
+		name     string
+		width    int
+		height   int
+		workflow bool
+		want     bool
+	}{
+		{name: "normal shell", width: 100, height: 22, want: true},
+		{name: "short shell hides help", width: 100, height: 9, want: false},
+		{name: "mid-width workflow hides contextual line", width: 80, height: 20, workflow: true, want: false},
+		{name: "wide workflow keeps contextual line", width: workflowPanelWideMinWidth, height: 20, workflow: true, want: true},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+			m.width = tt.width
+			m.height = tt.height
+			if tt.workflow {
+				m.planState = plan.State{Tasks: []plan.Task{{ID: "T1", Description: "verify tests", Status: "in_progress"}}}
+			}
+			if got := m.shouldRenderContextualHelpLine(); got != tt.want {
+				t.Fatalf("shouldRenderContextualHelpLine() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
