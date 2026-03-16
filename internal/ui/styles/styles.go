@@ -27,6 +27,77 @@ const (
 	ResultPrefix   = "⎿"
 )
 
+// Shared layout policy used across shell, workflow rail, and dashboard surfaces.
+const (
+	ShellDefaultWidth                = 72
+	ShellMinimumWidth                = 56
+	ShellMinimumHeight               = 6
+	ShellHeaderLines                 = 3
+	ShellCompactHeaderLines          = 3
+	ShellCompactInputOnlyLines       = 1
+	ShellCompactInputStatusLines     = 2
+	ShellRegionChromeLines           = 2
+	ShellChatChromeMinHeight         = 4
+	ShellContextualHelpHeight        = 10
+	ShellCompactLocationMinWidth     = 12
+	ShellCompactModelMinWidth        = 8
+	ShellSectionMetaMinWidth         = 12
+	ShellHeaderSummaryMinWidth       = 28
+	ShellWelcomeBodyMinWidth         = 20
+	ShellWelcomeHorizontalPadding    = 4
+	ShellWelcomeBottomPadding        = 1
+	ShellCompactStatusReservedWidth  = 9
+	ShellCompactSummaryGapWidth      = 3
+	ShellActiveToolArgsMinWidth      = 8
+	ShellActiveToolArgsMaxWidth      = 24
+	ShellActiveToolArgsReservedWidth = 22
+
+	WorkflowRailWidth                  = 38
+	WorkflowRailInlineMinWidth         = 110
+	WorkflowRailStackMinWidth          = 72
+	WorkflowRailStackMinHeight         = 8
+	WorkflowRailStackMinLines          = 3
+	WorkflowRailStackMaxLines          = 6
+	WorkflowRailStackHeightDivisor     = 3
+	WorkflowRailMinimumChatHeight      = 4
+	WorkflowRailHorizontalChrome       = 2
+	WorkflowRailVerticalChrome         = 2
+	WorkflowRailHeaderGapMin           = 1
+	WorkflowRailSectionSeparatorHeight = 1
+	WorkflowSummaryStatusMaxHeight     = ShellMinimumHeight + 1
+	WorkflowMissionTargetLines         = 6
+	WorkflowSpecTargetLines            = 5
+	WorkflowPlanTargetLines            = 5
+	WorkflowVerificationTargetLines    = 5
+	WorkflowInvariantTargetLines       = 4
+	WorkflowTeamTargetLines            = 3
+	WorkflowSectionCount               = 6
+
+	DashboardCompactWidth             = 88
+	DashboardCompactHeight            = 22
+	DashboardUltraCompactWidth        = 56
+	DashboardUltraCompactHeight       = 14
+	DashboardCompactSupportWidth      = 54
+	DashboardCompactTabsHintWidth     = 64
+	DashboardFullLayoutHintWidth      = 104
+	DashboardTallEventsMinHeight      = 18
+	DashboardEventsHeightDefault      = 2
+	DashboardEventsHeightTall         = 3
+	DashboardMinimumBodyHeight        = 4
+	DashboardPrimaryPaneRatioNum      = 3
+	DashboardPrimaryPaneRatioDen      = 5
+	DashboardMinimumSidebarWidth      = 10
+	DashboardColumnGapWidth           = 1
+	DashboardSectionGapHeight         = 1
+	DashboardFooterHeight             = 1
+	DashboardFocusAccentMinWidth      = 24
+	DashboardFocusAccentMaxWidth      = 2
+	DashboardFocusAccentDivisor       = 18
+	DashboardTabsCount                = 4
+	DashboardTabRowMinHeight          = 1
+	DashboardUltraCompactSupportWidth = DashboardCompactSupportWidth
+)
+
 // Styles contains all visual styles for the application.
 type Styles struct {
 	// Base text styles.
@@ -65,6 +136,7 @@ type Styles struct {
 		Rule         lipgloss.Style
 		Anchor       lipgloss.Style
 		LayoutBadge  lipgloss.Style
+		HeroBadge    lipgloss.Style
 	}
 
 	// Status bar.
@@ -168,6 +240,12 @@ type Styles struct {
 		EmptyHint        lipgloss.Style
 		FocusTabActive   lipgloss.Style
 		FocusTabInactive lipgloss.Style
+		SectionLabel     lipgloss.Style
+		StatusRunning    lipgloss.Style
+		StatusWaiting    lipgloss.Style
+		StatusBlocked    lipgloss.Style
+		StatusDone       lipgloss.Style
+		StatusIdle       lipgloss.Style
 		MetricKey        lipgloss.Style
 		MetricValue      lipgloss.Style
 	}
@@ -268,17 +346,19 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Header.Keystroke = meta.Italic(true)
 
 	// Shell framing.
-	s.Shell.SectionLabel = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.surface).Padding(0, 1).Bold(true)
+	shellChromeBadge := filledBadgeStyle(palette.primary, palette.accentText, noColor)
+	s.Shell.SectionLabel = filledBadgeStyle(palette.surface, palette.fgStrong, noColor)
 	s.Shell.SectionMeta = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Shell.Rule = lipgloss.NewStyle().Foreground(palette.border)
-	s.Shell.Anchor = lipgloss.NewStyle().Foreground(palette.accentText).Background(palette.primary).Padding(0, 1).Bold(true)
-	s.Shell.LayoutBadge = lipgloss.NewStyle().Foreground(palette.secondary).Background(palette.surface).Padding(0, 1).Bold(true)
+	s.Shell.Anchor = shellChromeBadge
+	s.Shell.LayoutBadge = filledBadgeStyle(palette.surface, palette.secondary, noColor)
+	s.Shell.HeroBadge = shellChromeBadge
 
 	// Status bar.
 	s.StatusBar.Base = lipgloss.NewStyle().Background(palette.bgSubtle).Foreground(palette.fgBase)
 	s.StatusBar.Key = halfMuted
 	s.StatusBar.Value = lipgloss.NewStyle().Foreground(palette.fgStrong)
-	s.StatusBar.Accent = lipgloss.NewStyle().Background(palette.primary).Foreground(palette.accentText).Padding(0, 1).Bold(true)
+	s.StatusBar.Accent = shellChromeBadge
 	s.StatusBar.Divider = subtle
 	s.StatusBar.Provider = lipgloss.NewStyle().Foreground(palette.secondary).Bold(true)
 
@@ -368,20 +448,26 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Panel.IconInProgress = lipgloss.NewStyle().Foreground(palette.yellow).Bold(true)
 	s.Panel.IconCompleted = lipgloss.NewStyle().Foreground(palette.green).Bold(true)
 	s.Panel.IconBlocked = lipgloss.NewStyle().Foreground(palette.red).Bold(true)
-	s.Panel.HeaderActive = lipgloss.NewStyle().Foreground(palette.accentText).Background(palette.primary).Padding(0, 1).Bold(true)
-	s.Panel.HeaderInactive = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.bgSubtle).Padding(0, 1).Bold(true)
+	s.Panel.HeaderActive = filledBadgeStyle(palette.primary, palette.accentText, noColor)
+	s.Panel.HeaderInactive = filledBadgeStyle(palette.bgSubtle, palette.fgStrong, noColor)
 	s.Panel.HeaderMeta = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Panel.HeaderKey = lipgloss.NewStyle().Foreground(palette.blue).Bold(true)
 	s.Panel.StateBorder = lipgloss.NewStyle().Foreground(palette.border)
-	s.Panel.StateBadge = lipgloss.NewStyle().Foreground(palette.primary).Background(palette.surface).Padding(0, 1).Bold(true)
+	s.Panel.StateBadge = filledBadgeStyle(palette.surface, palette.primary, noColor)
 	s.Panel.StateTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
 	s.Panel.StateBody = lipgloss.NewStyle().Foreground(palette.fgMuted)
 	s.Panel.StateAction = lipgloss.NewStyle().Foreground(palette.info).Bold(true)
-	s.Panel.EmptyTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.bgSubtle).Padding(0, 1).Bold(true)
+	s.Panel.EmptyTitle = filledBadgeStyle(palette.bgSubtle, palette.fgStrong, noColor)
 	s.Panel.EmptyBody = lipgloss.NewStyle().Foreground(palette.fgMuted).Background(palette.surface).Padding(0, 1)
-	s.Panel.EmptyHint = lipgloss.NewStyle().Foreground(palette.info).Background(palette.surface).Padding(0, 1).Bold(true)
-	s.Panel.FocusTabActive = lipgloss.NewStyle().Foreground(palette.accentText).Background(palette.primary).Padding(0, 1).Bold(true)
+	s.Panel.EmptyHint = filledBadgeStyle(palette.surface, palette.info, noColor)
+	s.Panel.FocusTabActive = filledBadgeStyle(palette.primary, palette.accentText, noColor)
 	s.Panel.FocusTabInactive = lipgloss.NewStyle().Foreground(palette.fgMuted).Background(palette.surface).Padding(0, 1)
+	s.Panel.SectionLabel = lipgloss.NewStyle().Foreground(palette.secondary).Bold(true)
+	s.Panel.StatusRunning = filledBadgeStyle(palette.blue, readableText(palette.blue), noColor)
+	s.Panel.StatusWaiting = filledBadgeStyle(palette.yellow, readableText(palette.yellow), noColor)
+	s.Panel.StatusBlocked = filledBadgeStyle(palette.red, readableText(palette.red), noColor)
+	s.Panel.StatusDone = filledBadgeStyle(palette.green, readableText(palette.green), noColor)
+	s.Panel.StatusIdle = filledBadgeStyle(palette.bgSubtle, palette.fgBase, noColor)
 	s.Panel.MetricKey = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Panel.MetricValue = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
 
@@ -613,6 +699,14 @@ func readableText(bg color.Color) color.Color {
 }
 
 func tagStyle(bg, fg color.Color, noColor bool) lipgloss.Style {
+	style := lipgloss.NewStyle().Padding(0, 1).Bold(true)
+	if noColor {
+		return style
+	}
+	return style.Background(bg).Foreground(fg)
+}
+
+func filledBadgeStyle(bg, fg color.Color, noColor bool) lipgloss.Style {
 	style := lipgloss.NewStyle().Padding(0, 1).Bold(true)
 	if noColor {
 		return style

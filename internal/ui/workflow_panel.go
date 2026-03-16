@@ -16,12 +16,26 @@ import (
 )
 
 const (
-	workflowPanelWidth          = 38
-	workflowPanelWideMinWidth   = 110
-	workflowPanelStackMinWidth  = 72
-	workflowPanelStackMinHeight = 8
-	workflowPanelStackMinLines  = 3
-	workflowPanelStackMaxLines  = 6
+	workflowPanelWidth                  = styles.WorkflowRailWidth
+	workflowPanelWideMinWidth           = styles.WorkflowRailInlineMinWidth
+	workflowPanelStackMinWidth          = styles.WorkflowRailStackMinWidth
+	workflowPanelStackMinHeight         = styles.WorkflowRailStackMinHeight
+	workflowPanelStackMinLines          = styles.WorkflowRailStackMinLines
+	workflowPanelStackMaxLines          = styles.WorkflowRailStackMaxLines
+	workflowPanelStackHeightDivisor     = styles.WorkflowRailStackHeightDivisor
+	workflowPanelMinimumChatHeight      = styles.WorkflowRailMinimumChatHeight
+	workflowPanelHorizontalChrome       = styles.WorkflowRailHorizontalChrome
+	workflowPanelVerticalChrome         = styles.WorkflowRailVerticalChrome
+	workflowPanelHeaderGapMin           = styles.WorkflowRailHeaderGapMin
+	workflowPanelSectionSeparatorHeight = styles.WorkflowRailSectionSeparatorHeight
+
+	workflowSectionCount         = styles.WorkflowSectionCount
+	workflowMissionTargetLines   = styles.WorkflowMissionTargetLines
+	workflowSpecTargetLines      = styles.WorkflowSpecTargetLines
+	workflowPlanTargetLines      = styles.WorkflowPlanTargetLines
+	workflowVerifyTargetLines    = styles.WorkflowVerificationTargetLines
+	workflowInvariantTargetLines = styles.WorkflowInvariantTargetLines
+	workflowTeamTargetLines      = styles.WorkflowTeamTargetLines
 )
 
 func (m *Model) cancelActiveRun(asyncCleanup bool) {
@@ -109,9 +123,9 @@ func (m *Model) workflowStackedHeight(totalHeight int) int {
 	if !m.hasWorkflowPanel() || m.width < workflowPanelStackMinWidth || m.width >= workflowPanelWideMinWidth || totalHeight < workflowPanelStackMinHeight {
 		return 0
 	}
-	workflowHeight := min(workflowPanelStackMaxLines, max(workflowPanelStackMinLines, totalHeight/3))
-	if totalHeight-workflowHeight < 4 {
-		workflowHeight = max(workflowPanelStackMinLines, totalHeight-4)
+	workflowHeight := min(workflowPanelStackMaxLines, max(workflowPanelStackMinLines, totalHeight/workflowPanelStackHeightDivisor))
+	if totalHeight-workflowHeight < workflowPanelMinimumChatHeight {
+		workflowHeight = max(workflowPanelStackMinLines, totalHeight-workflowPanelMinimumChatHeight)
 	}
 	if workflowHeight < workflowPanelStackMinLines || totalHeight-workflowHeight < 1 {
 		return 0
@@ -156,7 +170,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	if height < 1 {
 		height = 1
 	}
-	contentWidth := max(1, width-2)
+	contentWidth := max(1, width-workflowPanelHorizontalChrome)
 	borderStr := lipgloss.NewStyle().Foreground(m.sty.BgSubtle).Render(styles.BorderThin) + " "
 	sep := m.sty.Panel.Separator.Render(strings.Repeat(styles.Separator, contentWidth))
 
@@ -164,7 +178,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 	headerRightText := workflowPanelSummary(m)
 	headerRight := ""
 	if headerRightText != "" {
-		maxRight := contentWidth - lipgloss.Width(headerLeft) - 1
+		maxRight := contentWidth - lipgloss.Width(headerLeft) - workflowPanelHeaderGapMin
 		if maxRight > 0 {
 			headerRightText = ansi.Truncate(headerRightText, maxRight, "…")
 		}
@@ -182,7 +196,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 		render   func(limit int) []string
 	}
 
-	sections := make([]sectionSpec, 0, 6)
+	sections := make([]sectionSpec, 0, workflowSectionCount)
 	if m.hasMissionState() {
 		priority := 0
 		if ctrl := m.missionController(); ctrl != nil {
@@ -192,7 +206,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 				}
 			}
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 6, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowMissionTargetLines, render: func(limit int) []string {
 			return m.renderMissionPanelLines(limit, contentWidth)
 		}})
 	}
@@ -201,7 +215,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 		if m.specState.WaitingGateName() != "" {
 			priority = -1
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowSpecTargetLines, render: func(limit int) []string {
 			return m.renderSpecPanelLines(limit, contentWidth)
 		}})
 	}
@@ -215,7 +229,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 				priority = 0
 			}
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowPlanTargetLines, render: func(limit int) []string {
 			return m.renderPlanPanelLines(limit, contentWidth)
 		}})
 	}
@@ -229,7 +243,7 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 				priority = 1
 			}
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 5, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowVerifyTargetLines, render: func(limit int) []string {
 			return m.renderVerificationPanelLines(limit, contentWidth)
 		}})
 	}
@@ -243,12 +257,12 @@ func (m *Model) renderWorkflowPanel(height, width int) string {
 				priority = 2
 			}
 		}
-		sections = append(sections, sectionSpec{priority: priority, target: 4, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: priority, target: workflowInvariantTargetLines, render: func(limit int) []string {
 			return m.renderInvariantPanelLines(limit, contentWidth)
 		}})
 	}
 	if m.hasTeamMembers() {
-		sections = append(sections, sectionSpec{priority: 5, target: 3, render: func(limit int) []string {
+		sections = append(sections, sectionSpec{priority: 5, target: workflowTeamTargetLines, render: func(limit int) []string {
 			return m.renderTeamPanelLines(limit, contentWidth)
 		}})
 	}

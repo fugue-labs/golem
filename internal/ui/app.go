@@ -1325,16 +1325,16 @@ func (m *Model) renderCompactView() tea.View {
 		v := tea.NewView("")
 		m.configureView(&v)
 		return v
-	case m.height == 1:
+	case m.height == styles.ShellCompactInputOnlyLines:
 		sections = append(sections, m.renderCompactInput())
-	case m.height == 2:
+	case m.height == styles.ShellCompactInputStatusLines:
 		sections = append(sections, m.renderCompactInput(), m.renderCompactStatusBar())
 	default:
 		header := m.renderCompactHeader()
 		input := m.renderCompactInput()
 		status := m.renderCompactStatusBar()
 		sections = append(sections, header)
-		if chatHeight := m.height - 3; chatHeight > 0 {
+		if chatHeight := m.height - styles.ShellCompactHeaderLines; chatHeight > 0 {
 			sections = append(sections, m.renderChatRegion(chatHeight))
 		}
 		sections = append(sections, input, status)
@@ -1349,11 +1349,11 @@ func (m *Model) renderChatRegion(height int) string {
 		return ""
 	}
 
-	if m.hasWorkflowPanel() && m.width >= workflowPanelWideMinWidth {
-		chatWidth := max(1, m.width-workflowPanelWidth)
+	if m.hasWorkflowPanel() && m.width >= styles.WorkflowRailInlineMinWidth {
+		chatWidth := max(1, m.width-styles.WorkflowRailWidth)
 		chatSection := m.renderChat(height, chatWidth)
 		chatLines := strings.Split(chatSection, "\n")
-		panelLines := strings.Split(m.renderWorkflowPanel(height, workflowPanelWidth), "\n")
+		panelLines := strings.Split(m.renderWorkflowPanel(height, styles.WorkflowRailWidth), "\n")
 		combined := make([]string, height)
 		for i := range combined {
 			cl, pl := "", ""
@@ -1381,9 +1381,9 @@ func (m *Model) renderChatRegion(height int) string {
 func (m *Model) renderCompactHeader() string {
 	shellWidth := m.shellWidth()
 	left := m.sty.Shell.SectionLabel.Render(" Context ") + " " + m.shellIdentityLine()
-	right := m.renderShellLocation(max(12, shellWidth/3))
+	right := m.renderShellLocation(max(shellCompactLocationMinWidth, shellWidth/3))
 	if right == "" {
-		right = m.sty.Header.Model.Render(styles.ModelIcon + " " + truncateText(m.cfg.Model, max(8, shellWidth/3)))
+		right = m.sty.Header.Model.Render(styles.ModelIcon + " " + truncateText(m.cfg.Model, max(shellCompactModelMinWidth, shellWidth/3)))
 	}
 	return lipgloss.NewStyle().Width(shellWidth).MaxWidth(shellWidth).Render(joinShellLine(left, right, shellWidth))
 }
@@ -1404,7 +1404,7 @@ func (m *Model) renderCompactInput() string {
 func (m *Model) renderCompactStatusBar() string {
 	shellWidth := m.shellWidth()
 	meta := m.compactStatusMeta(shellWidth)
-	content := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-9)))
+	content := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-shellCompactStatusReservedWidth)))
 	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
 
@@ -1417,15 +1417,28 @@ const (
 )
 
 const (
-	minShellWidth  = 56
-	minShellHeight = 6
+	minShellWidth                   = styles.ShellMinimumWidth
+	minShellHeight                  = styles.ShellMinimumHeight
+	shellCompactLocationMinWidth    = styles.ShellCompactLocationMinWidth
+	shellCompactModelMinWidth       = styles.ShellCompactModelMinWidth
+	shellSectionMetaMinWidth        = styles.ShellSectionMetaMinWidth
+	shellHeaderSummaryMinWidth      = styles.ShellHeaderSummaryMinWidth
+	shellWelcomeBodyMinWidth        = styles.ShellWelcomeBodyMinWidth
+	shellWelcomeHorizontalPadding   = styles.ShellWelcomeHorizontalPadding
+	shellWelcomeBottomPadding       = styles.ShellWelcomeBottomPadding
+	shellCompactStatusReservedWidth = styles.ShellCompactStatusReservedWidth
+	shellCompactSummaryGapWidth     = styles.ShellCompactSummaryGapWidth
+	shellRegionChromeLines          = styles.ShellRegionChromeLines
+	shellActiveToolArgsMinWidth     = styles.ShellActiveToolArgsMinWidth
+	shellActiveToolArgsMaxWidth     = styles.ShellActiveToolArgsMaxWidth
+	shellActiveToolArgsReserved     = styles.ShellActiveToolArgsReservedWidth
 )
 
 func (m *Model) shellWidth() int {
 	if m.width > 0 {
 		return m.width
 	}
-	return 72
+	return styles.ShellDefaultWidth
 }
 
 func (m *Model) belowMinimumShellSize() bool {
@@ -1445,8 +1458,7 @@ func (m *Model) shellLayoutMode() shellLayoutMode {
 	if m.height <= 0 {
 		return shellLayoutCompact
 	}
-	const headerHeight = 3
-	fixedHeight := headerHeight + lipgloss.Height(m.renderInput()) + lipgloss.Height(m.renderStatusBar())
+	fixedHeight := styles.ShellHeaderLines + lipgloss.Height(m.renderInput()) + lipgloss.Height(m.renderStatusBar())
 	if fixedHeight >= m.height {
 		return shellLayoutCompact
 	}
@@ -1531,7 +1543,7 @@ func (m *Model) renderSectionHeader(label, meta string, width int) string {
 	if meta == "" {
 		return left
 	}
-	right := m.sty.Shell.SectionMeta.Render(truncateText(meta, max(12, width/2)))
+	right := m.sty.Shell.SectionMeta.Render(truncateText(meta, max(shellSectionMetaMinWidth, width/2)))
 	return joinShellLine(left, right, width)
 }
 
@@ -1653,8 +1665,8 @@ func (m *Model) renderHeader() string {
 	headerLines := []string{
 		joinShellLine(contextBadge+" "+m.shellIdentityLine(), modelLine, shellWidth),
 		joinShellLine(
-			m.sty.Muted.Render(truncateText("Context · "+m.renderContextSummary(), max(28, shellWidth/2))),
-			m.sty.HalfMuted.Render(truncateText("Activity · "+m.currentActivitySummary(), max(28, shellWidth/2))),
+			m.sty.Muted.Render(truncateText("Context · "+m.renderContextSummary(), max(shellHeaderSummaryMinWidth, shellWidth/2))),
+			m.sty.HalfMuted.Render(truncateText("Activity · "+m.currentActivitySummary(), max(shellHeaderSummaryMinWidth, shellWidth/2))),
 			shellWidth,
 		),
 		m.renderSectionRule(shellWidth),
@@ -1745,7 +1757,7 @@ func (m *Model) currentActivitySummary() string {
 		if m.activeToolName != "" {
 			toolLabel := m.activeToolName
 			if m.activeToolArgs != "" {
-				toolLabel += " " + truncateText(m.activeToolArgs, 24)
+				toolLabel += " " + truncateText(m.activeToolArgs, shellActiveToolArgsMaxWidth)
 			}
 			parts = append(parts, toolLabel)
 		}
@@ -1772,14 +1784,17 @@ func (m *Model) compactStatusMeta(width int) string {
 	case m.busy:
 		return "Working · Esc cancels"
 	}
-	if summary := m.workflowCompactSummary(max(1, width-len(statusText)-3)); summary != "" {
+	if summary := m.workflowCompactSummary(max(1, width-len(statusText)-shellCompactSummaryGapWidth)); summary != "" {
 		return statusText + " · " + summary
 	}
 	return statusText + " · " + m.cfg.Model
 }
 
 func (m *Model) shouldShowWorkflowStatusSummary() bool {
-	return m.hasWorkflowPanel() && m.width >= workflowPanelStackMinWidth && m.width < workflowPanelWideMinWidth && m.height <= minShellHeight+1
+	return m.hasWorkflowPanel() &&
+		m.width >= styles.WorkflowRailStackMinWidth &&
+		m.width < styles.WorkflowRailInlineMinWidth &&
+		m.height <= styles.WorkflowSummaryStatusMaxHeight
 }
 
 func (m *Model) renderChat(height, width int) string {
@@ -1787,10 +1802,10 @@ func (m *Model) renderChat(height, width int) string {
 		return ""
 	}
 
-	showChrome := height >= 4
+	showChrome := height >= styles.ShellChatChromeMinHeight
 	bodyHeight := height
 	if showChrome {
-		bodyHeight = height - 2
+		bodyHeight = height - shellRegionChromeLines
 	}
 	bodyHeight = max(1, bodyHeight)
 
@@ -1822,7 +1837,7 @@ func (m *Model) visibleChatLines(bodyHeight, width int) []string {
 		return strings.Split(m.renderWelcome(bodyHeight, width), "\n")
 	}
 
-	compactMode := bodyHeight <= 4
+	compactMode := bodyHeight <= styles.ShellChatChromeMinHeight
 	allLines := make([]string, 0, len(m.messages)*4)
 	for i, msg := range m.messages {
 		rendered := msg.Render(m.sty, width, m.messages)
@@ -1890,10 +1905,10 @@ func splitRenderedMessageLines(rendered string) []string {
 }
 
 func (m *Model) renderWelcome(height, width int) string {
-	bodyWidth := max(20, width-4)
+	bodyWidth := max(shellWelcomeBodyMinWidth, width-shellWelcomeHorizontalPadding)
 	lines := []string{
 		"",
-		m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.Bold.Render("Purpose-built for steady repo work"),
+		m.sty.Shell.HeroBadge.Render(" GOLEM ") + " " + m.sty.Bold.Render("Purpose-built for steady repo work"),
 		m.sty.Muted.Render("  " + truncateText("Model "+m.cfg.Model+" · "+m.currentActivitySummary(), bodyWidth)),
 		"",
 		m.sty.Bold.Render("  Start here"),
@@ -1916,7 +1931,7 @@ func (m *Model) renderWelcome(height, width int) string {
 	}
 
 	contentHeight := len(lines)
-	topPad := max(0, height-contentHeight-1)
+	topPad := max(0, height-contentHeight-shellWelcomeBottomPadding)
 	return fitShellLines(lines, height, topPad)
 }
 
@@ -1975,10 +1990,12 @@ func RenderHelpSurfaceLine(width int, title string, segments []string, style fun
 }
 
 func (m *Model) shouldRenderContextualHelpLine() bool {
-	if m.height > 0 && m.height < 10 {
+	if m.height > 0 && m.height < styles.ShellContextualHelpHeight {
 		return false
 	}
-	if m.hasWorkflowPanel() && m.width >= workflowPanelStackMinWidth && m.width < workflowPanelWideMinWidth {
+	if m.hasWorkflowPanel() &&
+		m.width >= styles.WorkflowRailStackMinWidth &&
+		m.width < styles.WorkflowRailInlineMinWidth {
 		return false
 	}
 	return true
@@ -2017,7 +2034,7 @@ func (m *Model) renderInputBusyOrIdle() string {
 	if m.activeToolName != "" {
 		activity = "Running " + m.activeToolName
 		if m.activeToolArgs != "" {
-			activity += " " + truncateText(m.activeToolArgs, max(8, innerWidth-22))
+			activity += " " + truncateText(m.activeToolArgs, max(shellActiveToolArgsMinWidth, innerWidth-shellActiveToolArgsReserved))
 		}
 	}
 	meta := []string{activity, elapsed.String()}

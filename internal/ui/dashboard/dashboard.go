@@ -15,10 +15,46 @@ import (
 )
 
 const (
-	refreshInterval        = 2 * time.Second
-	compactDashboardWidth  = 88
-	compactDashboardHeight = 22
+	refreshInterval         = 2 * time.Second
+	compactDashboardWidth   = styles.DashboardCompactWidth
+	compactDashboardHeight  = styles.DashboardCompactHeight
+	dashboardTabRowHeight   = styles.DashboardTabRowMinHeight
+	dashboardColumnGapWidth = styles.DashboardColumnGapWidth
+	dashboardSectionGap     = styles.DashboardSectionGapHeight
+	dashboardFooterHeight   = styles.DashboardFooterHeight
 )
+
+func dashboardEventHeight(totalHeight int) int {
+	if totalHeight >= styles.DashboardTallEventsMinHeight {
+		return styles.DashboardEventsHeightTall
+	}
+	return styles.DashboardEventsHeightDefault
+}
+
+func dashboardSplitWidths(totalWidth int) (leftWidth, rightWidth int) {
+	leftWidth = totalWidth * styles.DashboardPrimaryPaneRatioNum / styles.DashboardPrimaryPaneRatioDen
+	rightWidth = totalWidth - leftWidth - dashboardColumnGapWidth
+	if rightWidth < styles.DashboardMinimumSidebarWidth {
+		rightWidth = styles.DashboardMinimumSidebarWidth
+		leftWidth = totalWidth - rightWidth - dashboardColumnGapWidth
+	}
+	if leftWidth < 1 {
+		leftWidth = 1
+		rightWidth = max(1, totalWidth-leftWidth-dashboardColumnGapWidth)
+	}
+	if rightWidth < 1 {
+		rightWidth = 1
+	}
+	return leftWidth, rightWidth
+}
+
+func dashboardPrimaryPaneHeight(bodyHeight int) int {
+	height := bodyHeight * styles.DashboardPrimaryPaneRatioNum / styles.DashboardPrimaryPaneRatioDen
+	if height < 1 {
+		return 1
+	}
+	return height
+}
 
 // dashboardRenderMode tracks the operator-visible dashboard mode so hit-testing matches rendering.
 type dashboardRenderMode int
@@ -226,36 +262,17 @@ func (m *Model) currentLayout() dashboardLayout {
 func (m *Model) fullDashboardLayout() dashboardLayout {
 	headerHeight := len(m.renderHeader())
 	tabsY := headerHeight
-	separatorY := tabsY + 1
-	bodyY := separatorY + 1
-	eventHeight := 2
-	if m.height >= 18 {
-		eventHeight = 3
+	separatorY := tabsY + dashboardSectionGap
+	bodyY := separatorY + dashboardSectionGap
+	eventHeight := dashboardEventHeight(m.height)
+	bodyHeight := m.height - (headerHeight + dashboardSectionGap + dashboardSectionGap) - dashboardSectionGap - eventHeight - dashboardFooterHeight
+	if bodyHeight < styles.DashboardMinimumBodyHeight {
+		bodyHeight = styles.DashboardMinimumBodyHeight
 	}
-	bodyHeight := m.height - (headerHeight + 1 + 1) - 1 - eventHeight - 1
-	if bodyHeight < 4 {
-		bodyHeight = 4
-	}
-	eventsY := bodyY + bodyHeight + 1
+	eventsY := bodyY + bodyHeight + dashboardSectionGap
 
-	leftWidth := m.width * 3 / 5
-	rightWidth := m.width - leftWidth - 1
-	if rightWidth < 10 {
-		rightWidth = 10
-		leftWidth = m.width - rightWidth - 1
-	}
-	if leftWidth < 1 {
-		leftWidth = 1
-		rightWidth = max(1, m.width-leftWidth-1)
-	}
-	if rightWidth < 1 {
-		rightWidth = 1
-	}
-
-	taskHeight := bodyHeight * 3 / 5
-	if taskHeight < 1 {
-		taskHeight = 1
-	}
+	leftWidth, rightWidth := dashboardSplitWidths(m.width)
+	taskHeight := dashboardPrimaryPaneHeight(bodyHeight)
 	evidenceHeight := bodyHeight - taskHeight
 	if evidenceHeight < 1 {
 		evidenceHeight = 1
@@ -263,11 +280,11 @@ func (m *Model) fullDashboardLayout() dashboardLayout {
 
 	return dashboardLayout{
 		mode:     dashboardRenderFull,
-		tabs:     dashboardRect{x: 0, y: tabsY, w: m.width, h: 1},
+		tabs:     dashboardRect{x: 0, y: tabsY, w: m.width, h: dashboardTabRowHeight},
 		body:     dashboardRect{x: 0, y: bodyY, w: m.width, h: bodyHeight},
 		tasks:    dashboardRect{x: 0, y: bodyY, w: leftWidth, h: taskHeight},
 		evidence: dashboardRect{x: 0, y: bodyY + taskHeight, w: leftWidth, h: evidenceHeight},
-		workers:  dashboardRect{x: leftWidth + 1, y: bodyY, w: rightWidth, h: bodyHeight},
+		workers:  dashboardRect{x: leftWidth + dashboardColumnGapWidth, y: bodyY, w: rightWidth, h: bodyHeight},
 		events:   dashboardRect{x: 0, y: eventsY, w: m.width, h: eventHeight},
 	}
 }
@@ -275,25 +292,22 @@ func (m *Model) fullDashboardLayout() dashboardLayout {
 func (m *Model) compactDashboardLayout() dashboardLayout {
 	headerHeight := len(m.renderCompactHeader())
 	tabsY := headerHeight
-	separatorY := tabsY + 1
-	supportY := separatorY + 1
-	bodyY := supportY + 1
-	paneHeight := max(1, m.height-bodyY-1)
+	separatorY := tabsY + dashboardTabRowHeight
+	supportY := separatorY + dashboardSectionGap
+	bodyY := supportY + dashboardSectionGap
+	paneHeight := max(1, m.height-bodyY-dashboardFooterHeight)
 	return dashboardLayout{
 		mode: dashboardRenderCompact,
-		tabs: dashboardRect{x: 0, y: tabsY, w: m.width, h: 1},
+		tabs: dashboardRect{x: 0, y: tabsY, w: m.width, h: dashboardTabRowHeight},
 		body: dashboardRect{x: 0, y: bodyY, w: m.width, h: paneHeight},
 	}
 }
 
-func (m *Model) paneFromTabs(x, y int) (pane, bool) {
-	layout := m.currentLayout()
-	if !layout.tabs.contains(x, y) {
-		return paneTasks, false
-	}
-	joinerWidth := lipgloss.Width(m.sty.Panel.Separator.Render(" "))
-	cursor := 0
-	tabs := []struct {
+func (m *Model) dashboardTabs() []struct {
+	title string
+	pane  pane
+} {
+	return []struct {
 		title string
 		pane  pane
 	}{
@@ -302,12 +316,42 @@ func (m *Model) paneFromTabs(x, y int) (pane, bool) {
 		{title: "[3] Evidence", pane: paneEvidence},
 		{title: "[4] Events", pane: paneEvents},
 	}
+}
+
+func (m *Model) renderedFocusTabs() []struct {
+	pane  pane
+	label string
+} {
+	tabs := m.dashboardTabs()
+	rendered := make([]struct {
+		pane  pane
+		label string
+	}, 0, len(tabs))
 	for _, tab := range tabs {
 		style := m.sty.Panel.FocusTabInactive
+		label := tab.title
 		if m.focusPane == tab.pane {
 			style = m.sty.Panel.FocusTabActive
+			label = "▸ " + label
 		}
-		tabWidth := lipgloss.Width(style.Render(tab.title))
+		rendered = append(rendered, struct {
+			pane  pane
+			label string
+		}{pane: tab.pane, label: style.Render(label)})
+	}
+	return rendered
+}
+
+func (m *Model) paneFromTabs(x, y int) (pane, bool) {
+	layout := m.currentLayout()
+	if !layout.tabs.contains(x, y) {
+		return paneTasks, false
+	}
+	joiner := m.sty.Panel.Separator.Render(" ")
+	joinerWidth := lipgloss.Width(joiner)
+	cursor := 0
+	for _, tab := range m.renderedFocusTabs() {
+		tabWidth := lipgloss.Width(tab.label)
 		if x >= cursor && x < cursor+tabWidth {
 			return tab.pane, true
 		}
@@ -546,27 +590,14 @@ func (m *Model) renderFullDashboardView() tea.View {
 	lines = append(lines, m.renderFocusTabs(max(1, m.width)))
 	lines = append(lines, m.renderSeparator())
 
-	eventHeight := 2
-	if m.height >= 18 {
-		eventHeight = 3
-	}
-	bodyHeight := m.height - len(lines) - 1 - eventHeight - 1 // separator + events + footer
-	if bodyHeight < 4 {
-		bodyHeight = 4
+	eventHeight := dashboardEventHeight(m.height)
+	bodyHeight := m.height - len(lines) - dashboardSectionGap - eventHeight - dashboardFooterHeight
+	if bodyHeight < styles.DashboardMinimumBodyHeight {
+		bodyHeight = styles.DashboardMinimumBodyHeight
 	}
 
-	leftWidth := m.width * 3 / 5
-	rightWidth := m.width - leftWidth - 1
-	if rightWidth < 10 {
-		rightWidth = 10
-		leftWidth = m.width - rightWidth - 1
-	}
-	if leftWidth < 1 {
-		leftWidth = 1
-		rightWidth = max(1, m.width-leftWidth-1)
-	}
-
-	taskHeight := bodyHeight * 3 / 5
+	leftWidth, rightWidth := dashboardSplitWidths(m.width)
+	taskHeight := dashboardPrimaryPaneHeight(bodyHeight)
 	evidenceHeight := bodyHeight - taskHeight
 
 	leftLines := append(m.renderTaskPane(taskHeight, leftWidth), m.renderEvidencePane(evidenceHeight, leftWidth)...)
@@ -597,7 +628,7 @@ func (m *Model) renderCompactDashboardView() tea.View {
 	lines = append(lines, m.renderSeparator())
 	lines = append(lines, m.renderCompactSupportLine(max(1, m.width)))
 
-	paneHeight := max(1, m.height-len(lines)-1) // footer
+	paneHeight := max(1, m.height-len(lines)-dashboardFooterHeight)
 	lines = append(lines, m.renderFocusedPaneLines(paneHeight, max(1, m.width), true)...)
 	lines = append(lines, m.renderFooter())
 	return m.finalizeView(lines)
@@ -648,6 +679,8 @@ func (m *Model) renderLoadingView() tea.View {
 	lines := []string{
 		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("loading", "Refreshing"),
 	}
+	lines = append(lines, m.renderFocusTabs(max(1, m.width)))
+	lines = append(lines, m.renderSeparator())
 	lines = append(lines, m.renderStateCard(
 		max(1, m.width),
 		"Loading mission state",
@@ -666,6 +699,8 @@ func (m *Model) renderNoMissionView() tea.View {
 	lines := []string{
 		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("idle", "No mission"),
 	}
+	lines = append(lines, m.renderFocusTabs(max(1, m.width)))
+	lines = append(lines, m.renderSeparator())
 	lines = append(lines, m.renderStateCard(
 		max(1, m.width),
 		"No active mission",
@@ -801,7 +836,7 @@ func (m *Model) activeRunsCount() int {
 }
 
 func (m *Model) isUltraCompactLayout() bool {
-	return m.width < 56 || m.height < 14
+	return m.width < styles.DashboardUltraCompactWidth || m.height < styles.DashboardUltraCompactHeight
 }
 
 func (m *Model) useCompactLayout() bool {
@@ -844,13 +879,13 @@ func (m *Model) renderCompactSupportLine(width int) string {
 		"q quit",
 		"j/k scroll",
 	}
-	ultraCompact := width < 54 || (m.height > 0 && m.height < 14)
+	ultraCompact := width < styles.DashboardUltraCompactSupportWidth || (m.height > 0 && m.height < styles.DashboardUltraCompactHeight)
 	if !ultraCompact {
 		title = "Compact layout"
-		if width >= 64 {
+		if width >= styles.DashboardCompactTabsHintWidth {
 			segments = append(segments, "Tab panes")
 		}
-		if width >= 104 {
+		if width >= styles.DashboardFullLayoutHintWidth {
 			segments = append(segments, "resize wider for the full four-pane Mission Control view")
 		}
 	}
@@ -924,10 +959,12 @@ func (m *Model) renderFocusTabs(width int) string {
 	var rendered []string
 	for _, tab := range tabs {
 		style := m.sty.Panel.FocusTabInactive
+		label := tab.title
 		if m.focusPane == tab.pane {
 			style = m.sty.Panel.FocusTabActive
+			label = "▸ " + label
 		}
-		rendered = append(rendered, style.Render(tab.title))
+		rendered = append(rendered, style.Render(label))
 	}
 	return ansi.Truncate(strings.Join(rendered, joiner), width, "…")
 }
@@ -1388,7 +1425,7 @@ func (m *Model) renderSectionLabel(title string, count, width int) string {
 	if lipgloss.Width(label) < width {
 		label += strings.Repeat(styles.Separator, width-lipgloss.Width(label))
 	}
-	return m.sty.Panel.Progress.Render(ansi.Truncate(label, max(1, width), "…"))
+	return m.sty.Panel.SectionLabel.Render(ansi.Truncate(label, max(1, width), "…"))
 }
 
 // renderPaneHeader renders a pane title with focus indicator.
@@ -1405,8 +1442,8 @@ func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
 	}
 	label := fmt.Sprintf("%s %s %s", indicator, paneShortcut(title), title)
 	line := headStyle.Render(label) + " " + metaStyle.Render(meta)
-	if focused && width >= 24 {
-		accentWidth := min(2, max(1, width/18))
+	if focused && width >= styles.DashboardFocusAccentMinWidth {
+		accentWidth := min(styles.DashboardFocusAccentMaxWidth, max(1, width/styles.DashboardFocusAccentDivisor))
 		line = strings.Repeat(styles.BorderThick, accentWidth) + " " + line
 	}
 	return ansi.Truncate(line, max(1, width), "…")
@@ -1421,27 +1458,25 @@ func (m *Model) renderMetric(key, value string) string {
 }
 
 func (m *Model) renderStatusChip(kind, text string) string {
-	style := lipgloss.NewStyle().
-		Foreground(m.sty.FgBase).
-		Background(m.sty.BgSubtle).
-		Bold(true).
-		Padding(0, 1)
-	lower := strings.ToLower(kind)
+	return dashboardStatusStyle(m.sty, kind).Render(text)
+}
+
+func dashboardStatusStyle(sty *styles.Styles, kind string) lipgloss.Style {
+	lower := strings.ToLower(strings.TrimSpace(kind))
 	switch {
-	case strings.Contains(lower, "run") || strings.Contains(lower, "active"):
-		style = style.Background(m.sty.Blue)
-	case strings.Contains(lower, "await") || strings.Contains(lower, "review"):
-		style = style.Background(m.sty.Yellow)
-	case strings.Contains(lower, "block") || strings.Contains(lower, "fail") || strings.Contains(lower, "error"):
-		style = style.Background(m.sty.Red)
-	case strings.Contains(lower, "done") || strings.Contains(lower, "complete") || strings.Contains(lower, "success"):
-		style = style.Background(m.sty.Green)
-	case strings.Contains(lower, "idle") || strings.Contains(lower, "draft") || strings.Contains(lower, "pause"):
-		style = style.Background(m.sty.BgSubtle)
+	case strings.Contains(lower, "loading"), strings.Contains(lower, "refresh"):
+		return sty.Panel.StatusRunning
+	case strings.Contains(lower, "run"), strings.Contains(lower, "active"):
+		return sty.Panel.StatusRunning
+	case strings.Contains(lower, "await"), strings.Contains(lower, "review"), strings.Contains(lower, "queue"), strings.Contains(lower, "plan"):
+		return sty.Panel.StatusWaiting
+	case strings.Contains(lower, "block"), strings.Contains(lower, "fail"), strings.Contains(lower, "error"), strings.Contains(lower, "cancel"):
+		return sty.Panel.StatusBlocked
+	case strings.Contains(lower, "done"), strings.Contains(lower, "complete"), strings.Contains(lower, "success"):
+		return sty.Panel.StatusDone
 	default:
-		style = style.Background(m.sty.Primary)
+		return sty.Panel.StatusIdle
 	}
-	return style.Render(text)
 }
 
 func (m *Model) renderEmptyState(width int, title, body string) []string {
@@ -1600,18 +1635,7 @@ func runModeIcon(mode mission.RunMode) string {
 }
 
 func runStatusStyle(s mission.RunStatus, sty *styles.Styles) string {
-	switch s {
-	case mission.RunRunning:
-		return lipgloss.NewStyle().Foreground(sty.Yellow).Render(string(s))
-	case mission.RunQueued:
-		return lipgloss.NewStyle().Foreground(sty.Blue).Render(string(s))
-	case mission.RunSucceeded:
-		return lipgloss.NewStyle().Foreground(sty.Green).Render(string(s))
-	case mission.RunFailed:
-		return lipgloss.NewStyle().Foreground(sty.Red).Render(string(s))
-	default:
-		return string(s)
-	}
+	return dashboardStatusStyle(sty, string(s)).Render(string(s))
 }
 
 func paneShortcut(title string) string {
