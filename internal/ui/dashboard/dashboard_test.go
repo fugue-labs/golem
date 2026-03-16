@@ -406,13 +406,136 @@ func TestRenderPaneHeaderFocusedCopy(t *testing.T) {
 func TestRenderHeaderNoMissionShowsReadableIdleState(t *testing.T) {
 	m := New("")
 	m.width = 80
-	lines := m.renderHeader()
-	joined := stripANSITest(stringsJoin(lines, "\n"))
+	m.height = 24
+	joined := stripANSITest(viewString(m))
 	if !containsAny(joined, "Mission Control", "No mission") {
 		t.Fatalf("expected Mission Control no-mission header, got %q", joined)
 	}
 	if !containsAny(joined, "No active mission", "/mission new", "Shift+Tab reverse") {
 		t.Fatalf("expected no-mission guidance, got %q", joined)
+	}
+	if !containsAny(joined, "Open the main shell", "press r to refresh") {
+		t.Fatalf("expected premium no-mission action guidance, got %q", joined)
+	}
+}
+
+func TestRenderFocusTabsShowsActivePane(t *testing.T) {
+	m := New("")
+	m.width = 80
+	m.height = 24
+	m.focusPane = paneEvidence
+	plain := stripANSITest(m.renderFocusTabs(80))
+	for _, want := range []string{"[1] Tasks", "[2] Workers", "[3] Evidence", "[4] Events"} {
+		if !containsAny(plain, want) {
+			t.Fatalf("expected %q in focus tabs, got %q", want, plain)
+		}
+	}
+}
+
+func TestRenderCompactSupportLineReflectsFocusedPane(t *testing.T) {
+	m := New("")
+	m.focusPane = paneEvidence
+	plain := stripANSITest(m.renderCompactSupportLine(72))
+	for _, want := range []string{"Compact layout", "Focus Evidence", "j/k scroll", "q quit"} {
+		if !containsAny(plain, want) {
+			t.Fatalf("expected %q in compact support line, got %q", want, plain)
+		}
+	}
+}
+
+func TestCompactDashboardLayoutStartsBodyAfterSupportLine(t *testing.T) {
+	m := New("")
+	m.width = 72
+	m.height = 20
+	m.missionObj = &mission.Mission{ID: "m1", Title: "Mission", Goal: "Goal", Status: mission.MissionRunning}
+	m.summary = &mission.MissionSummary{}
+	layout := m.compactDashboardLayout()
+	wantBodyY := len(m.renderCompactHeader()) + 3
+	if layout.body.y != wantBodyY {
+		t.Fatalf("body y = %d, want %d", layout.body.y, wantBodyY)
+	}
+	if layout.body.h != m.height-layout.body.y-1 {
+		t.Fatalf("body height = %d, want %d", layout.body.h, m.height-layout.body.y-1)
+	}
+}
+
+func TestRenderLoadingViewUsesReadableStateCard(t *testing.T) {
+	m := New("")
+	m.width = 72
+	m.height = 18
+	m.refreshing = true
+	plain := stripANSITest(viewString(m))
+	for _, want := range []string{"Mission Control", "Refreshing", "Loading mission state", "latest operator snapshot"} {
+		if !containsAny(plain, want) {
+			t.Fatalf("expected %q in loading view, got %q", want, plain)
+		}
+	}
+}
+
+func TestRefreshFailureKeepsSelectedMissionID(t *testing.T) {
+	m := New("mission-123")
+	m.width = 72
+	m.height = 20
+	m.missionObj = &mission.Mission{ID: "mission-123", Title: "Mission", Goal: "Goal", Status: mission.MissionRunning}
+	m.summary = &mission.MissionSummary{}
+	m.tasks = []*mission.Task{{ID: "t1", Title: "task"}}
+
+	msg := m.doRefresh()
+	rm, ok := msg.(refreshDoneMsg)
+	if !ok {
+		t.Fatalf("expected refreshDoneMsg, got %T", msg)
+	}
+	if rm.err == nil {
+		t.Fatal("expected refresh error without controller")
+	}
+	if m.missionID != "mission-123" {
+		t.Fatalf("expected missionID to be preserved, got %q", m.missionID)
+	}
+	if m.missionObj != nil || m.summary != nil || len(m.tasks) != 0 {
+		t.Fatalf("expected cached mission snapshot cleared on refresh failure")
+	}
+
+	m.Update(msg)
+	plain := stripANSITest(viewString(m))
+	for _, want := range []string{"Mission Control", "Dashboard error", "store not", "initialized"} {
+		if !containsAny(plain, want) {
+			t.Fatalf("expected %q in readable error state, got %q", want, plain)
+		}
+	}
+}
+
+func TestPaneAtUsesRenderedLayouts(t *testing.T) {
+	m := New("")
+	m.width = 120
+	m.height = 40
+	if _, ok := m.paneAt(5, 5); ok {
+		t.Fatal("expected no hit-testing in no-mission state")
+	}
+
+	m.lastErr = fmt.Errorf("store offline")
+	if _, ok := m.paneAt(5, 5); ok {
+		t.Fatal("expected no hit-testing in error state")
+	}
+
+	m.lastErr = nil
+	m.missionObj = &mission.Mission{ID: "m1", Title: "Mission", Goal: "Goal", Status: mission.MissionRunning}
+	m.summary = &mission.MissionSummary{}
+	m.width = 72
+	m.height = 20
+	m.focusPane = paneWorkers
+	if got, ok := m.paneAt(10, len(m.renderCompactHeader())+3); !ok || got != paneWorkers {
+		t.Fatalf("compact paneAt should hit focused pane, got (%v,%v)", got, ok)
+	}
+	if got, ok := m.paneAt(2, len(m.renderCompactHeader())); !ok || got != paneTasks {
+		t.Fatalf("tab row click should map to tasks tab, got (%v,%v)", got, ok)
+	}
+}
+
+func TestRenderEmptyStateIncludesActionHint(t *testing.T) {
+	m := New("")
+	plain := stripANSITest(stringsJoin(m.renderEmptyState(60, "No active workers", "Mission Control is idle."), "\n"))
+	if !containsAny(plain, "Use /mission start", "No active workers") {
+		t.Fatalf("expected actionable empty state, got %q", plain)
 	}
 }
 

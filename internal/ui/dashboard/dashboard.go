@@ -14,7 +14,43 @@ import (
 	"github.com/fugue-labs/golem/internal/ui/styles"
 )
 
-const refreshInterval = 2 * time.Second
+const (
+	refreshInterval        = 2 * time.Second
+	compactDashboardWidth  = 88
+	compactDashboardHeight = 22
+)
+
+// dashboardRenderMode tracks the operator-visible dashboard mode so hit-testing matches rendering.
+type dashboardRenderMode int
+
+const (
+	dashboardRenderNone dashboardRenderMode = iota
+	dashboardRenderNoMission
+	dashboardRenderError
+	dashboardRenderCompact
+	dashboardRenderFull
+)
+
+type dashboardRect struct {
+	x int
+	y int
+	w int
+	h int
+}
+
+func (r dashboardRect) contains(x, y int) bool {
+	return x >= r.x && y >= r.y && x < r.x+r.w && y < r.y+r.h
+}
+
+type dashboardLayout struct {
+	mode     dashboardRenderMode
+	tabs     dashboardRect
+	body     dashboardRect
+	tasks    dashboardRect
+	workers  dashboardRect
+	evidence dashboardRect
+	events   dashboardRect
+}
 
 // pane identifies which pane has focus for scrolling.
 type pane int
@@ -54,8 +90,21 @@ type Model struct {
 	focusPane       pane
 	scrollPos       [paneCount]int
 	terminalFocused bool
+	refreshing      bool
 	lastErr         error
 	quitting        bool
+}
+
+type dashboardSnapshot struct {
+	missionID  string
+	missionObj *mission.Mission
+	summary    *mission.MissionSummary
+	tasks      []*mission.Task
+	deps       []mission.TaskDependency
+	runs       []*mission.Run
+	events     []*mission.Event
+	approvals  []*mission.Approval
+	artifacts  []*mission.Artifact
 }
 
 // New creates a dashboard model for the given mission ID.
@@ -84,6 +133,7 @@ type refreshDoneMsg struct {
 }
 
 func (m *Model) Init() tea.Cmd {
+	m.refreshing = true
 	return tea.Batch(tea.RequestBackgroundColor, m.initStore(), tickCmd())
 }
 
@@ -130,42 +180,140 @@ func (m *Model) paneAt(x, y int) (pane, bool) {
 	if x < 0 || y < 0 || m.width <= 0 || m.height <= 0 {
 		return paneTasks, false
 	}
-	headerLines := len(m.renderHeader())
-	bodyStartY := headerLines + 1
+	layout := m.currentLayout()
+	if p, ok := m.paneFromTabs(x, y); ok {
+		return p, true
+	}
+	switch layout.mode {
+	case dashboardRenderFull:
+		switch {
+		case layout.tasks.contains(x, y):
+			return paneTasks, true
+		case layout.workers.contains(x, y):
+			return paneWorkers, true
+		case layout.evidence.contains(x, y):
+			return paneEvidence, true
+		case layout.events.contains(x, y):
+			return paneEvents, true
+		}
+	case dashboardRenderCompact:
+		if !layout.body.contains(x, y) {
+			return paneTasks, false
+		}
+		return m.focusPane, true
+	case dashboardRenderNoMission, dashboardRenderError, dashboardRenderNone:
+		return paneTasks, false
+	}
+	return paneTasks, false
+}
+
+func (m *Model) currentLayout() dashboardLayout {
+	if m.width <= 0 || m.height <= 0 {
+		return dashboardLayout{mode: dashboardRenderNone}
+	}
+	if m.missionObj == nil {
+		if m.lastErr != nil && !isNoMissionError(m.lastErr) {
+			return dashboardLayout{mode: dashboardRenderError}
+		}
+		return dashboardLayout{mode: dashboardRenderNoMission}
+	}
+	if m.useCompactLayout() {
+		return m.compactDashboardLayout()
+	}
+	return m.fullDashboardLayout()
+}
+
+func (m *Model) fullDashboardLayout() dashboardLayout {
+	headerHeight := len(m.renderHeader())
+	tabsY := headerHeight
+	separatorY := tabsY + 1
+	bodyY := separatorY + 1
 	eventHeight := 2
 	if m.height >= 18 {
 		eventHeight = 3
 	}
-	bodyHeight := m.height - headerLines - 1 - eventHeight - 1
+	bodyHeight := m.height - (headerHeight + 1 + 1) - 1 - eventHeight - 1
 	if bodyHeight < 4 {
 		bodyHeight = 4
 	}
-	eventStartY := bodyStartY + bodyHeight + 1
-	if y < bodyStartY {
+	eventsY := bodyY + bodyHeight + 1
+
+	leftWidth := m.width * 3 / 5
+	rightWidth := m.width - leftWidth - 1
+	if rightWidth < 10 {
+		rightWidth = 10
+		leftWidth = m.width - rightWidth - 1
+	}
+	if leftWidth < 1 {
+		leftWidth = 1
+		rightWidth = max(1, m.width-leftWidth-1)
+	}
+	if rightWidth < 1 {
+		rightWidth = 1
+	}
+
+	taskHeight := bodyHeight * 3 / 5
+	if taskHeight < 1 {
+		taskHeight = 1
+	}
+	evidenceHeight := bodyHeight - taskHeight
+	if evidenceHeight < 1 {
+		evidenceHeight = 1
+	}
+
+	return dashboardLayout{
+		mode:     dashboardRenderFull,
+		tabs:     dashboardRect{x: 0, y: tabsY, w: m.width, h: 1},
+		body:     dashboardRect{x: 0, y: bodyY, w: m.width, h: bodyHeight},
+		tasks:    dashboardRect{x: 0, y: bodyY, w: leftWidth, h: taskHeight},
+		evidence: dashboardRect{x: 0, y: bodyY + taskHeight, w: leftWidth, h: evidenceHeight},
+		workers:  dashboardRect{x: leftWidth + 1, y: bodyY, w: rightWidth, h: bodyHeight},
+		events:   dashboardRect{x: 0, y: eventsY, w: m.width, h: eventHeight},
+	}
+}
+
+func (m *Model) compactDashboardLayout() dashboardLayout {
+	headerHeight := len(m.renderCompactHeader())
+	tabsY := headerHeight
+	separatorY := tabsY + 1
+	supportY := separatorY + 1
+	bodyY := supportY + 1
+	paneHeight := max(1, m.height-bodyY-1)
+	return dashboardLayout{
+		mode: dashboardRenderCompact,
+		tabs: dashboardRect{x: 0, y: tabsY, w: m.width, h: 1},
+		body: dashboardRect{x: 0, y: bodyY, w: m.width, h: paneHeight},
+	}
+}
+
+func (m *Model) paneFromTabs(x, y int) (pane, bool) {
+	layout := m.currentLayout()
+	if !layout.tabs.contains(x, y) {
 		return paneTasks, false
 	}
-	if y >= eventStartY && y < eventStartY+eventHeight {
-		return paneEvents, true
+	joinerWidth := lipgloss.Width(m.sty.Panel.Separator.Render(" "))
+	cursor := 0
+	tabs := []struct {
+		title string
+		pane  pane
+	}{
+		{title: "[1] Tasks", pane: paneTasks},
+		{title: "[2] Workers", pane: paneWorkers},
+		{title: "[3] Evidence", pane: paneEvidence},
+		{title: "[4] Events", pane: paneEvents},
 	}
-	if y >= bodyStartY && y < bodyStartY+bodyHeight {
-		leftWidth := m.width * 3 / 5
-		rightWidth := m.width - leftWidth - 1
-		if rightWidth < 10 {
-			rightWidth = 10
-			leftWidth = m.width - rightWidth - 1
+	for _, tab := range tabs {
+		style := m.sty.Panel.FocusTabInactive
+		if m.focusPane == tab.pane {
+			style = m.sty.Panel.FocusTabActive
 		}
-		if leftWidth < 1 {
-			leftWidth = 1
+		tabWidth := lipgloss.Width(style.Render(tab.title))
+		if x >= cursor && x < cursor+tabWidth {
+			return tab.pane, true
 		}
-		if x < leftWidth {
-			taskHeight := bodyHeight * 3 / 5
-			if y < bodyStartY+taskHeight {
-				return paneTasks, true
-			}
-			return paneEvidence, true
-		}
-		if x > leftWidth {
-			return paneWorkers, true
+		cursor += tabWidth + joinerWidth
+		if cursor >= m.width {
+			break
 		}
 	}
 	return paneTasks, false
@@ -187,15 +335,18 @@ func (m *Model) initStore() tea.Cmd {
 
 func (m *Model) doRefresh() tea.Msg {
 	if m.ctrl == nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: fmt.Errorf("store not initialized")}
 	}
 
 	ctx := m.ctx
+	nextMissionID := m.missionID
 
 	// If no specific mission, find the most recent active one.
-	if m.missionID == "" {
+	if nextMissionID == "" {
 		missions, err := m.ctrl.Store().ListMissions(ctx)
 		if err != nil {
+			m.clearSnapshot()
 			return refreshDoneMsg{err: err}
 		}
 		// Prefer running > blocked > paused > awaiting_approval > planning > draft.
@@ -212,69 +363,74 @@ func (m *Model) doRefresh() tea.Msg {
 			best = missions[0] // Fallback to most recent.
 		}
 		if best != nil {
-			m.missionID = best.ID
+			nextMissionID = best.ID
 		}
 	}
 
-	if m.missionID == "" {
-		m.missionObj = nil
-		m.summary = nil
-		m.tasks = nil
-		m.deps = nil
-		m.runs = nil
-		m.events = nil
-		m.approvals = nil
-		m.artifacts = nil
+	if nextMissionID == "" {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: fmt.Errorf("no missions found")}
 	}
 
-	ms, err := m.ctrl.GetMission(ctx, m.missionID)
+	ms, err := m.ctrl.GetMission(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.missionObj = ms
 
-	summary, err := m.ctrl.GetMissionSummary(ctx, m.missionID)
+	summary, err := m.ctrl.GetMissionSummary(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.summary = summary
 
-	tasks, err := m.ctrl.Store().ListTasks(ctx, m.missionID)
+	tasks, err := m.ctrl.Store().ListTasks(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.tasks = tasks
 
-	deps, err := m.ctrl.Store().ListDependencies(ctx, m.missionID)
+	deps, err := m.ctrl.Store().ListDependencies(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.deps = deps
 
-	runs, err := m.ctrl.Store().ListRuns(ctx, m.missionID)
+	runs, err := m.ctrl.Store().ListRuns(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.runs = runs
 
-	events, err := m.ctrl.Store().ListEvents(ctx, m.missionID, 50)
+	events, err := m.ctrl.Store().ListEvents(ctx, nextMissionID, 50)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.events = events
 
-	approvals, err := m.ctrl.Store().ListApprovals(ctx, m.missionID)
+	approvals, err := m.ctrl.Store().ListApprovals(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.approvals = approvals
 
-	artifacts, err := m.ctrl.Store().ListArtifacts(ctx, m.missionID)
+	artifacts, err := m.ctrl.Store().ListArtifacts(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.artifacts = artifacts
+
+	m.applySnapshot(dashboardSnapshot{
+		missionID:  nextMissionID,
+		missionObj: ms,
+		summary:    summary,
+		tasks:      tasks,
+		deps:       deps,
+		runs:       runs,
+		events:     events,
+		approvals:  approvals,
+		artifacts:  artifacts,
+	})
 
 	return refreshDoneMsg{}
 }
@@ -303,12 +459,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		m.refreshing = true
 		return m, tea.Batch(
 			func() tea.Msg { return m.doRefresh() },
 			tickCmd(),
 		)
 
 	case refreshDoneMsg:
+		m.refreshing = false
 		m.lastErr = msg.err
 		return m, nil
 
@@ -322,6 +480,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "r":
+			m.refreshing = true
 			return m, func() tea.Msg { return m.doRefresh() }
 		case "tab":
 			m.setFocusPane((m.focusPane + 1) % paneCount)
@@ -367,15 +526,24 @@ func (m *Model) View() tea.View {
 		m.configureView(&v)
 		return v
 	}
-
-	if m.lastErr != nil && m.missionObj == nil && !isNoMissionError(m.lastErr) {
-		v := tea.NewView(fmt.Sprintf("Dashboard error: %v\n\nPress q to quit.", m.lastErr))
-		m.configureView(&v)
-		return v
+	if m.missionObj == nil {
+		if m.lastErr != nil && !isNoMissionError(m.lastErr) {
+			return m.renderErrorView()
+		}
+		if m.refreshing {
+			return m.renderLoadingView()
+		}
+		return m.renderNoMissionView()
 	}
+	if m.useCompactLayout() {
+		return m.renderCompactDashboardView()
+	}
+	return m.renderFullDashboardView()
+}
 
-	var lines []string
-	lines = append(lines, m.renderHeader()...)
+func (m *Model) renderFullDashboardView() tea.View {
+	lines := append([]string{}, m.renderHeader()...)
+	lines = append(lines, m.renderFocusTabs(max(1, m.width)))
 	lines = append(lines, m.renderSeparator())
 
 	eventHeight := 2
@@ -405,7 +573,7 @@ func (m *Model) View() tea.View {
 	rightLines := m.renderWorkerPane(bodyHeight, rightWidth)
 
 	divider := m.sty.Muted.Render("│")
-	for i := range bodyHeight {
+	for i := 0; i < bodyHeight; i++ {
 		left := ""
 		if i < len(leftLines) {
 			left = leftLines[i]
@@ -420,17 +588,224 @@ func (m *Model) View() tea.View {
 	lines = append(lines, m.renderSeparator())
 	lines = append(lines, m.renderEventPane(eventHeight, m.width)...)
 	lines = append(lines, m.renderFooter())
+	return m.finalizeView(lines)
+}
 
+func (m *Model) renderCompactDashboardView() tea.View {
+	lines := append([]string{}, m.renderCompactHeader()...)
+	lines = append(lines, m.renderFocusTabs(max(1, m.width)))
+	lines = append(lines, m.renderSeparator())
+	lines = append(lines, m.renderCompactSupportLine(max(1, m.width)))
+
+	paneHeight := max(1, m.height-len(lines)-1) // footer
+	lines = append(lines, m.renderFocusedPaneLines(paneHeight, max(1, m.width), true)...)
+	lines = append(lines, m.renderFooter())
+	return m.finalizeView(lines)
+}
+
+func (m *Model) renderCompactHeader() []string {
+	if m.missionObj == nil {
+		return []string{m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("idle", "No mission")}
+	}
+
+	ms := m.missionObj
+	counts := m.missionTaskCounts()
+	done := counts.Done + counts.Integrated + counts.Accepted
+	titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip(string(ms.Status), fmt.Sprintf("%s %s", missionStatusIcon(ms.Status), ms.Status))
+	missionTitle := strings.TrimSpace(ms.Title)
+	if missionTitle == "" {
+		missionTitle = ms.ID
+	}
+	summaryLine := strings.Join([]string{
+		fmt.Sprintf("Tasks %d/%d", done, counts.Total),
+		fmt.Sprintf("Workers %d active", m.activeRunsCount()),
+	}, "  •  ")
+	if pending := m.pendingApprovals(); pending > 0 {
+		summaryLine += fmt.Sprintf("  •  Approvals %d pending", pending)
+	}
+
+	if m.isUltraCompactLayout() {
+		lines := []string{
+			titleLine,
+			m.sty.Bold.Render(ansi.Truncate(missionTitle, max(1, m.width), "…")),
+		}
+		if ms.Goal != "" {
+			lines = append(lines, m.sty.HalfMuted.Render(ansi.Truncate(ms.Goal, max(1, m.width), "…")))
+		}
+		lines = append(lines, m.sty.HalfMuted.Render(ansi.Truncate(summaryLine, max(1, m.width), "…")))
+		return lines
+	}
+
+	return []string{
+		titleLine,
+		m.sty.Bold.Render(ansi.Truncate(missionTitle, max(1, m.width), "…")),
+		m.sty.HalfMuted.Render(ansi.Truncate(ms.Goal, max(1, m.width), "…")),
+		m.sty.HalfMuted.Render(ansi.Truncate(summaryLine, max(1, m.width), "…")),
+	}
+}
+
+func (m *Model) renderLoadingView() tea.View {
+	lines := []string{
+		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("loading", "Refreshing"),
+	}
+	lines = append(lines, m.renderStateCard(
+		max(1, m.width),
+		"Loading mission state",
+		"Mission Control is connecting to durable mission state and preparing the latest operator snapshot.",
+		[]string{
+			"Stay here while the dashboard refresh completes.",
+			"Press q to quit if you meant to leave Mission Control.",
+		},
+	)...)
+	lines = append(lines, m.renderDashboardHelpLine(max(1, m.width), "/mission status in shell"))
+	lines = append(lines, m.renderFooter())
+	return m.finalizeView(lines)
+}
+
+func (m *Model) renderNoMissionView() tea.View {
+	lines := []string{
+		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("idle", "No mission"),
+	}
+	lines = append(lines, m.renderStateCard(
+		max(1, m.width),
+		"No active mission",
+		"Create one with /mission new or run golem mission new. The dashboard will attach as soon as durable mission state exists.",
+		[]string{
+			"Open the main shell and create a mission.",
+			"Leave Mission Control open and press r to refresh when work starts.",
+		},
+	)...)
+	lines = append(lines, m.renderHeaderHelpHint(max(1, m.width)))
+	lines = append(lines, m.renderFooter())
+	return m.finalizeView(lines)
+}
+
+func (m *Model) renderErrorView() tea.View {
+	body := "Mission Control could not load durable mission state."
+	actions := []string{
+		"Press r to retry the refresh.",
+		"Press q to quit if the mission store is unavailable.",
+	}
+	if m.lastErr != nil {
+		body = body + " " + m.lastErr.Error()
+		actions = append(actions, "Latest error: "+m.lastErr.Error())
+	}
+	lines := []string{
+		m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip("error", "Dashboard error"),
+	}
+	lines = append(lines, m.renderStateCard(
+		max(1, m.width),
+		"Unable to load dashboard",
+		body,
+		actions,
+	)...)
+	lines = append(lines, m.renderDashboardHelpLine(max(1, m.width), "/mission status in shell"))
+	lines = append(lines, m.renderFooter())
+	return m.finalizeView(lines)
+}
+
+func (m *Model) finalizeView(lines []string) tea.View {
 	for len(lines) < m.height {
 		lines = append(lines, "")
 	}
 	if len(lines) > m.height {
 		lines = lines[:m.height]
 	}
-
 	v := tea.NewView(strings.Join(lines, "\n"))
 	m.configureView(&v)
 	return v
+}
+
+func (m *Model) renderFocusedPaneLines(height, width int, compact bool) []string {
+	switch m.focusPane {
+	case paneWorkers:
+		return m.renderWorkerPane(height, width)
+	case paneEvidence:
+		lines := m.renderEvidencePane(height+1, width)
+		if compact && len(lines) > 0 {
+			lines = lines[1:]
+		}
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	case paneEvents:
+		return m.renderEventPane(height, width)
+	default:
+		return m.renderTaskPane(height, width)
+	}
+}
+
+func (m *Model) applySnapshot(snapshot dashboardSnapshot) {
+	if snapshot.missionID != "" {
+		m.missionID = snapshot.missionID
+	}
+	m.missionObj = snapshot.missionObj
+	m.summary = snapshot.summary
+	m.tasks = snapshot.tasks
+	m.deps = snapshot.deps
+	m.runs = snapshot.runs
+	m.events = snapshot.events
+	m.approvals = snapshot.approvals
+	m.artifacts = snapshot.artifacts
+}
+
+func (m *Model) clearSnapshot() {
+	m.missionObj = nil
+	m.summary = nil
+	m.tasks = nil
+	m.deps = nil
+	m.runs = nil
+	m.events = nil
+	m.approvals = nil
+	m.artifacts = nil
+}
+
+func (m *Model) missionSummary() mission.MissionSummary {
+	if m.summary == nil {
+		return mission.MissionSummary{}
+	}
+	return *m.summary
+}
+
+func (m *Model) missionTaskCounts() mission.TaskCounts {
+	return m.missionSummary().TaskCounts
+}
+
+func (m *Model) pendingApprovals() int {
+	summary := m.missionSummary()
+	if summary.PendingApprovals > 0 {
+		return summary.PendingApprovals
+	}
+	pending := 0
+	for _, approval := range m.approvals {
+		if approval.Status == mission.ApprovalPending {
+			pending++
+		}
+	}
+	return pending
+}
+
+func (m *Model) activeRunsCount() int {
+	summary := m.missionSummary()
+	if summary.ActiveRuns > 0 {
+		return summary.ActiveRuns
+	}
+	activeRuns := 0
+	for _, r := range m.runs {
+		if r.Status == mission.RunRunning || r.Status == mission.RunQueued {
+			activeRuns++
+		}
+	}
+	return activeRuns
+}
+
+func (m *Model) isUltraCompactLayout() bool {
+	return m.width < 56 || m.height < 14
+}
+
+func (m *Model) useCompactLayout() bool {
+	return m.width < compactDashboardWidth || m.height < compactDashboardHeight
 }
 
 func (m *Model) configureView(v *tea.View) {
@@ -462,6 +837,41 @@ func (m *Model) windowTitle() string {
 	return title
 }
 
+func (m *Model) renderCompactSupportLine(width int) string {
+	title := "Compact"
+	segments := []string{
+		"Focus " + m.currentPaneTitle(),
+		"q quit",
+		"j/k scroll",
+	}
+	ultraCompact := width < 54 || (m.height > 0 && m.height < 14)
+	if !ultraCompact {
+		title = "Compact layout"
+		if width >= 64 {
+			segments = append(segments, "Tab panes")
+		}
+		if width >= 104 {
+			segments = append(segments, "resize wider for the full four-pane Mission Control view")
+		}
+	}
+	return renderDashboardHelpSurfaceLine(width, title, segments, func(text string) string {
+		return m.sty.Panel.EmptyBody.Render(text)
+	})
+}
+
+func (m *Model) currentPaneTitle() string {
+	switch m.focusPane {
+	case paneWorkers:
+		return "Workers"
+	case paneEvidence:
+		return "Evidence"
+	case paneEvents:
+		return "Events"
+	default:
+		return "Tasks"
+	}
+}
+
 func (m *Model) renderHeaderHelpHint(width int) string {
 	if m.missionObj == nil {
 		return m.renderDashboardHelpLine(width, "/mission new in shell")
@@ -474,6 +884,52 @@ func (m *Model) renderDashboardHelpLine(width int, shellHint string) string {
 	return renderDashboardHelpSurfaceLine(width, dashboardHelpTitle(), segments, func(text string) string {
 		return m.sty.Panel.EmptyBody.Render(text)
 	})
+}
+
+func (m *Model) renderStateCard(width int, title, body string, actions []string) []string {
+	if width <= 0 {
+		width = 1
+	}
+	badge := m.sty.Panel.StateBadge.Render(" Mission Control ")
+	header := lipgloss.JoinHorizontal(lipgloss.Left,
+		badge,
+		" ",
+		m.sty.Panel.StateTitle.Render(ansi.Truncate(title, max(1, width-lipgloss.Width(badge)-1), "…")),
+	)
+	lines := []string{ansi.Truncate(header, width, "…")}
+	lines = append(lines, m.sty.Panel.StateBorder.Render(strings.Repeat(styles.Separator, max(1, width))))
+	for _, line := range wrapPlainText(body, max(1, width-4)) {
+		lines = append(lines, m.sty.Panel.StateBody.Render("  "+ansi.Truncate(line, max(1, width-2), "…")))
+	}
+	for _, action := range actions {
+		lines = append(lines, m.sty.Panel.StateAction.Render("  → "+ansi.Truncate(action, max(1, width-4), "…")))
+	}
+	return lines
+}
+
+func (m *Model) renderFocusTabs(width int) string {
+	if width <= 0 {
+		width = 1
+	}
+	tabs := []struct {
+		title string
+		pane  pane
+	}{
+		{title: "[1] Tasks", pane: paneTasks},
+		{title: "[2] Workers", pane: paneWorkers},
+		{title: "[3] Evidence", pane: paneEvidence},
+		{title: "[4] Events", pane: paneEvents},
+	}
+	joiner := m.sty.Panel.Separator.Render(" ")
+	var rendered []string
+	for _, tab := range tabs {
+		style := m.sty.Panel.FocusTabInactive
+		if m.focusPane == tab.pane {
+			style = m.sty.Panel.FocusTabActive
+		}
+		rendered = append(rendered, style.Render(tab.title))
+	}
+	return ansi.Truncate(strings.Join(rendered, joiner), width, "…")
 }
 
 func dashboardHelpTitle() string {
@@ -949,6 +1405,10 @@ func (m *Model) renderPaneHeader(title string, focused bool, width int) string {
 	}
 	label := fmt.Sprintf("%s %s %s", indicator, paneShortcut(title), title)
 	line := headStyle.Render(label) + " " + metaStyle.Render(meta)
+	if focused && width >= 24 {
+		accentWidth := min(2, max(1, width/18))
+		line = strings.Repeat(styles.BorderThick, accentWidth) + " " + line
+	}
 	return ansi.Truncate(line, max(1, width), "…")
 }
 
@@ -989,6 +1449,20 @@ func (m *Model) renderEmptyState(width int, title, body string) []string {
 	wrapped := wrapPlainText(body, max(1, width-2))
 	for _, line := range wrapped {
 		lines = append(lines, m.sty.Panel.EmptyBody.Render(" "+line))
+	}
+	var hint string
+	switch title {
+	case "No tasks yet":
+		hint = "→ Use /mission plan in the shell to generate the task DAG."
+	case "No active workers":
+		hint = "→ Use /mission start in the shell when approvals are resolved."
+	case "No evidence yet":
+		hint = "→ Review results and artifacts will appear automatically."
+	case "No events yet":
+		hint = "→ Press r to refresh if another process is writing mission state."
+	}
+	if hint != "" {
+		lines = append(lines, m.sty.Panel.EmptyHint.Render(ansi.Truncate(" "+hint, max(1, width), "…")))
 	}
 	return lines
 }

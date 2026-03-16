@@ -412,6 +412,12 @@ func TestTeatestPanelResizeSmall(t *testing.T) {
 	if !strings.Contains(view, "Mission Control") {
 		t.Error("expected 'Mission Control' in small view")
 	}
+	if !strings.Contains(view, "Compact layout") {
+		t.Error("expected compact layout guidance in small view")
+	}
+	if !strings.Contains(view, "[1] Tasks") {
+		t.Error("expected focus tabs in compact view")
+	}
 
 	// View lines should not exceed terminal height.
 	lines := strings.Split(view, "\n")
@@ -502,6 +508,55 @@ func TestTeatestMinimalSize(t *testing.T) {
 	view := viewString(m)
 	if view == "" {
 		t.Error("expected non-empty view at minimal size")
+	}
+	if !strings.Contains(view, "Mission Control") {
+		t.Error("expected Mission Control identity at minimal size")
+	}
+	if !strings.Contains(view, "Compact") {
+		t.Error("expected compact rescue copy at minimal size")
+	}
+}
+
+func TestTeatestDashboardErrorStateIsReadable(t *testing.T) {
+	m := New("")
+	m.width = 70
+	m.height = 18
+	m.lastErr = fmt.Errorf("store offline")
+
+	view := viewString(m)
+	if !strings.Contains(view, "Mission Control") {
+		t.Fatal("expected Mission Control identity in error state")
+	}
+	for _, want := range []string{"Dashboard error", "Unable to load dashboard", "Press r to retry", "store offline"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in error view, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestTeatestCompactLayoutTracksFocusedPane(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 72, 20)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	refreshModel(t, m)
+
+	view := viewString(m)
+	if !strings.Contains(view, "Tasks") {
+		t.Fatalf("expected tasks pane in compact view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Compact") {
+		t.Fatalf("expected compact support copy in compact view, got:\n%s", view)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '2'})
+	m = updated.(*Model)
+	view = viewString(m)
+	if !strings.Contains(view, "Workers") {
+		t.Fatalf("expected workers pane after focus jump, got:\n%s", view)
+	}
+	if !strings.Contains(view, "[2] Workers") {
+		t.Fatalf("expected workers focus tab in compact view, got:\n%s", view)
 	}
 }
 
@@ -633,6 +688,20 @@ func TestTeatestMouseClickFocusesPaneAndWheelScrolls(t *testing.T) {
 	m = updated.(*Model)
 	if m.scrollPos[paneWorkers] != 0 {
 		t.Fatalf("wheel up should scroll back toward top, got %d", m.scrollPos[paneWorkers])
+	}
+
+	m.width = 72
+	m.height = 20
+	m.focusPane = paneEvidence
+	updated, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 15, Y: len(m.renderCompactHeader()) + 3, Button: tea.MouseLeft}))
+	m = updated.(*Model)
+	if m.focusPane != paneEvidence {
+		t.Fatalf("compact body click should keep focused pane, got %d", m.focusPane)
+	}
+	updated, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: len(m.renderCompactHeader()), Button: tea.MouseLeft}))
+	m = updated.(*Model)
+	if m.focusPane != paneTasks {
+		t.Fatalf("tab row click should focus tasks in compact view, got %d", m.focusPane)
 	}
 }
 
@@ -1014,6 +1083,74 @@ func TestTeatestZeroDimensionView(t *testing.T) {
 	view := viewString(m)
 	if view != "Loading..." {
 		t.Errorf("expected 'Loading...' for zero-dimension view, got: %q", view)
+	}
+}
+
+func TestTeatestLoadingStateIsReadable(t *testing.T) {
+	m := New("")
+	m.width = 72
+	m.height = 18
+	m.refreshing = true
+	view := viewString(m)
+	for _, want := range []string{"Mission Control", "Refreshing", "Loading mission state", "Stay here while the dashboard refresh completes"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in loading view, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestTeatestUltraCompactMissionViewRemainsReadable(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 46, 12)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	refreshModel(t, m)
+
+	view := viewString(m)
+	if !strings.Contains(view, "Mission Control") {
+		t.Fatalf("expected Mission Control identity at ultra-compact size, got:\n%s", view)
+	}
+	for _, want := range []string{"Focus Tasks", "j/k scroll", "q quit"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in ultra-compact support copy, got:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "resize wider for the full four-pane Mission Control view") {
+		t.Fatalf("expected ultra-compact support line to stay concise, got:\n%s", view)
+	}
+}
+
+func TestTeatestRefreshFailurePreservesSelectedMissionID(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 80, 24)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	refreshModel(t, m)
+
+	ctrl.Close()
+	msg := m.doRefresh()
+	rm, ok := msg.(refreshDoneMsg)
+	if !ok {
+		t.Fatalf("expected refreshDoneMsg, got %T", msg)
+	}
+	if rm.err == nil {
+		t.Fatal("expected refresh error after closing controller")
+	}
+	if m.missionID != ms.ID {
+		t.Fatalf("expected missionID %q to be preserved, got %q", ms.ID, m.missionID)
+	}
+	if m.missionObj != nil || m.summary != nil || len(m.tasks) != 0 || len(m.runs) != 0 {
+		t.Fatalf("expected cached mission data cleared after refresh failure")
+	}
+
+	m.Update(msg)
+	if got := m.View().WindowTitle; !strings.Contains(got, ms.ID) {
+		t.Fatalf("expected preserved mission identifier in window title, got %q", got)
+	}
+	view := viewString(m)
+	for _, want := range []string{"Mission Control", "Dashboard error"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in error view after refresh failure, got:\n%s", want, view)
+		}
 	}
 }
 
