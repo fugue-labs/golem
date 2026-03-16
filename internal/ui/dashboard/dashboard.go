@@ -708,7 +708,9 @@ func (m *Model) renderFocusedPaneLines(height, width int, compact bool) []string
 }
 
 func (m *Model) applySnapshot(snapshot dashboardSnapshot) {
-	m.missionID = snapshot.missionID
+	if snapshot.missionID != "" {
+		m.missionID = snapshot.missionID
+	}
 	m.missionObj = snapshot.missionObj
 	m.summary = snapshot.summary
 	m.tasks = snapshot.tasks
@@ -720,7 +722,14 @@ func (m *Model) applySnapshot(snapshot dashboardSnapshot) {
 }
 
 func (m *Model) clearSnapshot() {
-	m.applySnapshot(dashboardSnapshot{})
+	m.missionObj = nil
+	m.summary = nil
+	m.tasks = nil
+	m.deps = nil
+	m.runs = nil
+	m.events = nil
+	m.approvals = nil
+	m.artifacts = nil
 }
 
 func (m *Model) missionSummary() mission.MissionSummary {
@@ -800,10 +809,38 @@ func (m *Model) windowTitle() string {
 }
 
 func (m *Model) renderCompactSupportLine(width int) string {
-	segments := []string{"Compact layout", "resize wider for the full four-pane Mission Control view"}
-	return renderDashboardHelpSurfaceLine(width, "Compact", segments, func(text string) string {
+	title := "Compact"
+	segments := []string{
+		"Focus " + m.currentPaneTitle(),
+		"q quit",
+		"j/k scroll",
+	}
+	ultraCompact := width < 54 || (m.height > 0 && m.height < 14)
+	if !ultraCompact {
+		title = "Compact layout"
+		if width >= 64 {
+			segments = append(segments, "Tab panes")
+		}
+		if width >= 104 {
+			segments = append(segments, "resize wider for the full four-pane Mission Control view")
+		}
+	}
+	return renderDashboardHelpSurfaceLine(width, title, segments, func(text string) string {
 		return m.sty.Panel.EmptyBody.Render(text)
 	})
+}
+
+func (m *Model) currentPaneTitle() string {
+	switch m.focusPane {
+	case paneWorkers:
+		return "Workers"
+	case paneEvidence:
+		return "Evidence"
+	case paneEvents:
+		return "Events"
+	default:
+		return "Tasks"
+	}
 }
 
 func (m *Model) renderHeaderHelpHint(width int) string {

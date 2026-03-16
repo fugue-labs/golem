@@ -1086,6 +1086,61 @@ func TestTeatestZeroDimensionView(t *testing.T) {
 	}
 }
 
+func TestTeatestUltraCompactMissionViewRemainsReadable(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 46, 12)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	refreshModel(t, m)
+
+	view := viewString(m)
+	if !strings.Contains(view, "Mission Control") {
+		t.Fatalf("expected Mission Control identity at ultra-compact size, got:\n%s", view)
+	}
+	for _, want := range []string{"Focus Tasks", "j/k scroll", "q quit"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in ultra-compact support copy, got:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "resize wider for the full four-pane Mission Control view") {
+		t.Fatalf("expected ultra-compact support line to stay concise, got:\n%s", view)
+	}
+}
+
+func TestTeatestRefreshFailurePreservesSelectedMissionID(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 80, 24)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	refreshModel(t, m)
+
+	ctrl.Close()
+	msg := m.doRefresh()
+	rm, ok := msg.(refreshDoneMsg)
+	if !ok {
+		t.Fatalf("expected refreshDoneMsg, got %T", msg)
+	}
+	if rm.err == nil {
+		t.Fatal("expected refresh error after closing controller")
+	}
+	if m.missionID != ms.ID {
+		t.Fatalf("expected missionID %q to be preserved, got %q", ms.ID, m.missionID)
+	}
+	if m.missionObj != nil || m.summary != nil || len(m.tasks) != 0 || len(m.runs) != 0 {
+		t.Fatalf("expected cached mission data cleared after refresh failure")
+	}
+
+	m.Update(msg)
+	if got := m.View().WindowTitle; !strings.Contains(got, ms.ID) {
+		t.Fatalf("expected preserved mission identifier in window title, got %q", got)
+	}
+	view := viewString(m)
+	for _, want := range []string{"Mission Control", "Dashboard error"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q in error view after refresh failure, got:\n%s", want, view)
+		}
+	}
+}
+
 func TestTeatestQuitRendersEmpty(t *testing.T) {
 	m, ctrl := setupTeatestModel(t, 120, 40)
 	ms := createTestMission(t, ctrl)

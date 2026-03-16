@@ -432,6 +432,49 @@ func TestRenderFocusTabsShowsActivePane(t *testing.T) {
 	}
 }
 
+func TestRenderCompactSupportLineReflectsFocusedPane(t *testing.T) {
+	m := New("")
+	m.focusPane = paneEvidence
+	plain := stripANSITest(m.renderCompactSupportLine(72))
+	for _, want := range []string{"Compact layout", "Focus Evidence", "j/k scroll", "q quit"} {
+		if !containsAny(plain, want) {
+			t.Fatalf("expected %q in compact support line, got %q", want, plain)
+		}
+	}
+}
+
+func TestRefreshFailureKeepsSelectedMissionID(t *testing.T) {
+	m := New("mission-123")
+	m.width = 72
+	m.height = 20
+	m.missionObj = &mission.Mission{ID: "mission-123", Title: "Mission", Goal: "Goal", Status: mission.MissionRunning}
+	m.summary = &mission.MissionSummary{}
+	m.tasks = []*mission.Task{{ID: "t1", Title: "task"}}
+
+	msg := m.doRefresh()
+	rm, ok := msg.(refreshDoneMsg)
+	if !ok {
+		t.Fatalf("expected refreshDoneMsg, got %T", msg)
+	}
+	if rm.err == nil {
+		t.Fatal("expected refresh error without controller")
+	}
+	if m.missionID != "mission-123" {
+		t.Fatalf("expected missionID to be preserved, got %q", m.missionID)
+	}
+	if m.missionObj != nil || m.summary != nil || len(m.tasks) != 0 {
+		t.Fatalf("expected cached mission snapshot cleared on refresh failure")
+	}
+
+	m.Update(msg)
+	plain := stripANSITest(viewString(m))
+	for _, want := range []string{"Mission Control", "Dashboard error", "store not", "initialized"} {
+		if !containsAny(plain, want) {
+			t.Fatalf("expected %q in readable error state, got %q", want, plain)
+		}
+	}
+}
+
 func TestPaneAtUsesRenderedLayouts(t *testing.T) {
 	m := New("")
 	m.width = 120

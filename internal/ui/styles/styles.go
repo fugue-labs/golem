@@ -334,25 +334,26 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Panel.Base = lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(palette.border).
+		Background(palette.bgSubtle).
 		PaddingLeft(1)
 	s.Panel.Title = lipgloss.NewStyle().Foreground(palette.primary).Bold(true)
-	s.Panel.Separator = subtle
-	s.Panel.Progress = halfMuted
-	s.Panel.TaskText = base
-	s.Panel.TaskDone = meta.Strikethrough(true)
+	s.Panel.Separator = lipgloss.NewStyle().Foreground(palette.border)
+	s.Panel.Progress = lipgloss.NewStyle().Foreground(palette.secondary).Bold(true)
+	s.Panel.TaskText = lipgloss.NewStyle().Foreground(palette.fgStrong)
+	s.Panel.TaskDone = lipgloss.NewStyle().Foreground(palette.fgMuted).Strikethrough(true)
 	s.Panel.IconPending = meta
 	s.Panel.IconInProgress = lipgloss.NewStyle().Foreground(palette.yellow).Bold(true)
 	s.Panel.IconCompleted = lipgloss.NewStyle().Foreground(palette.green).Bold(true)
 	s.Panel.IconBlocked = lipgloss.NewStyle().Foreground(palette.red).Bold(true)
 	s.Panel.HeaderActive = lipgloss.NewStyle().Foreground(palette.accentText).Background(palette.primary).Padding(0, 1).Bold(true)
-	s.Panel.HeaderInactive = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.surface).Padding(0, 1)
-	s.Panel.HeaderMeta = lipgloss.NewStyle().Foreground(palette.fgMuted)
+	s.Panel.HeaderInactive = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.bgSubtle).Padding(0, 1).Bold(true)
+	s.Panel.HeaderMeta = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Panel.HeaderKey = lipgloss.NewStyle().Foreground(palette.blue).Bold(true)
-	s.Panel.EmptyTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.surface).Padding(0, 1).Bold(true)
-	s.Panel.EmptyBody = lipgloss.NewStyle().Foreground(palette.fgHalf).Background(palette.surface).Padding(0, 1)
+	s.Panel.EmptyTitle = lipgloss.NewStyle().Foreground(palette.fgStrong).Background(palette.bgSubtle).Padding(0, 1).Bold(true)
+	s.Panel.EmptyBody = lipgloss.NewStyle().Foreground(palette.fgMuted).Background(palette.surface).Padding(0, 1)
 	s.Panel.EmptyHint = lipgloss.NewStyle().Foreground(palette.info).Background(palette.surface).Padding(0, 1).Bold(true)
 	s.Panel.FocusTabActive = lipgloss.NewStyle().Foreground(palette.accentText).Background(palette.primary).Padding(0, 1).Bold(true)
-	s.Panel.FocusTabInactive = lipgloss.NewStyle().Foreground(palette.fgHalf).Background(palette.bgSubtle).Padding(0, 1)
+	s.Panel.FocusTabInactive = lipgloss.NewStyle().Foreground(palette.fgMuted).Background(palette.surface).Padding(0, 1)
 	s.Panel.MetricKey = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Panel.MetricValue = lipgloss.NewStyle().Foreground(palette.fgStrong).Bold(true)
 
