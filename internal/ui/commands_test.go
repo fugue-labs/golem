@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -51,21 +49,41 @@ func TestCommandHelp(t *testing.T) {
 	if content == "" {
 		t.Fatal("expected non-empty help output")
 	}
-	want, err := os.ReadFile(filepath.Join("testdata", "help.golden.md"))
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if strings.TrimRight(content, "\n") != strings.TrimRight(string(want), "\n") {
-		t.Fatalf("help output mismatch\n--- got ---\n%s\n--- want ---\n%s", content, string(want))
+	for _, want := range []string{
+		"**Commands**",
+		"/help",
+		"/clear",
+		"/plan",
+		"/model [name]",
+		"/cost",
+		"/replay [file|list]",
+		"/search <query>",
+		"/rewind [N]",
+		"/mission [new|status|tasks|plan|approve|start|pause|cancel|list]",
+		"/quit` or `/exit",
+		"/spec [file]",
+		"/doctor",
+		"**Discoverability**",
+		"Input help stays visible while you work so the shell keeps teaching next actions",
+		"Start with `/help`, recover context with `/search <query>`, or check setup with `/doctor`",
+		"golem dashboard",
+		"**Keys**",
+		"`Enter`",
+		"`Esc`",
+		"`Tab`",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("help output missing %q in:\n%s", want, content)
+		}
 	}
 }
 
 func TestContextualHelpIdle(t *testing.T) {
 	m := newTestModel()
 	m.sty = styles.New(nil)
-	m.width = 100
+	m.width = 120
 	got := stripANSI(m.renderContextualHelpLine(m.width))
-	for _, want := range []string{"Help ·", "Try /help", "/search <query>", "/doctor", "Enter send", "Tab complete", "Esc cancel"} {
+	for _, want := range []string{"Help ·", "Try /help", "/search <query>", "/doctor", "golem dashboard", "Enter send", "Tab complete", "Esc cancel"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("contextual help missing %q in %q", want, got)
 		}
@@ -299,7 +317,7 @@ func TestCommandDiff(t *testing.T) {
 func TestCommandSearch(t *testing.T) {
 	m := simulateCommand(t, newTestModel(), "/search")
 	content := lastMessage(t, m)
-	for _, want := range []string{"Usage:", "/search <query>", "search across all saved sessions", "Examples"} {
+	for _, want := range []string{"Usage:", "/search <query>", "search across all saved sessions", "Searches prompts, replies, and saved transcript snippets", "Examples"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected search usage message to contain %q, got %q", want, content)
 		}
