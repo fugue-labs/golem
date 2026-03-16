@@ -1,20 +1,41 @@
 # Implementation Spec Acceptance Checklist
 
-This checklist audits the current implementation against `docs/implementation-spec.md` §20.
+This checklist audits the current implementation against `docs/implementation-spec.md` §20 and adds the execution-ready non-regression baseline for shell-facing work.
 
-## TUI rubric and preserved-UX acceptance addendum
+## TUI baseline, rubric, and preserved-UX acceptance addendum
 
-Use this addendum when evaluating shell-facing work so reviewers can verify both UX ambition and regression safety from one place.
+Use this addendum when evaluating TUI changes so reviewers can verify three things from one place:
 
-### Required rubric coverage
+1. the target shipped surface,
+2. the preserved e2e contract that must not regress, and
+3. the implementation order that matches the current code layout.
 
-Documentation and implementation tasks should explicitly score or discuss these five surfaces:
+### Required shipped-surface coverage
 
-1. **Launch frame** — first-frame clarity, visible identity, and immediate input orientation.
-2. **Transcript readability** — separation between user, assistant, tool, system, and error states.
-3. **Workflow visibility** — ability to identify active work, blockers, next action, and proof state quickly.
-4. **Dashboard readability** — Mission Control scanability before interaction and during pane navigation.
-5. **Discoverability** — persistence of help, slash-command cues, usage text, and key hints.
+Documentation and implementation tasks should explicitly score or discuss these five shipped surfaces:
+
+1. **Shell**
+   - Entry point: `main.go`
+   - Primary implementation: `internal/ui/app.go`, `internal/ui/styles/styles.go`
+   - Review focus: launch frame, `GOLEM` identity, input visibility, status bar, minimum-size behavior, shell responsiveness
+
+2. **Transcript**
+   - Primary implementation: `internal/ui/app.go`, `internal/ui/chat/messages.go`
+   - Review focus: user/assistant/tool/system/error rendering, scrolling, slash-command output, busy-state readability
+
+3. **Workflow rail**
+   - Primary implementation: `internal/ui/workflow_panel.go`
+   - Supporting state: `internal/ui/app.go`
+   - Review focus: active work, blockers, approvals, verification, invariants, and next-action visibility
+
+4. **Dashboard**
+   - Entry point: `main.go` `dashboard` subcommand
+   - Primary implementation: `internal/ui/dashboard/dashboard.go`, `internal/ui/styles/styles.go`
+   - Review focus: Mission Control identity, pane scanability, empty/error state quality, pane navigation
+
+5. **Discoverability**
+   - Primary implementation: `internal/ui/app.go`, `internal/ui/commands.go`, `internal/ui/dashboard/dashboard.go`
+   - Review focus: `/help`, `/search <query>` usage, tab completion, launch guidance, placeholder copy, key hints
 
 ### Preserved e2e UX contracts
 
@@ -23,9 +44,43 @@ Shell-facing changes should be rejected unless they preserve these verified beha
 - visible `GOLEM` at launch plus a visible prompt or `Ask anything… /help for commands`,
 - `/help` discoverability for key commands and key hints,
 - `/search <query>` usage text including `search across all saved sessions` and `Examples`,
-- `golem dashboard` launch stability into Mission Control or a valid empty/error state,
-- stable cancellation, scroll, and input-history behavior (`Esc`, `PgUp/PgDn`, `↑/↓`), and
-- stable `/clear`, `/model`, `/doctor`, unknown-command, and tab-completion behavior.
+- `golem dashboard` launch stability into `Mission Control` or a valid empty/error state,
+- dashboard pane navigation with `Tab`, `Shift+Tab`, `1-4`, and `j/k`,
+- stable cancellation behavior via `Esc`,
+- stable transcript paging via `PgUp/PgDn`,
+- stable input-history behavior via `↑/↓`, and
+- stable `/clear`, `/model`, `/doctor`, `/cost`, replay/rewind, unknown-command, tab-completion, and slash-command sequencing behavior.
+
+### Required implementation order alignment
+
+Reviewers should expect TUI work to follow the current architecture instead of an abstract product order.
+
+1. **Shell entry and framing first**
+   - `main.go`
+   - `internal/ui/app.go`
+   - `internal/ui/styles/styles.go`
+2. **Discoverability and command contract second**
+   - `internal/ui/commands.go`
+   - slash-command dispatch in `internal/ui/app.go`
+3. **Transcript readability third**
+   - `internal/ui/chat/messages.go`
+   - transcript composition and scroll behavior in `internal/ui/app.go`
+4. **Workflow rail fourth**
+   - `internal/ui/workflow_panel.go`
+   - width-gating and integration in `internal/ui/app.go`
+5. **Dashboard fifth**
+   - `main.go` dashboard routing
+   - `internal/ui/dashboard/dashboard.go`
+   - cross-surface style alignment in `internal/ui/styles/styles.go`
+
+### Review checklist for any TUI task
+
+A TUI change should name:
+
+1. the target surface: shell, transcript, workflow rail, dashboard, or discoverability,
+2. the exact preserved e2e contract items it cannot regress,
+3. the primary implementation files touched in `main.go` or `internal/ui`, and
+4. the execution phase above that justifies the order of work.
 
 ## Mission orchestration acceptance addendum
 
