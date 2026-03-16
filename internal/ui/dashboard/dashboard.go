@@ -94,6 +94,18 @@ type Model struct {
 	quitting        bool
 }
 
+type dashboardSnapshot struct {
+	missionID  string
+	missionObj *mission.Mission
+	summary    *mission.MissionSummary
+	tasks      []*mission.Task
+	deps       []mission.TaskDependency
+	runs       []*mission.Run
+	events     []*mission.Event
+	approvals  []*mission.Approval
+	artifacts  []*mission.Artifact
+}
+
 // New creates a dashboard model for the given mission ID.
 // If missionID is empty, displays the most recent active mission.
 func New(missionID string) *Model {
@@ -320,15 +332,18 @@ func (m *Model) initStore() tea.Cmd {
 
 func (m *Model) doRefresh() tea.Msg {
 	if m.ctrl == nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: fmt.Errorf("store not initialized")}
 	}
 
 	ctx := m.ctx
+	nextMissionID := m.missionID
 
 	// If no specific mission, find the most recent active one.
-	if m.missionID == "" {
+	if nextMissionID == "" {
 		missions, err := m.ctrl.Store().ListMissions(ctx)
 		if err != nil {
+			m.clearSnapshot()
 			return refreshDoneMsg{err: err}
 		}
 		// Prefer running > blocked > paused > awaiting_approval > planning > draft.
@@ -345,69 +360,74 @@ func (m *Model) doRefresh() tea.Msg {
 			best = missions[0] // Fallback to most recent.
 		}
 		if best != nil {
-			m.missionID = best.ID
+			nextMissionID = best.ID
 		}
 	}
 
-	if m.missionID == "" {
-		m.missionObj = nil
-		m.summary = nil
-		m.tasks = nil
-		m.deps = nil
-		m.runs = nil
-		m.events = nil
-		m.approvals = nil
-		m.artifacts = nil
+	if nextMissionID == "" {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: fmt.Errorf("no missions found")}
 	}
 
-	ms, err := m.ctrl.GetMission(ctx, m.missionID)
+	ms, err := m.ctrl.GetMission(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.missionObj = ms
 
-	summary, err := m.ctrl.GetMissionSummary(ctx, m.missionID)
+	summary, err := m.ctrl.GetMissionSummary(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.summary = summary
 
-	tasks, err := m.ctrl.Store().ListTasks(ctx, m.missionID)
+	tasks, err := m.ctrl.Store().ListTasks(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.tasks = tasks
 
-	deps, err := m.ctrl.Store().ListDependencies(ctx, m.missionID)
+	deps, err := m.ctrl.Store().ListDependencies(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.deps = deps
 
-	runs, err := m.ctrl.Store().ListRuns(ctx, m.missionID)
+	runs, err := m.ctrl.Store().ListRuns(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.runs = runs
 
-	events, err := m.ctrl.Store().ListEvents(ctx, m.missionID, 50)
+	events, err := m.ctrl.Store().ListEvents(ctx, nextMissionID, 50)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.events = events
 
-	approvals, err := m.ctrl.Store().ListApprovals(ctx, m.missionID)
+	approvals, err := m.ctrl.Store().ListApprovals(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.approvals = approvals
 
-	artifacts, err := m.ctrl.Store().ListArtifacts(ctx, m.missionID)
+	artifacts, err := m.ctrl.Store().ListArtifacts(ctx, nextMissionID)
 	if err != nil {
+		m.clearSnapshot()
 		return refreshDoneMsg{err: err}
 	}
-	m.artifacts = artifacts
+
+	m.applySnapshot(dashboardSnapshot{
+		missionID:  nextMissionID,
+		missionObj: ms,
+		summary:    summary,
+		tasks:      tasks,
+		deps:       deps,
+		runs:       runs,
+		events:     events,
+		approvals:  approvals,
+		artifacts:  artifacts,
+	})
 
 	return refreshDoneMsg{}
 }
@@ -566,10 +586,10 @@ func (m *Model) renderCompactDashboardView() tea.View {
 	lines := append([]string{}, m.renderCompactHeader()...)
 	lines = append(lines, m.renderFocusTabs(max(1, m.width)))
 	lines = append(lines, m.renderSeparator())
-
-	paneHeight := max(1, m.height-len(lines)-2) // compact hint + footer
-	lines = append(lines, m.renderFocusedPaneLines(paneHeight, m.width, true)...)
 	lines = append(lines, m.renderCompactSupportLine(max(1, m.width)))
+
+	paneHeight := max(1, m.height-len(lines)-1) // footer
+	lines = append(lines, m.renderFocusedPaneLines(paneHeight, max(1, m.width), true)...)
 	lines = append(lines, m.renderFooter())
 	return m.finalizeView(lines)
 }
@@ -580,17 +600,8 @@ func (m *Model) renderCompactHeader() []string {
 	}
 
 	ms := m.missionObj
-	counts := m.summary.TaskCounts
+	counts := m.missionTaskCounts()
 	done := counts.Done + counts.Integrated + counts.Accepted
-	activeRuns := m.summary.ActiveRuns
-	if activeRuns == 0 {
-		for _, r := range m.runs {
-			if r.Status == mission.RunRunning || r.Status == mission.RunQueued {
-				activeRuns++
-			}
-		}
-	}
-
 	titleLine := m.sty.Panel.Title.Render("Mission Control") + "  " + m.renderStatusChip(string(ms.Status), fmt.Sprintf("%s %s", missionStatusIcon(ms.Status), ms.Status))
 	missionTitle := strings.TrimSpace(ms.Title)
 	if missionTitle == "" {
@@ -598,8 +609,23 @@ func (m *Model) renderCompactHeader() []string {
 	}
 	summaryLine := strings.Join([]string{
 		fmt.Sprintf("Tasks %d/%d", done, counts.Total),
-		fmt.Sprintf("Workers %d active", activeRuns),
+		fmt.Sprintf("Workers %d active", m.activeRunsCount()),
 	}, "  •  ")
+	if pending := m.pendingApprovals(); pending > 0 {
+		summaryLine += fmt.Sprintf("  •  Approvals %d pending", pending)
+	}
+
+	if m.isUltraCompactLayout() {
+		lines := []string{
+			titleLine,
+			m.sty.Bold.Render(ansi.Truncate(missionTitle, max(1, m.width), "…")),
+		}
+		if ms.Goal != "" {
+			lines = append(lines, m.sty.HalfMuted.Render(ansi.Truncate(ms.Goal, max(1, m.width), "…")))
+		}
+		lines = append(lines, m.sty.HalfMuted.Render(ansi.Truncate(summaryLine, max(1, m.width), "…")))
+		return lines
+	}
 
 	return []string{
 		titleLine,
@@ -679,6 +705,65 @@ func (m *Model) renderFocusedPaneLines(height, width int, compact bool) []string
 	default:
 		return m.renderTaskPane(height, width)
 	}
+}
+
+func (m *Model) applySnapshot(snapshot dashboardSnapshot) {
+	m.missionID = snapshot.missionID
+	m.missionObj = snapshot.missionObj
+	m.summary = snapshot.summary
+	m.tasks = snapshot.tasks
+	m.deps = snapshot.deps
+	m.runs = snapshot.runs
+	m.events = snapshot.events
+	m.approvals = snapshot.approvals
+	m.artifacts = snapshot.artifacts
+}
+
+func (m *Model) clearSnapshot() {
+	m.applySnapshot(dashboardSnapshot{})
+}
+
+func (m *Model) missionSummary() mission.MissionSummary {
+	if m.summary == nil {
+		return mission.MissionSummary{}
+	}
+	return *m.summary
+}
+
+func (m *Model) missionTaskCounts() mission.TaskCounts {
+	return m.missionSummary().TaskCounts
+}
+
+func (m *Model) pendingApprovals() int {
+	summary := m.missionSummary()
+	if summary.PendingApprovals > 0 {
+		return summary.PendingApprovals
+	}
+	pending := 0
+	for _, approval := range m.approvals {
+		if approval.Status == mission.ApprovalPending {
+			pending++
+		}
+	}
+	return pending
+}
+
+func (m *Model) activeRunsCount() int {
+	summary := m.missionSummary()
+	if summary.ActiveRuns > 0 {
+		return summary.ActiveRuns
+	}
+	activeRuns := 0
+	for _, r := range m.runs {
+		if r.Status == mission.RunRunning || r.Status == mission.RunQueued {
+			activeRuns++
+		}
+	}
+	return activeRuns
+}
+
+func (m *Model) isUltraCompactLayout() bool {
+	return m.width < 56 || m.height < 14
 }
 
 func (m *Model) useCompactLayout() bool {
