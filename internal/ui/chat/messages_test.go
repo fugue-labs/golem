@@ -93,13 +93,13 @@ func TestRenderMessageRoles(t *testing.T) {
 		msg  *Message
 		want []string
 	}{
-		{"user", messages[0], []string{"USER", "ship it"}},
-		{"assistant", messages[1], []string{"ASSISTANT", "Heading", "bullet", "markdown response"}},
-		{"assistant_live", messages[2], []string{"ASSISTANT", "Still working", "LIVE"}},
-		{"thinking", messages[3], []string{"THINKING", "considering options", "thinking"}},
+		{"user", messages[0], []string{"USER", "ship it", styles.BorderThin}},
+		{"assistant", messages[1], []string{"ASSISTANT", "Heading", "bullet", "markdown response", styles.BorderThin}},
+		{"assistant_live", messages[2], []string{"ASSISTANT", "Still working", "LIVE", styles.BorderThin}},
+		{"thinking", messages[3], []string{"THINKING", "considering options", "thinking", styles.BorderThin}},
 		{"tool", messages[4], []string{"TOOL", "running", "go test ./...", "Working", "elapsed"}},
-		{"system", messages[5], []string{"SUMMARY", "usage", "1200"}},
-		{"error", messages[6], []string{"ERROR", "boom"}},
+		{"system", messages[5], []string{"SUMMARY", "usage", "1200", styles.BorderThin}},
+		{"error", messages[6], []string{"ERROR", "boom", styles.BorderThin}},
 	}
 
 	for _, tc := range checks {
@@ -111,6 +111,27 @@ func TestRenderMessageRoles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRenderToolCallFramesOutput(t *testing.T) {
+	sty := styles.New(nil)
+	msg := &Message{
+		Kind:     KindToolCall,
+		ToolName: "bash",
+		ToolArgs: "go test ./...",
+		Status:   ToolSuccess,
+		Duration: 1500 * time.Millisecond,
+		Content:  strings.Join([]string{"line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8", "line 9"}, "\n"),
+	}
+	got := stripANSI(msg.Render(sty, 80, []*Message{msg}))
+	for _, want := range []string{"TOOL", "output", "line 9", "... (1 lines hidden)", styles.BorderThin} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("render missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "line 1") {
+		t.Fatalf("expected oldest bash output lines to be bounded away, got %q", got)
 	}
 }
 

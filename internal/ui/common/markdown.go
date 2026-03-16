@@ -10,6 +10,7 @@ import (
 // RenderMarkdown renders markdown text using glamour with the app's theme.
 func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.Trim(content, "\n")
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}
@@ -30,5 +31,5 @@ func RenderMarkdown(sty *styles.Styles, content string, width int) string {
 	if err != nil {
 		return content
 	}
-	return strings.TrimRight(result, "\n")
+	return strings.Trim(result, "\n")
 }
