@@ -1464,7 +1464,9 @@ func (m *Model) renderStatusChip(kind, text string) string {
 func dashboardStatusStyle(sty *styles.Styles, kind string) lipgloss.Style {
 	lower := strings.ToLower(strings.TrimSpace(kind))
 	switch {
-	case strings.Contains(lower, "run"), strings.Contains(lower, "refresh"), strings.Contains(lower, "active"):
+	case strings.Contains(lower, "loading"), strings.Contains(lower, "refresh"):
+		return sty.Panel.StatusRunning
+	case strings.Contains(lower, "run"), strings.Contains(lower, "active"):
 		return sty.Panel.StatusRunning
 	case strings.Contains(lower, "await"), strings.Contains(lower, "review"), strings.Contains(lower, "queue"), strings.Contains(lower, "plan"):
 		return sty.Panel.StatusWaiting

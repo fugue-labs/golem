@@ -33,6 +33,10 @@ const (
 	ShellMinimumWidth                = 56
 	ShellMinimumHeight               = 6
 	ShellHeaderLines                 = 3
+	ShellCompactHeaderLines          = 3
+	ShellCompactInputOnlyLines       = 1
+	ShellCompactInputStatusLines     = 2
+	ShellRegionChromeLines           = 2
 	ShellChatChromeMinHeight         = 4
 	ShellContextualHelpHeight        = 10
 	ShellCompactLocationMinWidth     = 12
@@ -41,8 +45,11 @@ const (
 	ShellHeaderSummaryMinWidth       = 28
 	ShellWelcomeBodyMinWidth         = 20
 	ShellWelcomeHorizontalPadding    = 4
+	ShellWelcomeBottomPadding        = 1
 	ShellCompactStatusReservedWidth  = 9
+	ShellCompactSummaryGapWidth      = 3
 	ShellActiveToolArgsMinWidth      = 8
+	ShellActiveToolArgsMaxWidth      = 24
 	ShellActiveToolArgsReservedWidth = 22
 
 	WorkflowRailWidth                  = 38
@@ -339,19 +346,19 @@ func NewMode(bg color.Color, mode *bool) *Styles {
 	s.Header.Keystroke = meta.Italic(true)
 
 	// Shell framing.
-	shellHeroBadge := filledBadgeStyle(palette.primary, palette.accentText, noColor)
+	shellChromeBadge := filledBadgeStyle(palette.primary, palette.accentText, noColor)
 	s.Shell.SectionLabel = filledBadgeStyle(palette.surface, palette.fgStrong, noColor)
 	s.Shell.SectionMeta = lipgloss.NewStyle().Foreground(palette.fgHalf)
 	s.Shell.Rule = lipgloss.NewStyle().Foreground(palette.border)
-	s.Shell.Anchor = shellHeroBadge
+	s.Shell.Anchor = shellChromeBadge
 	s.Shell.LayoutBadge = filledBadgeStyle(palette.surface, palette.secondary, noColor)
-	s.Shell.HeroBadge = shellHeroBadge
+	s.Shell.HeroBadge = shellChromeBadge
 
 	// Status bar.
 	s.StatusBar.Base = lipgloss.NewStyle().Background(palette.bgSubtle).Foreground(palette.fgBase)
 	s.StatusBar.Key = halfMuted
 	s.StatusBar.Value = lipgloss.NewStyle().Foreground(palette.fgStrong)
-	s.StatusBar.Accent = shellHeroBadge
+	s.StatusBar.Accent = shellChromeBadge
 	s.StatusBar.Divider = subtle
 	s.StatusBar.Provider = lipgloss.NewStyle().Foreground(palette.secondary).Bold(true)
 

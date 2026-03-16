@@ -1325,16 +1325,16 @@ func (m *Model) renderCompactView() tea.View {
 		v := tea.NewView("")
 		m.configureView(&v)
 		return v
-	case m.height == 1:
+	case m.height == styles.ShellCompactInputOnlyLines:
 		sections = append(sections, m.renderCompactInput())
-	case m.height == 2:
+	case m.height == styles.ShellCompactInputStatusLines:
 		sections = append(sections, m.renderCompactInput(), m.renderCompactStatusBar())
 	default:
 		header := m.renderCompactHeader()
 		input := m.renderCompactInput()
 		status := m.renderCompactStatusBar()
 		sections = append(sections, header)
-		if chatHeight := m.height - 3; chatHeight > 0 {
+		if chatHeight := m.height - styles.ShellCompactHeaderLines; chatHeight > 0 {
 			sections = append(sections, m.renderChatRegion(chatHeight))
 		}
 		sections = append(sections, input, status)
@@ -1404,7 +1404,7 @@ func (m *Model) renderCompactInput() string {
 func (m *Model) renderCompactStatusBar() string {
 	shellWidth := m.shellWidth()
 	meta := m.compactStatusMeta(shellWidth)
-	content := m.sty.Shell.HeroBadge.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-shellCompactStatusReservedWidth)))
+	content := m.sty.StatusBar.Accent.Render(" GOLEM ") + " " + m.sty.StatusBar.Value.Render(truncateText(meta, max(1, shellWidth-shellCompactStatusReservedWidth)))
 	return m.sty.StatusBar.Base.Width(shellWidth).MaxWidth(shellWidth).Render(content)
 }
 
@@ -1425,8 +1425,12 @@ const (
 	shellHeaderSummaryMinWidth      = styles.ShellHeaderSummaryMinWidth
 	shellWelcomeBodyMinWidth        = styles.ShellWelcomeBodyMinWidth
 	shellWelcomeHorizontalPadding   = styles.ShellWelcomeHorizontalPadding
+	shellWelcomeBottomPadding       = styles.ShellWelcomeBottomPadding
 	shellCompactStatusReservedWidth = styles.ShellCompactStatusReservedWidth
+	shellCompactSummaryGapWidth     = styles.ShellCompactSummaryGapWidth
+	shellRegionChromeLines          = styles.ShellRegionChromeLines
 	shellActiveToolArgsMinWidth     = styles.ShellActiveToolArgsMinWidth
+	shellActiveToolArgsMaxWidth     = styles.ShellActiveToolArgsMaxWidth
 	shellActiveToolArgsReserved     = styles.ShellActiveToolArgsReservedWidth
 )
 
@@ -1753,7 +1757,7 @@ func (m *Model) currentActivitySummary() string {
 		if m.activeToolName != "" {
 			toolLabel := m.activeToolName
 			if m.activeToolArgs != "" {
-				toolLabel += " " + truncateText(m.activeToolArgs, 24)
+				toolLabel += " " + truncateText(m.activeToolArgs, shellActiveToolArgsMaxWidth)
 			}
 			parts = append(parts, toolLabel)
 		}
@@ -1780,7 +1784,7 @@ func (m *Model) compactStatusMeta(width int) string {
 	case m.busy:
 		return "Working · Esc cancels"
 	}
-	if summary := m.workflowCompactSummary(max(1, width-len(statusText)-3)); summary != "" {
+	if summary := m.workflowCompactSummary(max(1, width-len(statusText)-shellCompactSummaryGapWidth)); summary != "" {
 		return statusText + " · " + summary
 	}
 	return statusText + " · " + m.cfg.Model
@@ -1801,7 +1805,7 @@ func (m *Model) renderChat(height, width int) string {
 	showChrome := height >= styles.ShellChatChromeMinHeight
 	bodyHeight := height
 	if showChrome {
-		bodyHeight = height - 2
+		bodyHeight = height - shellRegionChromeLines
 	}
 	bodyHeight = max(1, bodyHeight)
 
@@ -1901,7 +1905,7 @@ func splitRenderedMessageLines(rendered string) []string {
 }
 
 func (m *Model) renderWelcome(height, width int) string {
-	bodyWidth := max(20, width-4)
+	bodyWidth := max(shellWelcomeBodyMinWidth, width-shellWelcomeHorizontalPadding)
 	lines := []string{
 		"",
 		m.sty.Shell.HeroBadge.Render(" GOLEM ") + " " + m.sty.Bold.Render("Purpose-built for steady repo work"),
@@ -1927,7 +1931,7 @@ func (m *Model) renderWelcome(height, width int) string {
 	}
 
 	contentHeight := len(lines)
-	topPad := max(0, height-contentHeight-1)
+	topPad := max(0, height-contentHeight-shellWelcomeBottomPadding)
 	return fitShellLines(lines, height, topPad)
 }
 
@@ -2030,7 +2034,7 @@ func (m *Model) renderInputBusyOrIdle() string {
 	if m.activeToolName != "" {
 		activity = "Running " + m.activeToolName
 		if m.activeToolArgs != "" {
-			activity += " " + truncateText(m.activeToolArgs, max(8, innerWidth-22))
+			activity += " " + truncateText(m.activeToolArgs, max(shellActiveToolArgsMinWidth, innerWidth-shellActiveToolArgsReserved))
 		}
 	}
 	meta := []string{activity, elapsed.String()}
@@ -2249,7 +2253,7 @@ func compactMessages(ctx context.Context, messages []core.ModelMessage, model co
 
 func (m *Model) renderStatusBar() string {
 	shellWidth := m.shellWidth()
-	accent := m.sty.Shell.HeroBadge.Render(" GOLEM ")
+	accent := m.sty.StatusBar.Accent.Render(" GOLEM ")
 	divider := m.sty.StatusBar.Divider.Render(" │ ")
 
 	var leftParts []string
