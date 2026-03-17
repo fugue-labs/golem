@@ -748,11 +748,42 @@ func TestTeatestRefreshPreservesPausedMissionAfterReopen(t *testing.T) {
 		t.Fatalf("pause mission: %v", err)
 	}
 
-	refreshModel(t, m)
-	view := stripANSI(viewString(m))
+	reopened := New(ms.ID)
+	reopened.ctrl = mission.NewController(ctrl.Store())
+	reopened.width = 80
+	reopened.height = 24
+	refreshModel(t, reopened)
+	view := stripANSI(viewString(reopened))
 	for _, want := range []string{"paused", "Workers 0 active", "Ready (1)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected %q after paused refresh, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestTeatestRefreshRestoresRunningMissionAfterReopen(t *testing.T) {
+	m, ctrl := setupTeatestModel(t, 80, 24)
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+
+	ctx := context.Background()
+	if err := ctrl.ApproveMission(ctx, ms.ID); err != nil {
+		t.Fatalf("approve mission: %v", err)
+	}
+	if err := ctrl.StartMission(ctx, ms.ID); err != nil {
+		t.Fatalf("start mission: %v", err)
+	}
+
+	reopened := New(ms.ID)
+	reopened.ctrl = mission.NewController(ctrl.Store())
+	reopened.width = 80
+	reopened.height = 24
+	refreshModel(t, reopened)
+	view := stripANSI(viewString(reopened))
+	for _, want := range []string{"running", "Ready (1)", "Mission Control", ms.Title} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q after reopen refresh, got:\n%s", want, view)
 		}
 	}
 }

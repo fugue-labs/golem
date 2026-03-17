@@ -381,16 +381,49 @@ func TestDashboardRefreshKeepsStaleRunningMissionActionable(t *testing.T) {
 		t.Fatalf("start mission: %v", err)
 	}
 
-	msg := m.doRefresh()
+	reopened := New(ms.ID)
+	reopened.ctrl = mission.NewController(ctrl.Store())
+	reopened.width = 120
+	reopened.height = 40
+	msg := reopened.doRefresh()
 	if rm, ok := msg.(refreshDoneMsg); ok && rm.err != nil {
 		t.Fatalf("refresh error: %v", rm.err)
 	}
 
-	view := stripANSITest(viewString(m))
+	view := stripANSITest(viewString(reopened))
 	for _, want := range []string{"running", "Workers 0 active", "Ready 1 queued", "No active workers", "Mission Control is idle"} {
 		if !containsAny(view, want) {
 			t.Fatalf("expected %q in stale-running dashboard view, got %q", want, truncStr(view, 300))
 		}
+	}
+}
+
+func TestDashboardRefreshReattachesMissionAfterAutoSelect(t *testing.T) {
+	m, ctrl := setupTestDashboard(t)
+	ctx := context.Background()
+	attached := createTestMission(t, ctrl)
+	applyTestPlan(t, ctrl, attached.ID)
+	if err := ctrl.ApproveMission(ctx, attached.ID); err != nil {
+		t.Fatalf("approve mission: %v", err)
+	}
+	if err := ctrl.StartMission(ctx, attached.ID); err != nil {
+		t.Fatalf("start mission: %v", err)
+	}
+
+	m.missionID = ""
+	msg := m.doRefresh()
+	if rm, ok := msg.(refreshDoneMsg); ok && rm.err != nil {
+		t.Fatalf("refresh error: %v", rm.err)
+	}
+	if m.missionID != attached.ID {
+		t.Fatalf("missionID=%q, want %q", m.missionID, attached.ID)
+	}
+	if m.summary == nil || m.summary.Mission == nil || m.summary.Mission.ID != attached.ID {
+		t.Fatalf("expected attached summary for %s, got %#v", attached.ID, m.summary)
+	}
+	plain := stripANSITest(viewString(m))
+	if !containsAny(plain, attached.ID, attached.Title) {
+		t.Fatalf("expected attached mission details in view, got %q", truncStr(plain, 240))
 	}
 }
 

@@ -508,6 +508,9 @@ func TestRecoverMission_StaleRunningMissionOffersReadyQueue(t *testing.T) {
 	if summary.PhaseLabel != "Running · ready queue" {
 		t.Fatalf("phase label = %q", summary.PhaseLabel)
 	}
+	if summary.Attention != "1 ready task(s)" {
+		t.Fatalf("attention = %q", summary.Attention)
+	}
 	if summary.FocusTask == nil {
 		t.Fatal("expected focus task after recovery")
 	}
@@ -519,6 +522,32 @@ func TestRecoverMission_StaleRunningMissionOffersReadyQueue(t *testing.T) {
 	}
 	if !strings.Contains(summary.NextAction, "Next ready task: Repair stale worker lease") {
 		t.Fatalf("next action = %q", summary.NextAction)
+	}
+
+	events, err := store.ListEvents(context.Background(), "m1", 10)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected recovery events to be recorded")
+	}
+	foundReset := false
+	foundCompleted := false
+	for _, event := range events {
+		switch event.Type {
+		case "recovery.stuck_task_reset":
+			if event.TaskID == stuckTask.ID {
+				foundReset = true
+			}
+		case "recovery.completed":
+			foundCompleted = true
+		}
+	}
+	if !foundReset {
+		t.Fatal("expected stuck-task recovery event for repairable running mission")
+	}
+	if !foundCompleted {
+		t.Fatal("expected recovery.completed event for repairable running mission")
 	}
 }
 

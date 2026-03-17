@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
+	"github.com/fugue-labs/golem/internal/mission"
 	"github.com/fugue-labs/golem/internal/ui/chat"
 	uiinvariants "github.com/fugue-labs/golem/internal/ui/invariants"
 	"github.com/fugue-labs/golem/internal/ui/plan"
@@ -766,6 +767,53 @@ func TestResumeSessionRestoresMissionMetadataInToolState(t *testing.T) {
 	}
 
 	os.RemoveAll(filepath.Dir(sessionDir))
+}
+
+func TestRestoreSessionStateRestoresUsableMissionContext(t *testing.T) {
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	store := mission.NewInMemoryStore()
+	ctrl := mission.NewController(store)
+	m.missionCtrl = ctrl
+
+	ctx := context.Background()
+	created, err := ctrl.CreateMission(ctx, mission.CreateMissionRequest{Title: "Resume mission", Goal: "Restore mission context", RepoRoot: "/tmp/repo"})
+	if err != nil {
+		t.Fatalf("CreateMission: %v", err)
+	}
+	if err := ctrl.ApplyPlan(ctx, created.ID, &mission.PlanResult{
+		Summary: "plan",
+		Tasks: []mission.PlanTask{{ID: "t_resume", Title: "Repair stale lane", Kind: mission.TaskKindCode, Priority: 1, RiskLevel: mission.RiskLow}},
+	}); err != nil {
+		t.Fatalf("ApplyPlan: %v", err)
+	}
+	if err := ctrl.ApproveMission(ctx, created.ID); err != nil {
+		t.Fatalf("ApproveMission: %v", err)
+	}
+	if err := ctrl.StartMission(ctx, created.ID); err != nil {
+		t.Fatalf("StartMission: %v", err)
+	}
+
+	session := &agent.SessionData{
+		ToolState: map[string]any{
+			"mission": map[string]any{
+				"active_mission_id": created.ID,
+			},
+		},
+	}
+	if err := m.restoreSessionState(session, nil); err != nil {
+		t.Fatalf("restoreSessionState: %v", err)
+	}
+	if m.activeMissionID != created.ID {
+		t.Fatalf("activeMissionID=%q, want %q", m.activeMissionID, created.ID)
+	}
+
+	statusMsg, _ := m.handleMissionCommand("/mission status")
+	for _, want := range []string{created.ID, "Repair stale lane", "**Status**: running", "**Phase**: Running · ready queue"} {
+		if !strings.Contains(statusMsg.Content, want) {
+			t.Fatalf("expected %q in restored mission status\n%s", want, statusMsg.Content)
+		}
+	}
 }
 
 func TestVerifyCommandRendersVerificationSummary(t *testing.T) {

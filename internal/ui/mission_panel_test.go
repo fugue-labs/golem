@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fugue-labs/golem/internal/agent"
 	"github.com/fugue-labs/golem/internal/config"
 	"github.com/fugue-labs/golem/internal/mission"
 	"github.com/fugue-labs/golem/internal/ui/chat"
@@ -108,6 +109,36 @@ func seedMission(t *testing.T, ctrl *mission.Controller, status mission.MissionS
 	}
 
 	return created.ID
+}
+
+func attachMissionFromSessionState(t *testing.T, m *Model, missionID string) {
+	t.Helper()
+	session := &agent.SessionData{
+		ToolState: map[string]any{
+			"mission": map[string]any{
+				"active_mission_id": missionID,
+			},
+		},
+	}
+	if err := m.restoreSessionState(session, nil); err != nil {
+		t.Fatalf("restoreSessionState: %v", err)
+	}
+	if m.activeMissionID != missionID {
+		t.Fatalf("activeMissionID=%q, want %q", m.activeMissionID, missionID)
+	}
+}
+
+func reopenAttachedMissionModel(t *testing.T, store mission.Store, missionID string) *Model {
+	t.Helper()
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
+	m.sty = styles.New(nil)
+	m.missionCtrl = mission.NewController(store)
+	attachMissionFromSessionState(t, m, missionID)
+	t.Cleanup(func() {
+		m.stopOrchestrator()
+		m.appCancel()
+	})
+	return m
 }
 
 func TestMissionPanelRendersTaskGraph(t *testing.T) {
@@ -292,13 +323,13 @@ func TestMissionStatusKeepsRunningLifecycleWhileSurfacingBlockedTasks(t *testing
 }
 
 func TestMissionStatusForAttachedStaleRunningMissionShowsRepairableQueue(t *testing.T) {
-	m, ctrl := testMissionModel(t)
+	_, ctrl := testMissionModel(t)
 
 	tasks := []mission.Task{{ID: "t_ready", Title: "Repair stale worker lease", Kind: mission.TaskKindCode, Status: mission.TaskReady, Priority: 1, RiskLevel: mission.RiskLow}}
 	missionID := seedMission(t, ctrl, mission.MissionRunning, tasks)
-	m.activeMissionID = missionID
+	reopened := reopenAttachedMissionModel(t, ctrl.Store(), missionID)
 
-	msg, _ := m.handleMissionCommand("/mission status")
+	msg, _ := reopened.handleMissionCommand("/mission status")
 	for _, want := range []string{
 		"**Status**: running",
 		"**Phase**: Running · ready queue",
@@ -317,19 +348,20 @@ func TestAttachedMissionSupportsStatusTasksPauseAndStart(t *testing.T) {
 
 	tasks := []mission.Task{{ID: "t_attach", Title: "Reconnect worker lane", Kind: mission.TaskKindCode, Status: mission.TaskReady, Priority: 1, RiskLevel: mission.RiskLow}}
 	missionID := seedMission(t, ctrl, mission.MissionRunning, tasks)
-	m.activeMissionID = missionID
+	_, _ = m.handleMissionCommand("/mission list")
+	reopened := reopenAttachedMissionModel(t, ctrl.Store(), missionID)
 
-	statusMsg, _ := m.handleMissionCommand("/mission status")
+	statusMsg, _ := reopened.handleMissionCommand("/mission status")
 	if !strings.Contains(statusMsg.Content, missionID) || !strings.Contains(statusMsg.Content, "Reconnect worker lane") {
 		t.Fatalf("expected attached mission status details\n%s", statusMsg.Content)
 	}
 
-	tasksMsg, _ := m.handleMissionCommand("/mission tasks")
+	tasksMsg, _ := reopened.handleMissionCommand("/mission tasks")
 	if !strings.Contains(tasksMsg.Content, "Reconnect worker lane") || !strings.Contains(tasksMsg.Content, "[ready]") {
 		t.Fatalf("expected attached mission task list\n%s", tasksMsg.Content)
 	}
 
-	pauseMsg, _ := m.handleMissionCommand("/mission pause")
+	pauseMsg, _ := reopened.handleMissionCommand("/mission pause")
 	if !strings.Contains(pauseMsg.Content, "Mission paused") {
 		t.Fatalf("expected pause confirmation\n%s", pauseMsg.Content)
 	}
@@ -341,7 +373,7 @@ func TestAttachedMissionSupportsStatusTasksPauseAndStart(t *testing.T) {
 		t.Fatalf("mission status after pause = %s, want %s", paused.Status, mission.MissionPaused)
 	}
 
-	startMsg, _ := m.handleMissionCommand("/mission start")
+	startMsg, _ := reopened.handleMissionCommand("/mission start")
 	if !strings.Contains(startMsg.Content, "started. Orchestrator resumed mission execution") {
 		t.Fatalf("expected restart confirmation\n%s", startMsg.Content)
 	}
