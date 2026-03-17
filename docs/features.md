@@ -130,7 +130,8 @@ The current shipped mission contract is:
 - Resume semantics are currently `/mission start`; there is no separate `/mission resume` slash command.
 - `/mission pause` stops new task leasing by stopping the in-process orchestrator.
 - `/mission cancel` transitions the mission to `cancelled` and clears the active mission from the current TUI session.
-- Shipped mission docs should stay centered on `/mission new|status|tasks|plan|approve|start|pause|cancel|list` plus `golem dashboard`; task-scoped retry/replan/escalation controls are not yet a shipped command surface.
+- `/mission retry [task-id]` is a shipped recovery control. With a task ID it retries that failed or blocked task; without a task ID it retries all failed or blocked tasks eligible for retry.
+- Shipped mission docs should stay centered on `/mission new|status|tasks|plan|approve|start|pause|cancel|retry [task-id]|list` plus `golem dashboard`; replanning and escalation controls are not yet a shipped command surface.
 
 ### Mission summary, orchestration, and dashboard behavior
 
@@ -162,33 +163,9 @@ Mission Control should still produce a valid empty state when no missions exist.
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show all commands and keybindings |
-| `/clear` | Clear the conversation transcript |
-| `/plan` | Show the current tracked plan with progress |
-| `/invariants` | Show the invariant checklist with pass/fail status |
-| `/runtime` | Show the effective runtime profile |
-| `/verify` | Show the latest verification summary |
-| `/compact` | Compress conversation context to free up space |
-| `/cost` | Show detailed session cost breakdown |
-| `/replay [file\|list]` | Replay a recorded session trace |
-| `/budget` | Show budget status and limits |
-| `/resume` | Restore the last saved session |
-| `/search <query>` | Search across all saved sessions |
-| `/model [name]` | Show or switch the active model |
-| `/diff` | Show git diff of uncommitted changes |
-| `/undo [path]` | Revert unstaged changes (all files, or a specific path) |
-| `/mission [new\|status\|tasks\|plan\|approve\|start\|pause\|cancel\|list]` | Mission orchestration commands |
-| `/rewind [N]` | Rewind to a saved checkpoint or list checkpoints |
-| `/doctor` | Diagnose setup issues |
-| `/config` | Show effective configuration and environment variables |
-| `/team` | Show team member status |
-| `/context` | Show context window usage |
-| `/skills` | List detected skills |
-| `/skill <name>` | Toggle a skill on or off |
-| `/spec [file]` | Start or show spec-driven development |
-| `/quit` or `/exit` | Quit the app |
+For the authoritative shell-command, slash-command, mission-workflow, and keybinding reference, see [command-reference.md](command-reference.md).
+
+The summary below keeps feature context short and defers command-by-command detail to that reference.
 
 ## Keybindings
 
