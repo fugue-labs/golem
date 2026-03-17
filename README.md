@@ -1,22 +1,22 @@
 # Golem
 
-Golem is a terminal-native coding agent for real repositories. It gives you a chat-first TUI, repo-aware context, local session history, and durable mission workflows without sending you to a browser-heavy IDE.
+Golem is a terminal-native coding agent for real repositories.
 
-This repository contains the `golem` CLI and TUI app.
+It gives you a chat-first TUI, repo-aware context, local session history, and durable mission workflows without sending you to a browser-heavy IDE.
 
 ## Why Golem
 
-Golem is built for people who want an agent that feels like part of the terminal workflow instead of a separate product.
+Golem is built for people who want an agent that feels like part of the shell, not a separate product.
 
-- **Chat-first, terminal-native** — launch the TUI, type a prompt, use slash commands, and keep working in the same shell-centric loop.
-- **Repo-aware by default** — Golem reads git state, project instructions, saved sessions, and runtime configuration before it starts helping.
-- **Operator-friendly** — built-in help, diagnostics, runtime/status summaries, cost tracking, verification state, and explicit mission controls are part of the shipped surface.
+- **Terminal-native by default** — launch the TUI, type a prompt, use slash commands, and keep working in the same terminal workflow.
+- **Repo-aware on startup** — Golem reads git state, project instructions, saved sessions, runtime config, and local memory before it starts helping.
+- **Operator-friendly surfaces** — help, diagnostics, runtime summaries, cost tracking, verification state, and explicit mission controls are all part of the shipped UX.
 - **Local-first state** — sessions, credentials, memory, missions, and automation config live under `~/.golem/`.
 - **More than one-shot chat** — search older sessions, replay traces, rewind to checkpoints, and manage larger work through durable missions.
 
-## Shipped workflows
+## What you can do with Golem
 
-With Golem you can:
+With the shipped CLI and TUI, you can:
 
 - work interactively in a repo with an agent that can read, search, edit, write, list, and run commands,
 - validate setup quickly with `golem status`, `golem runtime`, and `/doctor`,
@@ -45,7 +45,7 @@ go install github.com/fugue-labs/golem@latest
 
 Prefer a prebuilt binary? Download the macOS Apple Silicon (`darwin-arm64`) or Linux x86_64 (`linux-amd64`) archive from this repository's GitHub Releases page.
 
-## Authentication and provider setup
+## Login and provider setup
 
 ### Fastest path: `golem login`
 
@@ -53,7 +53,7 @@ Prefer a prebuilt binary? Download the macOS Apple Silicon (`darwin-arm64`) or L
 golem login
 ```
 
-Or choose a specific shipped login flow:
+You can also choose a specific shipped login flow:
 
 ```bash
 golem login chatgpt
@@ -62,7 +62,7 @@ golem login openai
 golem login xai
 ```
 
-What these do:
+What those flows do:
 
 - `chatgpt` uses browser-based OAuth and stores credentials in `~/.golem/auth.json`
 - `anthropic`, `openai`, and `xai` prompt for an API key and store it in `~/.golem/credentials.json`
@@ -82,7 +82,7 @@ Shipped runtime paths support:
 
 Important distinction: `golem login` supports `chatgpt`, `anthropic`, `openai`, and `xai`. Vertex providers are configured via environment variables.
 
-### Useful auth/config env vars
+### Useful auth and config env vars
 
 | Variable | Purpose |
 | --- | --- |
@@ -102,7 +102,7 @@ Use `golem status`, `golem runtime`, and `/config` to confirm the effective conf
 
 ## First successful session
 
-If you want the shortest path from install to a useful first run, do this in a repo.
+If you want the shortest path from install to a useful first run, do this inside a repository.
 
 ### 1. Log in
 
@@ -110,7 +110,7 @@ If you want the shortest path from install to a useful first run, do this in a r
 golem login
 ```
 
-### 2. Confirm your runtime is valid before launching
+### 2. Confirm your runtime before launch
 
 ```bash
 golem status
@@ -171,7 +171,7 @@ Refactor the login flow and keep go test ./... green.
 | `golem` | Launch the main TUI |
 | `golem <prompt>` | Launch the TUI with an initial prompt |
 | `golem login [provider]` | Run the interactive login flow |
-| `golem logout` | Remove saved local auth/config files |
+| `golem logout` | Remove saved local auth and provider config files |
 | `golem status [--json]` | Show a one-shot status summary |
 | `golem runtime [--json]` | Show the effective runtime profile |
 | `golem dashboard [mission-id]` | Open Mission Control |
@@ -180,7 +180,7 @@ Refactor the login flow and keep go test ./... green.
 | `golem automations status` | Show automation daemon status |
 | `golem automations init` | Print an example automations config |
 
-`golem logout` removes saved files under `~/.golem/`, but it does **not** clear environment variables.
+`golem logout` removes `~/.golem/config.json`, `~/.golem/credentials.json`, and `~/.golem/auth.json`, but does not clear environment variables or other local state such as sessions, memory, missions, or automations.
 
 ## Useful slash commands in the TUI
 
@@ -189,19 +189,22 @@ Refactor the login flow and keep go test ./... green.
 | `/help` | Show commands and keybindings |
 | `/clear` | Clear the current transcript |
 | `/plan` | Show tracked plan progress |
+| `/invariants` | Show the invariant checklist |
 | `/runtime` | Show the effective runtime profile |
 | `/verify` | Show the latest verification summary |
+| `/compact` | Compress conversation context |
 | `/cost` | Show session cost summary |
 | `/budget` | Show budget status |
 | `/resume` | Restore the last saved session |
 | `/search <query>` | Search across saved sessions |
 | `/model [name]` | Show or switch the active model |
 | `/diff` | Show uncommitted git diff |
-| `/undo [path]` | Revert an unstaged change |
+| `/undo [path]` | Revert one unstaged git-tracked change |
 | `/replay [file\|list]` | Replay a recorded session trace |
 | `/rewind [N]` | Rewind to a checkpoint or list checkpoints |
 | `/doctor` | Diagnose setup issues |
 | `/config` | Show effective configuration |
+| `/team` | Show team member status |
 | `/context` | Show context usage |
 | `/skills` | List detected skills |
 | `/skill <name>` | Toggle a skill |
