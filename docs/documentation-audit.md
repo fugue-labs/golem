@@ -17,7 +17,7 @@ Primary source of truth: `main.go`
 | `golem` | Launches the main TUI. If extra args are present, they are joined and used as the initial prompt. | `main.go` | This is the default entrypoint. |
 | `golem login [provider]` | Starts login flow. Supported explicit providers are `chatgpt`, `anthropic`, `openai`, `xai`. With no provider, shows an interactive picker. | `main.go`, `internal/login/login.go` | Docs should not claim other providers are available through `golem login`. |
 | `golem logout` | Removes saved `~/.golem/config.json`, `~/.golem/credentials.json`, and `~/.golem/auth.json`. Does not remove environment variables. | `main.go`, `internal/login/login.go` | Call out that env-based auth remains untouched. |
-| `golem dashboard [mission-id]` | Opens the Mission Control dashboard. Optional mission ID selects a specific mission. | `main.go`, `docs/features.md` | User-facing dashboard contract is documented in `docs/features.md`. |
+| `golem dashboard [mission-id]` | Opens the Mission Control dashboard. Optional mission ID selects a specific mission. | `main.go`, `internal/ui/dashboard/dashboard.go` | Treat `main.go` as the entrypoint source and `internal/ui/dashboard/dashboard.go` as the primary dashboard-behavior source; `docs/features.md` is supporting contract context. |
 | `golem status [--json]` | Loads config, validates it, prepares runtime, and prints a status summary or JSON report. Exits non-zero on validation/runtime errors. | `main.go`, `internal/agent/runtime_report.go` | Docs should describe this as a one-shot status/config/auth check. |
 | `golem runtime [--json]` | Loads config, validates it, prepares runtime, and prints a runtime profile or JSON report. Exits non-zero on validation/runtime errors. | `main.go`, `internal/agent/runtime_report.go` | Docs should describe this as the richer runtime/profile surface. |
 | `golem automations` / `golem automations list` | Loads automation config and prints a listing. Default subcommand is `list`. | `main.go` | Defaulting to `list` is shipped behavior. |
@@ -224,7 +224,7 @@ Important runtime env/config knobs visible in shipped code:
 
 ## 5. Mission and dashboard surfaces
 
-Primary source of truth: `internal/ui/mission_commands.go` for `/mission` command semantics. Use `docs/features.md` as supporting contract context for lifecycle and dashboard behavior, but not as the primary authority for the current `/mission` subcommand list; entrypoint routing still lives in `main.go` and general help copy in `internal/ui/commands.go`.
+Primary source of truth: `internal/ui/mission_commands.go` for `/mission` command semantics, and `internal/ui/dashboard/dashboard.go` for dashboard behavior. Use `main.go` as the dashboard entrypoint reference and `docs/features.md` as supporting contract context, but not as the primary authority for current dashboard rendering, controls, or empty-state behavior.
 
 ### Shipped mission surfaces
 
@@ -240,21 +240,27 @@ Primary source of truth: `internal/ui/mission_commands.go` for `/mission` comman
 | `/mission cancel` | Cancels the mission and clears the active mission from the current TUI session. | `internal/ui/mission_commands.go`, `docs/features.md` |
 | `/mission retry [task-id]` | Retries a specific failed/blocked task when an ID is given, or retries all failed/blocked tasks when no ID is given. | `internal/ui/mission_commands.go` |
 | `/mission list` | Lists known missions and marks the current session's active mission. | `internal/ui/mission_commands.go`, `docs/features.md` |
-| `golem dashboard [mission-id]` | Opens Mission Control with Tasks, Workers, Evidence, and Events panes. | `main.go`, `docs/features.md` |
+| `golem dashboard [mission-id]` | Opens Mission Control in a dedicated TUI. Optional mission ID targets a specific mission; otherwise the dashboard auto-selects the highest-priority non-terminal mission, falling back to the most recent mission. | `internal/ui/dashboard/dashboard.go`, `main.go`, `docs/features.md` |
 
 ### Dashboard contract docs may claim
 
-Source of truth: `docs/features.md`
+Primary source of truth: `internal/ui/dashboard/dashboard.go`
 
-- Dashboard auto-selects the most relevant non-terminal mission by priority.
-- Header surfaces status, task progress, active workers, pending approvals, evidence count, elapsed time, repo, branch, and worker budget.
-- Empty state is explicit and should guide users to `/mission new`.
-- It is safe to document pane navigation hints already called out in help/features copy: `Tab`, `Shift+Tab`, `1-4`, `j/k`.
+- Dashboard refreshes against durable mission state on load and on a 2-second tick, with manual `r` refresh support.
+- With no explicit mission ID, the dashboard selects the most relevant non-terminal mission by priority: `running`, `blocked`, `paused`, `awaiting_approval`, `planning`, then `draft`, then falls back to the most recent mission.
+- Mission Control renders four panes: **Tasks**, **Workers**, **Evidence**, and **Events**.
+- Dashboard navigation and focus controls are shipped: `Tab`, `Shift+Tab`, `1-4`, `j/k`, arrow keys for scroll aliases, mouse pane focus, `r`, and `q`/`Ctrl+C`.
+- The footer and pane headers explicitly teach the pane-navigation contract.
+- The header surfaces mission status and progress metrics, including active workers, pending approvals, evidence count, elapsed time, repo, branch, and worker budget.
+- Empty state is explicit: the dashboard shows `Mission Control`, `No active mission`, and guidance centered on creating a mission from the main shell with `/mission new`; current copy may still mention `golem mission new` as aspirational wording.
+- Error and loading states are explicit user-facing dashboard modes, not silent failures.
+
+Supporting references: `main.go` for CLI routing and `docs/features.md` for broader mission lifecycle context.
 
 ### Mission claims to avoid
 
 - Do **not** document a shipped `golem mission ...` shell-command family.
-- Do **not** treat the dashboard empty-state phrase `run golem mission new` as proof of a shipped CLI command; `docs/features.md` explicitly marks that wording as aspirational UI copy.
+- Do **not** treat the dashboard empty-state phrase `run golem mission new` as proof of a shipped CLI command; this is present in current UI copy but not routed in `main.go`.
 - Do **not** document stricter mission repository precondition enforcement as shipped; `docs/features.md` says `CreateMission` does not yet enforce it.
 - Do **not** document `/mission replan` or task escalation controls as shipped.
 - Do **not** imply a persistent mission daemon is the user-facing execution model; the shipped system is local-first/in-process from the TUI plus durable store-backed status/dashboard surfaces.
@@ -320,7 +326,7 @@ Primary source of truth: `.github/workflows/ci.yml` and `.github/workflows/relea
 | Provider/login docs | `internal/login/login.go` | `internal/config/config.go`, `README.md` |
 | Auth/config precedence docs | `internal/config/config.go` | `internal/agent/runtime_report.go` |
 | Runtime/status docs | `internal/agent/runtime_report.go` | `main.go`, `internal/ui/commands.go` |
-| Mission/dashboard docs | `internal/ui/mission_commands.go` | `docs/features.md`, `main.go`, `internal/ui/commands.go` |
+| Mission/dashboard docs | `internal/ui/dashboard/dashboard.go` | `internal/ui/mission_commands.go`, `main.go`, `docs/features.md`, `internal/ui/commands.go` |
 | Automation docs | `main.go` | `README.md` |
 | CI/release docs | `.github/workflows/ci.yml`, `.github/workflows/release.yml` | `README.md` |
 | High-level marketing/overview copy | `README.md` | this audit, `docs/features.md` |
