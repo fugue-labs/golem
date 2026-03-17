@@ -27,6 +27,8 @@ For the full onboarding flow, including provider selection, authentication choic
 
 - [Getting started with Golem](docs/getting-started.md)
 
+The README keeps the short version below for users who already know how they want to authenticate.
+
 ### Prerequisites
 
 - Go **1.26+**

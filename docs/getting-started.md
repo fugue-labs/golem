@@ -1,16 +1,16 @@
 # Getting started with Golem
 
-Golem is a terminal-native coding agent for real software projects. This guide covers the fastest supported path from a fresh checkout to your first interactive session.
+Golem is a terminal-native coding agent for real software projects. This guide covers the supported path from a fresh checkout to your first interactive session, including install options, provider-specific authentication, environment-variable setup, and the first commands to run inside the TUI.
 
 ## What you need
 
 - Go **1.26+**
-- A supported provider configured with credentials
+- Credentials for at least one supported provider
 
-There are two main setup styles:
+Golem supports two main onboarding styles:
 
 - **Saved login** with `golem login` for ChatGPT, Anthropic, OpenAI, or xAI
-- **Environment variables** for ephemeral or automated setups, including Vertex AI and custom OpenAI-compatible endpoints
+- **Environment variables** for ephemeral, CI, or provider setups that are not handled by `golem login`, including Vertex AI and custom OpenAI-compatible endpoints
 
 ## Install Golem
 
@@ -70,7 +70,7 @@ golem login xai
 - Saves ChatGPT subscription credentials to `~/.golem/auth.json`
 - Saves your provider preference to `~/.golem/config.json`
 
-Important: ChatGPT login is **not** an API-key flow. Internally, Golem runs this as the OpenAI provider with ChatGPT OAuth credentials, so `golem status` or `golem runtime` will show an OpenAI provider plus ChatGPT subscription auth.
+ChatGPT login is not an API-key flow. Internally, Golem runs this as the OpenAI provider with ChatGPT OAuth credentials, so `golem status` and `golem runtime` show an OpenAI provider plus ChatGPT subscription auth.
 
 #### Anthropic, OpenAI, and xAI (`golem login anthropic|openai|xai`)
 
@@ -78,20 +78,9 @@ Important: ChatGPT login is **not** an API-key flow. Internally, Golem runs this
 - Save the key to `~/.golem/credentials.json`
 - Save your provider preference to `~/.golem/config.json`
 
-### Saved login vs environment variables
+### Option 2: environment-variable auth
 
-Configuration precedence is:
-
-1. `GOLEM_PROVIDER`
-2. Saved config from `golem login`
-3. Environment-variable auto-detection
-4. Default provider (`anthropic`)
-
-That means `GOLEM_PROVIDER` always wins, even if you already ran `golem login`.
-
-## Environment-variable setup
-
-If you do not want to store credentials with `golem login`, Golem can detect provider settings directly from your shell environment.
+If you do not want to save credentials locally, Golem can be configured directly from your shell environment.
 
 ### Anthropic
 
@@ -111,7 +100,7 @@ export OPENAI_API_KEY="your-key"
 export XAI_API_KEY="your-key"
 ```
 
-By default, the xAI path uses the built-in xAI base URL. If you need to override it, set `XAI_BASE_URL` or `GOLEM_BASE_URL`.
+By default, the xAI path uses the built-in xAI base URL. To override it after selecting the provider, set `XAI_BASE_URL` or `GOLEM_BASE_URL`.
 
 ### Custom OpenAI-compatible endpoint
 
@@ -128,30 +117,51 @@ Vertex AI is configured through environment variables rather than `golem login`:
 ```bash
 export GOLEM_PROVIDER=vertexai
 export VERTEX_PROJECT="your-gcp-project"
-export VERTEX_REGION="us-central1"
 export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
+# optional: defaults to us-central1 if unset
+export VERTEX_REGION="us-central1"
 ```
 
-Golem validates `VERTEX_PROJECT` and `VERTEX_REGION` for Vertex providers. `GOOGLE_APPLICATION_CREDENTIALS` is one common way to supply Google credentials.
+`VERTEX_PROJECT` is required for Vertex providers. If `VERTEX_REGION` is unset, Golem defaults it to `us-central1`.
 
 ### Vertex AI with Anthropic models
 
 ```bash
 export GOLEM_PROVIDER=vertexai_anthropic
 export VERTEX_PROJECT="your-gcp-project"
-export VERTEX_REGION="us-central1"
 export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
+# optional: defaults to us-central1 if unset
+export VERTEX_REGION="us-central1"
 ```
 
-### Auto-detection behavior
+## How Golem chooses provider and auth
 
-If `GOLEM_PROVIDER` is unset and you have not saved a provider with `golem login`, Golem auto-detects in this order:
+For the main onboarding path, provider selection precedence is:
 
-1. `ANTHROPIC_API_KEY`
-2. `OPENAI_API_KEY`
-3. `XAI_API_KEY`, `GOLEM_BASE_URL`, or `GOLEM_API_KEY`
-4. `GOOGLE_APPLICATION_CREDENTIALS` or `VERTEX_PROJECT`
-5. fallback default: `anthropic`
+1. `GOLEM_PROVIDER`
+2. Saved provider preference from `golem login` in `~/.golem/config.json`
+3. Environment-variable auto-detection
+4. Default provider: `anthropic`
+
+That is the behavior most users will see because `golem login` writes `config.json`.
+
+For the full implementation behavior, if `GOLEM_PROVIDER` is unset and `~/.golem/config.json` is missing, Golem continues checking in this order:
+
+1. Environment-variable auto-detection
+   - `ANTHROPIC_API_KEY`
+   - `OPENAI_API_KEY`
+   - `XAI_API_KEY`, `GOLEM_BASE_URL`, or `GOLEM_API_KEY`
+   - `GOOGLE_APPLICATION_CREDENTIALS` or `VERTEX_PROJECT`
+2. Saved API keys in `~/.golem/credentials.json`
+3. Legacy ChatGPT OAuth credentials in `~/.golem/auth.json`
+4. Fallback default: `anthropic`
+
+A few auth details are useful to know:
+
+- If you explicitly log in with `golem login chatgpt`, Golem uses ChatGPT OAuth credentials from `auth.json` and records `chatgpt` as the saved provider.
+- If OpenAI mode is selected without ChatGPT being the saved login, Golem prefers `OPENAI_API_KEY` or a saved OpenAI API key.
+- If OpenAI mode has no API key available, Golem can still fall back to saved ChatGPT OAuth credentials from `auth.json`.
+- `GOLEM_PROVIDER` always wins over any saved login state.
 
 ## Check your setup before launching
 
@@ -163,7 +173,7 @@ golem runtime
 golem runtime --json
 ```
 
-- `golem status` prints a compact provider/auth summary
+- `golem status` prints a compact provider and auth summary
 - `golem runtime` prints a fuller runtime profile
 - `golem runtime --json` prints the same information in machine-readable form
 
