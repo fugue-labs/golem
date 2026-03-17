@@ -618,7 +618,7 @@ func TestMissionLifecycle(t *testing.T) {
 	// -----------------------------------------------------------------------
 	// 6. Review: CompleteReview with ReviewPass → task to accepted
 	// -----------------------------------------------------------------------
-	rl := NewReviewLauncher(store)
+	rl := NewReviewLauncher(store, false)
 
 	// Manually create a review run (bypassing DispatchPendingReviews which
 	// needs git diff).

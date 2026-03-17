@@ -13,12 +13,15 @@ import (
 // ReviewLauncher coordinates the lifecycle of review runs for completed worker
 // tasks. It is the Phase C counterpart to WorkerLauncher.
 type ReviewLauncher struct {
-	store Store
+	store         Store
+	benchmarkMode bool
 }
 
 // NewReviewLauncher creates a review launcher.
-func NewReviewLauncher(store Store) *ReviewLauncher {
-	return &ReviewLauncher{store: store}
+// When benchmarkMode is true, tasks are auto-accepted after maxReviewFailures
+// consecutive review failures. In normal mode, tasks are blocked instead.
+func NewReviewLauncher(store Store, benchmarkMode bool) *ReviewLauncher {
+	return &ReviewLauncher{store: store, benchmarkMode: benchmarkMode}
 }
 
 // ReviewSpec describes a provisioned review run ready for execution by the TUI.
@@ -316,17 +319,31 @@ func (rl *ReviewLauncher) FailReview(ctx context.Context, spec *ReviewSpec, errT
 	// Count consecutive review failures for this task.
 	failures := rl.countConsecutiveReviewFailures(ctx, spec.Task.ID)
 	if failures >= maxReviewFailures {
-		// Auto-accept: the worker completed successfully, but the reviewer
-		// keeps failing (infra issue). Better to let the work through.
-		spec.Task.Status = TaskAccepted
-		spec.Task.UpdatedAt = now
-		if err := rl.store.UpdateTask(ctx, spec.Task); err != nil {
-			return fmt.Errorf("auto-accept task %s after review failures: %w", spec.Task.ID, err)
+		if rl.benchmarkMode {
+			// Benchmark mode: auto-accept since the worker completed successfully
+			// but the reviewer keeps failing (infra issue). Better to let the work through.
+			spec.Task.Status = TaskAccepted
+			spec.Task.UpdatedAt = now
+			if err := rl.store.UpdateTask(ctx, spec.Task); err != nil {
+				return fmt.Errorf("auto-accept task %s after review failures: %w", spec.Task.ID, err)
+			}
+			rl.logEvent(ctx, spec.Run.MissionID, spec.Task.ID, spec.Run.ID, "review.auto_accepted", map[string]string{
+				"reason":   fmt.Sprintf("%d consecutive review failures", failures),
+				"last_err": errText,
+			})
+		} else {
+			// Normal mode: block the task so a human can investigate.
+			spec.Task.Status = TaskBlocked
+			spec.Task.BlockingReason = fmt.Sprintf("review infrastructure failure (%d consecutive failures, last: %s)", failures, errText)
+			spec.Task.UpdatedAt = now
+			if err := rl.store.UpdateTask(ctx, spec.Task); err != nil {
+				return fmt.Errorf("block task %s after review failures: %w", spec.Task.ID, err)
+			}
+			rl.logEvent(ctx, spec.Run.MissionID, spec.Task.ID, spec.Run.ID, "review.blocked", map[string]string{
+				"reason":   fmt.Sprintf("%d consecutive review failures", failures),
+				"last_err": errText,
+			})
 		}
-		rl.logEvent(ctx, spec.Run.MissionID, spec.Task.ID, spec.Run.ID, "review.auto_accepted", map[string]string{
-			"reason":   fmt.Sprintf("%d consecutive review failures", failures),
-			"last_err": errText,
-		})
 		return nil
 	}
 

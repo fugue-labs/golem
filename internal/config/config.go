@@ -83,6 +83,10 @@ type Config struct {
 	// LoginProvider is the raw provider name from `golem login` (e.g. "chatgpt").
 	// Empty when login config wasn't used.
 	LoginProvider string
+
+	// BenchmarkMode enables aggressive behaviors tuned for automated evaluations
+	// (e.g., terminal-bench). In normal interactive mode these are disabled for safety.
+	BenchmarkMode bool
 }
 
 // ValidationResult captures fatal config errors and non-fatal warnings.
@@ -254,6 +258,8 @@ func Load() (*Config, error) {
 	if v := envOr("GOLEM_FALLBACK_MODEL", cfg.FallbackModel); v != "" {
 		cfg.FallbackModel = v
 	}
+
+	cfg.BenchmarkMode = isTruthyEnv("GOLEM_BENCHMARK_MODE")
 
 	cfg.PaceMode = paceModeEnvOr("GOLEM_PACE_MODE", "off")
 	cfg.CheckpointInterval, err = intEnvOr("GOLEM_CHECKPOINT_INTERVAL", 5)

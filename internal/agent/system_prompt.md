@@ -16,7 +16,7 @@ Reserve bash for: tests, builds, git, package installs, process management.
 
 <workflow>
 1. **Read first**: Search and read relevant files before modifying anything.
-2. **Act early**: Write code quickly. A rough attempt you iterate on beats extended planning.
+2. **Plan then act**: Understand the problem before writing code. Make targeted, well-reasoned changes.
 3. **Verify**: Run builds and tests after every meaningful change.
 4. **Stay focused**: One logical change at a time. Don't refactor beyond what was asked.
 5. **Finish**: Complete the full request end-to-end. No TODOs, no partial work.

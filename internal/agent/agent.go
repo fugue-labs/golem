@@ -112,8 +112,19 @@ func NewWithRuntime(cfg *config.Config, runtime *RuntimeState, activeSkills []sk
 	}
 
 	opts := codetool.AgentOptions(cfg.WorkingDir, toolOpts...)
+
+	// In benchmark mode, overlay the base system prompt with aggressive directives.
+	systemPrompt := strings.TrimSpace(golemSystemPrompt)
+	if cfg.BenchmarkMode {
+		systemPrompt += "\n\n" +
+			"<benchmark_mode>\n" +
+			"You are in benchmark mode. Act fast — a rough attempt you iterate on beats extended planning. " +
+			"Minimize reading, maximize action. Write code based on what you already know and iterate.\n" +
+			"</benchmark_mode>"
+	}
+
 	opts = append(opts,
-		core.WithSystemPrompt[string](strings.TrimSpace(golemSystemPrompt)),
+		core.WithSystemPrompt[string](systemPrompt),
 		core.WithDynamicSystemPrompt[string](func(_ context.Context, _ *core.RunContext) (string, error) {
 			return buildRuntimePrompt(cfg, *runtime, activeSkills), nil
 		}),

@@ -45,6 +45,7 @@ type OrchestratorConfig struct {
 	TickInterval      time.Duration // How often to check for work. Default: 5s.
 	MaxAttempts       int           // Max attempts per task before permanent failure. Default: 3.
 	HeartbeatInterval time.Duration // How often to heartbeat running workers. Default: 5m.
+	BenchmarkMode     bool          // Enables aggressive behaviors for automated evaluations.
 }
 
 func (c *OrchestratorConfig) applyDefaults() {
@@ -151,7 +152,7 @@ func NewOrchestrator(
 		store:   store,
 		spawner: spawner,
 		workers: NewWorkerLauncher(scheduler, worktrees, store),
-		reviews: NewReviewLauncher(store),
+		reviews: NewReviewLauncher(store, cfg.BenchmarkMode),
 		integr:  NewIntegrationEngine(store, cfg.RepoRoot),
 		onEvent: onEvent,
 		logger:  slog.Default(),

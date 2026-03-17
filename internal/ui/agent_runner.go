@@ -164,7 +164,13 @@ func (m *Model) handleRuntimePrepared(msg runtimePreparedMsg) (tea.Model, tea.Cm
 	extraOpts = append(extraOpts,
 		core.WithHooks[string](m.agentHooks()),
 		core.WithAgentMiddleware[string](m.steeringMiddleware()),
-		core.WithAgentMiddleware[string](diffuseReadLoopMiddleware(6)),
+	)
+	// Read-loop guidance injection is benchmark-only: it pushes the agent to
+	// act fast at the cost of occasionally skipping important context.
+	if m.cfg.BenchmarkMode {
+		extraOpts = append(extraOpts, core.WithAgentMiddleware[string](diffuseReadLoopMiddleware(6)))
+	}
+	extraOpts = append(extraOpts,
 		core.WithCostTracker[string](m.costTracker),
 	)
 	if m.cfg.PermissionMode == "suggest" {

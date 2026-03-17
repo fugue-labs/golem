@@ -75,7 +75,7 @@ func TestCompleteReview_Pass(t *testing.T) {
 	run := &Run{ID: "r_review", MissionID: "m1", TaskID: "t1", Mode: RunModeReview, Status: RunRunning, StartedAt: &now}
 	store.runs["r_review"] = run
 
-	launcher := NewReviewLauncher(store)
+	launcher := NewReviewLauncher(store, false)
 	spec := &ReviewSpec{Run: run, Task: task}
 
 	err := launcher.CompleteReview(context.Background(), spec, &ReviewResult{
@@ -125,7 +125,7 @@ func TestCompleteReview_Reject(t *testing.T) {
 	run := &Run{ID: "r_review", MissionID: "m1", TaskID: "t1", Mode: RunModeReview, Status: RunRunning, StartedAt: &now}
 	store.runs["r_review"] = run
 
-	launcher := NewReviewLauncher(store)
+	launcher := NewReviewLauncher(store, false)
 	spec := &ReviewSpec{Run: run, Task: task}
 
 	err := launcher.CompleteReview(context.Background(), spec, &ReviewResult{
@@ -155,7 +155,7 @@ func TestCompleteReview_RequestChanges(t *testing.T) {
 	run := &Run{ID: "r_review", MissionID: "m1", TaskID: "t1", Mode: RunModeReview, Status: RunRunning, StartedAt: &now}
 	store.runs["r_review"] = run
 
-	launcher := NewReviewLauncher(store)
+	launcher := NewReviewLauncher(store, false)
 	spec := &ReviewSpec{Run: run, Task: task}
 
 	err := launcher.CompleteReview(context.Background(), spec, &ReviewResult{
@@ -186,7 +186,7 @@ func TestFailReview(t *testing.T) {
 	run := &Run{ID: "r_review", MissionID: "m1", TaskID: "t1", Mode: RunModeReview, Status: RunRunning, StartedAt: &now}
 	store.runs["r_review"] = run
 
-	launcher := NewReviewLauncher(store)
+	launcher := NewReviewLauncher(store, false)
 	spec := &ReviewSpec{Run: run, Task: task}
 
 	err := launcher.FailReview(context.Background(), spec, "reviewer timed out")
@@ -203,11 +203,76 @@ func TestFailReview(t *testing.T) {
 	}
 }
 
+func TestFailReview_BenchmarkAutoAccept(t *testing.T) {
+	store := newReviewMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+
+	task := &Task{ID: "t1", MissionID: "m1", Status: TaskAwaitingReview}
+	store.tasks["t1"] = task
+
+	now := time.Now().UTC()
+	run := &Run{ID: "r3", MissionID: "m1", TaskID: "t1", Mode: RunModeReview, Status: RunRunning, StartedAt: &now}
+	store.runs["r3"] = run
+
+	// Pre-populate 2 prior failed review runs + the current one so the count hits threshold (3).
+	store.runsByTask["t1"] = []*Run{
+		{ID: "r1", TaskID: "t1", Mode: RunModeReview, Status: RunFailed},
+		{ID: "r2", TaskID: "t1", Mode: RunModeReview, Status: RunFailed},
+		run,
+	}
+
+	// Benchmark mode: should auto-accept.
+	launcher := NewReviewLauncher(store, true)
+	spec := &ReviewSpec{Run: run, Task: task}
+
+	if err := launcher.FailReview(context.Background(), spec, "infra error"); err != nil {
+		t.Fatal(err)
+	}
+
+	if task.Status != TaskAccepted {
+		t.Errorf("benchmark mode: expected auto-accept, got %s", task.Status)
+	}
+}
+
+func TestFailReview_NormalModeBlocks(t *testing.T) {
+	store := newReviewMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+
+	task := &Task{ID: "t1", MissionID: "m1", Status: TaskAwaitingReview}
+	store.tasks["t1"] = task
+
+	now := time.Now().UTC()
+	run := &Run{ID: "r3", MissionID: "m1", TaskID: "t1", Mode: RunModeReview, Status: RunRunning, StartedAt: &now}
+	store.runs["r3"] = run
+
+	// Pre-populate 2 prior failed review runs + the current one so the count hits threshold (3).
+	store.runsByTask["t1"] = []*Run{
+		{ID: "r1", TaskID: "t1", Mode: RunModeReview, Status: RunFailed},
+		{ID: "r2", TaskID: "t1", Mode: RunModeReview, Status: RunFailed},
+		run,
+	}
+
+	// Normal mode: should block, not auto-accept.
+	launcher := NewReviewLauncher(store, false)
+	spec := &ReviewSpec{Run: run, Task: task}
+
+	if err := launcher.FailReview(context.Background(), spec, "infra error"); err != nil {
+		t.Fatal(err)
+	}
+
+	if task.Status != TaskBlocked {
+		t.Errorf("normal mode: expected blocked, got %s", task.Status)
+	}
+	if !strings.Contains(task.BlockingReason, "review infrastructure failure") {
+		t.Errorf("expected blocking reason with infra failure, got %s", task.BlockingReason)
+	}
+}
+
 func TestDispatchPendingReviews_NoTasks(t *testing.T) {
 	store := newReviewMockStore()
 	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
 
-	launcher := NewReviewLauncher(store)
+	launcher := NewReviewLauncher(store, false)
 	specs, err := launcher.DispatchPendingReviews(context.Background(), "m1", "/tmp/repo")
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +294,7 @@ func TestDispatchPendingReviews_SkipsActiveReview(t *testing.T) {
 	activeReview := &Run{ID: "r_active", MissionID: "m1", TaskID: "t1", Mode: RunModeReview, Status: RunRunning}
 	store.runsByTask["t1"] = []*Run{activeReview}
 
-	launcher := NewReviewLauncher(store)
+	launcher := NewReviewLauncher(store, false)
 	specs, err := launcher.DispatchPendingReviews(context.Background(), "m1", "/tmp/repo")
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +308,7 @@ func TestDispatchPendingReviews_NotRunning(t *testing.T) {
 	store := newReviewMockStore()
 	store.missions["m1"] = &Mission{ID: "m1", Status: MissionPaused}
 
-	launcher := NewReviewLauncher(store)
+	launcher := NewReviewLauncher(store, false)
 	_, err := launcher.DispatchPendingReviews(context.Background(), "m1", "/tmp/repo")
 	if err == nil {
 		t.Fatal("expected error for non-running mission")
@@ -272,7 +337,7 @@ func TestDispatchPendingReviews_MissingWorktree(t *testing.T) {
 	}
 	store.runsByTask["t1"] = []*Run{workerRun}
 
-	launcher := NewReviewLauncher(store)
+	launcher := NewReviewLauncher(store, false)
 	specs, err := launcher.DispatchPendingReviews(context.Background(), "m1", "/tmp/repo")
 	if err != nil {
 		t.Fatal(err)
