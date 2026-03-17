@@ -725,6 +725,49 @@ func TestResumeSessionEndToEnd(t *testing.T) {
 	os.RemoveAll(filepath.Dir(sessionDir))
 }
 
+func TestResumeSessionRestoresMissionMetadataInToolState(t *testing.T) {
+	dir := t.TempDir()
+	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4", WorkingDir: dir})
+
+	msgs := []core.ModelMessage{
+		core.ModelRequest{Parts: []core.ModelRequestPart{core.UserPromptPart{Content: "/mission status"}}},
+	}
+	transcript := []*chat.Message{{Kind: chat.KindAssistant, Content: "status restored"}}
+	toolState := map[string]any{
+		"mission": map[string]any{
+			"active_mission_id": "m_resume_123",
+		},
+	}
+
+	err := agent.SaveSession(dir, msgs, transcript, toolState, core.RunUsage{Requests: 1}, "test-model", "test-provider", "resume prompt", nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	sessionDir, err := agent.SessionDir(dir)
+	if err != nil {
+		t.Fatalf("SessionDir: %v", err)
+	}
+
+	msg := m.resumeSession()
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if msg.Kind == chat.KindError {
+		t.Fatalf("got error: %s", msg.Content)
+	}
+
+	missionState, ok := m.toolState["mission"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected raw mission toolState, got %#v", m.toolState["mission"])
+	}
+	if got := missionState["active_mission_id"]; got != "m_resume_123" {
+		t.Fatalf("active_mission_id=%v, want %q", got, "m_resume_123")
+	}
+
+	os.RemoveAll(filepath.Dir(sessionDir))
+}
+
 func TestVerifyCommandRendersVerificationSummary(t *testing.T) {
 	m := New(&config.Config{Provider: config.ProviderOpenAI, Model: "gpt-5.4"})
 	m.verificationState = uiverification.State{Entries: []uiverification.Entry{

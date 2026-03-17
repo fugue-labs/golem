@@ -291,6 +291,69 @@ func TestMissionStatusKeepsRunningLifecycleWhileSurfacingBlockedTasks(t *testing
 	}
 }
 
+func TestMissionStatusForAttachedStaleRunningMissionShowsRepairableQueue(t *testing.T) {
+	m, ctrl := testMissionModel(t)
+
+	tasks := []mission.Task{{ID: "t_ready", Title: "Repair stale worker lease", Kind: mission.TaskKindCode, Status: mission.TaskReady, Priority: 1, RiskLevel: mission.RiskLow}}
+	missionID := seedMission(t, ctrl, mission.MissionRunning, tasks)
+	m.activeMissionID = missionID
+
+	msg, _ := m.handleMissionCommand("/mission status")
+	for _, want := range []string{
+		"**Status**: running",
+		"**Phase**: Running · ready queue",
+		"**Attention**: 1 ready task(s)",
+		"**Next action**: Next ready task: Repair stale worker lease",
+		"- Ready: Repair stale worker lease",
+	} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("status missing %q\n%s", want, msg.Content)
+		}
+	}
+}
+
+func TestAttachedMissionSupportsStatusTasksPauseAndStart(t *testing.T) {
+	m, ctrl := testMissionModel(t)
+
+	tasks := []mission.Task{{ID: "t_attach", Title: "Reconnect worker lane", Kind: mission.TaskKindCode, Status: mission.TaskReady, Priority: 1, RiskLevel: mission.RiskLow}}
+	missionID := seedMission(t, ctrl, mission.MissionRunning, tasks)
+	m.activeMissionID = missionID
+
+	statusMsg, _ := m.handleMissionCommand("/mission status")
+	if !strings.Contains(statusMsg.Content, missionID) || !strings.Contains(statusMsg.Content, "Reconnect worker lane") {
+		t.Fatalf("expected attached mission status details\n%s", statusMsg.Content)
+	}
+
+	tasksMsg, _ := m.handleMissionCommand("/mission tasks")
+	if !strings.Contains(tasksMsg.Content, "Reconnect worker lane") || !strings.Contains(tasksMsg.Content, "[ready]") {
+		t.Fatalf("expected attached mission task list\n%s", tasksMsg.Content)
+	}
+
+	pauseMsg, _ := m.handleMissionCommand("/mission pause")
+	if !strings.Contains(pauseMsg.Content, "Mission paused") {
+		t.Fatalf("expected pause confirmation\n%s", pauseMsg.Content)
+	}
+	paused, err := ctrl.GetMission(context.Background(), missionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paused.Status != mission.MissionPaused {
+		t.Fatalf("mission status after pause = %s, want %s", paused.Status, mission.MissionPaused)
+	}
+
+	startMsg, _ := m.handleMissionCommand("/mission start")
+	if !strings.Contains(startMsg.Content, "started. Orchestrator resumed mission execution") {
+		t.Fatalf("expected restart confirmation\n%s", startMsg.Content)
+	}
+	resumed, err := ctrl.GetMission(context.Background(), missionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != mission.MissionRunning {
+		t.Fatalf("mission status after restart = %s, want %s", resumed.Status, mission.MissionRunning)
+	}
+}
+
 func TestMissionPanelSummaryTreatsTaskBlockersAsAttentionNotBlockedLifecycle(t *testing.T) {
 	m, ctrl := testMissionModel(t)
 

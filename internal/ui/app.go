@@ -2096,6 +2096,11 @@ func (m *Model) restoreSessionState(session *agent.SessionData, msgs []core.Mode
 			return fmt.Errorf("restoring spec state: %w", err)
 		}
 	}
+	if missionState, ok := session.ToolState["mission"].(map[string]any); ok {
+		if activeMissionID, ok := missionState["active_mission_id"].(string); ok {
+			m.activeMissionID = strings.TrimSpace(activeMissionID)
+		}
+	}
 	m.advanceSpecPhase()
 	m.turnCount = 0
 	return nil

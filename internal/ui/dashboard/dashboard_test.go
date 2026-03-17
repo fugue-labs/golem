@@ -338,6 +338,62 @@ func TestAutoSelectMission(t *testing.T) {
 	}
 }
 
+func TestAutoSelectMissionPrefersPausedOverAwaitingApproval(t *testing.T) {
+	m, ctrl := setupTestDashboard(t)
+	ctx := context.Background()
+
+	paused := createTestMission(t, ctrl)
+	applyTestPlan(t, ctrl, paused.ID)
+	if err := ctrl.ApproveMission(ctx, paused.ID); err != nil {
+		t.Fatalf("approve paused mission: %v", err)
+	}
+	if err := ctrl.StartMission(ctx, paused.ID); err != nil {
+		t.Fatalf("start paused mission: %v", err)
+	}
+	if err := ctrl.PauseMission(ctx, paused.ID); err != nil {
+		t.Fatalf("pause mission: %v", err)
+	}
+
+	awaiting := createTestMission(t, ctrl)
+	applyTestPlan(t, ctrl, awaiting.ID)
+
+	m.missionID = ""
+	msg := m.doRefresh()
+	if rm, ok := msg.(refreshDoneMsg); ok && rm.err != nil {
+		t.Fatalf("refresh error: %v", rm.err)
+	}
+
+	if m.missionID != paused.ID {
+		t.Fatalf("expected paused mission %s to win auto-select, got %s", paused.ID, m.missionID)
+	}
+}
+
+func TestDashboardRefreshKeepsStaleRunningMissionActionable(t *testing.T) {
+	m, ctrl := setupTestDashboard(t)
+	ctx := context.Background()
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	if err := ctrl.ApproveMission(ctx, ms.ID); err != nil {
+		t.Fatalf("approve mission: %v", err)
+	}
+	if err := ctrl.StartMission(ctx, ms.ID); err != nil {
+		t.Fatalf("start mission: %v", err)
+	}
+
+	msg := m.doRefresh()
+	if rm, ok := msg.(refreshDoneMsg); ok && rm.err != nil {
+		t.Fatalf("refresh error: %v", rm.err)
+	}
+
+	view := stripANSITest(viewString(m))
+	for _, want := range []string{"running", "Workers 0 active", "Ready 1 queued", "No active workers", "Mission Control is idle"} {
+		if !containsAny(view, want) {
+			t.Fatalf("expected %q in stale-running dashboard view, got %q", want, truncStr(view, 300))
+		}
+	}
+}
+
 func TestWindowResize(t *testing.T) {
 	m := New("")
 	m.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
