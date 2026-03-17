@@ -7,11 +7,12 @@ This guide explains how Golem chooses a provider, where authentication is loaded
 Golem resolves the active provider in this order:
 
 1. `GOLEM_PROVIDER`
-2. Saved login preference in `~/.golem/config.json`
+2. Saved login provider in `~/.golem/config.json`
 3. Environment-variable auto-detection
-4. Built-in default: `anthropic`
+4. Saved API keys in `~/.golem/credentials.json` or legacy ChatGPT OAuth credentials in `~/.golem/auth.json`
+5. Built-in default: `anthropic`
 
-This precedence comes from `internal/config/config.go`.
+This precedence comes from `internal/config/config.go`. In code, step 2 is the raw provider recorded by `golem login`, while steps 4-5 are handled by `detectProvider()` when no explicit provider or saved login preference is present.
 
 ### Supported provider values
 
@@ -32,15 +33,19 @@ The runtime config currently supports these provider identifiers:
 
 ### Auto-detection rules
 
-If `GOLEM_PROVIDER` is not set and there is no saved login preference, Golem auto-detects a provider from available credentials or endpoint configuration:
+If `GOLEM_PROVIDER` is not set and there is no saved login preference, Golem calls `detectProvider()` and checks for the first matching source in this order:
 
 - `ANTHROPIC_API_KEY` → `anthropic`
 - `OPENAI_API_KEY` → `openai`
 - `XAI_API_KEY`, `GOLEM_BASE_URL`, or `GOLEM_API_KEY` → `openai_compatible`
 - `GOOGLE_APPLICATION_CREDENTIALS` or `VERTEX_PROJECT` → `vertexai`
+- saved API key `anthropic` in `~/.golem/credentials.json` → `anthropic`
+- saved API key `openai` in `~/.golem/credentials.json` → `openai`
+- saved API key `xai` in `~/.golem/credentials.json` → `openai_compatible`
+- legacy ChatGPT OAuth credentials in `~/.golem/auth.json` with auth mode `chatgpt` → `openai`
 - otherwise → `anthropic`
 
-After env-var checks, Golem also considers saved API keys in `~/.golem/credentials.json` and legacy ChatGPT OAuth credentials before falling back to the default.
+That means saved API keys and legacy ChatGPT OAuth credentials are fallback provider-selection signals only when neither `GOLEM_PROVIDER` nor the saved login provider in `config.json` is present.
 
 ## Authentication and credential precedence
 
@@ -164,7 +169,7 @@ Both commands load config, validate it, prepare runtime state, and then render e
 
 - `golem status` prints a short status summary
 - `golem runtime` prints a fuller runtime profile and tool-surface summary
-- `golem status --json` and `golem runtime --json` emit pretty-printed JSON using the same runtime report schema
+- Successful `golem status --json` and `golem runtime --json` responses are pretty-printed JSON using the same runtime report schema
 
 ### JSON behavior
 
@@ -183,7 +188,8 @@ The JSON form includes fields derived from `internal/agent/runtime_report.go`, i
 
 ### Exit codes and failure cases
 
-- If config loading fails and `--json` is used, Golem prints `{"error":"..."}` and exits non-zero
+- If config loading fails and `--json` is used, Golem prints a compact single-object error payload such as `{"error":"..."}` and exits non-zero
+- If config loading succeeds, `status --json` and `runtime --json` pretty-print the `RuntimeReport` payload with indentation
 - If validation fails, Golem still emits the runtime report, including `validation.errors`, then exits with code 1
 - If runtime preparation fails, Golem still emits the report with `runtime_error`, then exits with code 1
 
