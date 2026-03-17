@@ -33,7 +33,7 @@ Primary source of truth: `main.go`
 
 ## 2. Shipped slash commands inside the TUI
 
-Primary source of truth: `internal/ui/app.go` for dispatch, `internal/ui/commands.go` for help copy and command semantics.
+Primary source of truth: `internal/ui/app.go` for top-level dispatch and completion, `internal/ui/commands.go` for general help copy, and `internal/ui/mission_commands.go` for `/mission` subcommand semantics.
 
 ### Slash commands currently dispatched
 
@@ -58,7 +58,7 @@ Primary source of truth: `internal/ui/app.go` for dispatch, `internal/ui/command
 - `/config`
 - `/context`
 - `/team`
-- `/mission [new|status|tasks|plan|approve|start|pause|cancel|list]`
+- `/mission [new|status|tasks|plan|approve|start|pause|cancel|retry [task-id]|list]`
 - `/replay [file|list]`
 - `/spec [file]`
 - `/quit`
@@ -66,19 +66,20 @@ Primary source of truth: `internal/ui/app.go` for dispatch, `internal/ui/command
 
 ### Discoverability / UX contract that docs may claim
 
-Source of truth: `internal/ui/commands.go`, `internal/ui/app.go`, `docs/features.md`
+Source of truth: `internal/ui/commands.go`, `internal/ui/app.go`, `internal/ui/mission_commands.go`, `docs/features.md`
 
 - `/help` is the canonical in-app command list.
 - Slash-command tab completion is shipped.
 - Unknown slash commands are explicitly handled.
 - `/search` without an argument shows usage text including `/search <query>` and examples.
 - Dashboard discoverability is part of help copy: `golem dashboard` is the external Mission Control entrypoint.
+- `/mission help` and bare `/mission` both expose the shipped mission subcommand list, including `/mission retry [task-id]`.
 - Key hints that are safe to document: `Enter`, `Shift+Enter`, `Tab`, `Esc`, `Ctrl+L`, `↑/↓`, `PgUp/PgDn`.
 
 ### Slash-command claims to avoid
 
 - Do **not** document `/mission resume`; shipped resume semantics are `/mission start`, not a separate slash command.
-- Do **not** document `/mission replan`, `/mission retry`, or task escalation commands as shipped.
+- Do **not** document `/mission replan` or task escalation commands as shipped.
 - Do **not** document arbitrary slash commands implied by older prose unless they appear in `internal/ui/app.go` dispatch and `slashCommands` completion list.
 
 ## 3. Provider and authentication surfaces
@@ -223,21 +224,22 @@ Important runtime env/config knobs visible in shipped code:
 
 ## 5. Mission and dashboard surfaces
 
-Primary source of truth: `docs/features.md` for current user-facing mission contract, with entrypoint routing in `main.go` and slash-command help in `internal/ui/commands.go`.
+Primary source of truth: `internal/ui/mission_commands.go` for `/mission` command semantics. Use `docs/features.md` as supporting contract context for lifecycle and dashboard behavior, but not as the primary authority for the current `/mission` subcommand list; entrypoint routing still lives in `main.go` and general help copy in `internal/ui/commands.go`.
 
 ### Shipped mission surfaces
 
 | Surface | Shipped behavior | Source of truth |
 | --- | --- | --- |
-| `/mission new <goal>` | Creates a durable mission in `draft`. | `docs/features.md`, `internal/ui/commands.go` |
-| `/mission status` | Shows durable mission summary with status/phase/attention/next action/focus queues and related counts. | `docs/features.md` |
-| `/mission tasks` | Lists durable task DAG details. | `docs/features.md` |
-| `/mission plan` | Runs planning and moves mission toward `awaiting_approval`. | `docs/features.md` |
-| `/mission approve` | Resolves mission-plan approval and attempts execution if no remaining approvals block start. | `docs/features.md` |
-| `/mission start` | Starts a `paused` mission or an already-approved `awaiting_approval` mission. | `docs/features.md` |
-| `/mission pause` | Stops new task leasing by stopping the in-process orchestrator. | `docs/features.md` |
-| `/mission cancel` | Cancels the mission and clears the active mission from the current TUI session. | `docs/features.md` |
-| `/mission list` | Lists known missions and marks the current session's active mission. | `docs/features.md` |
+| `/mission new <goal>` | Creates a durable mission in `draft`. | `internal/ui/mission_commands.go`, `docs/features.md` |
+| `/mission status` | Shows durable mission summary with status/phase/attention/next action/focus queues and related counts. | `internal/ui/mission_commands.go`, `docs/features.md` |
+| `/mission tasks` | Lists durable task DAG details. | `internal/ui/mission_commands.go`, `docs/features.md` |
+| `/mission plan` | Runs planning and moves mission toward `awaiting_approval`. | `internal/ui/mission_commands.go`, `docs/features.md` |
+| `/mission approve` | Resolves mission-plan approval and attempts execution if no remaining approvals block start. | `internal/ui/mission_commands.go`, `docs/features.md` |
+| `/mission start` | Starts a `paused` mission or an already-approved `awaiting_approval` mission. | `internal/ui/mission_commands.go`, `docs/features.md` |
+| `/mission pause` | Stops new task leasing by stopping the in-process orchestrator. | `internal/ui/mission_commands.go`, `docs/features.md` |
+| `/mission cancel` | Cancels the mission and clears the active mission from the current TUI session. | `internal/ui/mission_commands.go`, `docs/features.md` |
+| `/mission retry [task-id]` | Retries a specific failed/blocked task when an ID is given, or retries all failed/blocked tasks when no ID is given. | `internal/ui/mission_commands.go` |
+| `/mission list` | Lists known missions and marks the current session's active mission. | `internal/ui/mission_commands.go`, `docs/features.md` |
 | `golem dashboard [mission-id]` | Opens Mission Control with Tasks, Workers, Evidence, and Events panes. | `main.go`, `docs/features.md` |
 
 ### Dashboard contract docs may claim
@@ -254,7 +256,7 @@ Source of truth: `docs/features.md`
 - Do **not** document a shipped `golem mission ...` shell-command family.
 - Do **not** treat the dashboard empty-state phrase `run golem mission new` as proof of a shipped CLI command; `docs/features.md` explicitly marks that wording as aspirational UI copy.
 - Do **not** document stricter mission repository precondition enforcement as shipped; `docs/features.md` says `CreateMission` does not yet enforce it.
-- Do **not** document task-scoped retry/replan/escalation controls as shipped.
+- Do **not** document `/mission replan` or task escalation controls as shipped.
 - Do **not** imply a persistent mission daemon is the user-facing execution model; the shipped system is local-first/in-process from the TUI plus durable store-backed status/dashboard surfaces.
 
 ## 6. Automation surfaces
@@ -313,11 +315,12 @@ Primary source of truth: `.github/workflows/ci.yml` and `.github/workflows/relea
 | Documentation surface | Primary source of truth | Secondary/supporting files |
 | --- | --- | --- |
 | Shell command reference | `main.go` | `README.md` |
-| Slash command reference | `internal/ui/app.go`, `internal/ui/commands.go` | `docs/features.md` |
+| Slash command reference | `internal/ui/app.go`, `internal/ui/commands.go` | `internal/ui/mission_commands.go`, `docs/features.md` |
+| Mission command semantics | `internal/ui/mission_commands.go` | `docs/features.md`, `main.go`, `internal/ui/commands.go` |
 | Provider/login docs | `internal/login/login.go` | `internal/config/config.go`, `README.md` |
 | Auth/config precedence docs | `internal/config/config.go` | `internal/agent/runtime_report.go` |
 | Runtime/status docs | `internal/agent/runtime_report.go` | `main.go`, `internal/ui/commands.go` |
-| Mission/dashboard docs | `docs/features.md` | `main.go`, `internal/ui/commands.go` |
+| Mission/dashboard docs | `internal/ui/mission_commands.go` | `docs/features.md`, `main.go`, `internal/ui/commands.go` |
 | Automation docs | `main.go` | `README.md` |
 | CI/release docs | `.github/workflows/ci.yml`, `.github/workflows/release.yml` | `README.md` |
 | High-level marketing/overview copy | `README.md` | this audit, `docs/features.md` |
