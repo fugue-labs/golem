@@ -1,26 +1,26 @@
 # Golem
 
-Golem is a terminal-native coding agent for real repositories.
+**Golem is a terminal-native coding agent for real repositories** — a local-first chat and mission workflow that starts in your shell, understands repo context on launch, and keeps sessions, memory, and durable mission state on your machine.
 
-It gives you a chat-first TUI, repo-aware context, local session history, and durable mission workflows without sending you to a browser-heavy IDE.
+It is built for developers who want an agent that feels like part of the terminal workflow instead of a browser-heavy IDE.
 
 ## Why Golem
 
-Golem is built for people who want an agent that feels like part of the shell, not a separate product.
+Golem front-loads the things that matter in day-to-day repo work:
 
-- **Terminal-native by default** — launch the TUI, type a prompt, use slash commands, and keep working in the same terminal workflow.
-- **Repo-aware on startup** — Golem reads git state, project instructions, saved sessions, runtime config, and local memory before it starts helping.
-- **Operator-friendly surfaces** — help, diagnostics, runtime summaries, cost tracking, verification state, and explicit mission controls are all part of the shipped UX.
-- **Local-first state** — sessions, credentials, memory, missions, and automation config live under `~/.golem/`.
-- **More than one-shot chat** — search older sessions, replay traces, rewind to checkpoints, and manage larger work through durable missions.
+- **Terminal-native by default** — launch a TUI, type prompts, use slash commands, and stay in the shell.
+- **Repo-aware on startup** — Golem reads git state, project instructions, runtime config, saved sessions, and local memory before helping.
+- **Local-first state** — sessions, auth, memory, missions, and automation config live under `~/.golem/`.
+- **Operator-friendly UX** — `/help`, `/doctor`, runtime summaries, cost tracking, verification state, and explicit mission controls are shipped surfaces.
+- **More than one-shot chat** — search earlier sessions, replay traces, rewind checkpoints, and manage bigger work through durable missions.
 
 ## What you can do with Golem
 
 With the shipped CLI and TUI, you can:
 
-- work interactively in a repo with an agent that can read, search, edit, write, list, and run commands,
-- validate setup quickly with `golem status`, `golem runtime`, and `/doctor`,
-- recover earlier work with `/resume`, `/search <query>`, `/replay`, and `/rewind`,
+- work interactively in a repository with an agent that can read, search, edit, write, list, and run commands,
+- check setup and runtime quickly with `golem status`, `golem runtime`, and `/doctor`,
+- recover prior work with `/resume`, `/search <query>`, `/replay`, and `/rewind`,
 - run durable mission workflows from the main TUI with `/mission ...` and inspect them in **Mission Control** with `golem dashboard`,
 - configure local automation workflows with `golem automations ...`.
 
@@ -43,7 +43,7 @@ go build -o golem .
 go install github.com/fugue-labs/golem@latest
 ```
 
-Prefer a prebuilt binary? Download the macOS Apple Silicon (`darwin-arm64`) or Linux x86_64 (`linux-amd64`) archive from this repository's GitHub Releases page.
+Prefer a prebuilt binary? Download the macOS Apple Silicon (`darwin-arm64`) or Linux x86_64 (`linux-amd64`) archive from this repository’s GitHub Releases page.
 
 ## Login and provider setup
 
@@ -64,8 +64,8 @@ golem login xai
 
 What those flows do:
 
-- `chatgpt` uses browser-based OAuth and stores credentials in `~/.golem/auth.json`
-- `anthropic`, `openai`, and `xai` prompt for an API key and store it in `~/.golem/credentials.json`
+- `chatgpt` uses browser-based OAuth and saves credentials in `~/.golem/auth.json`
+- `anthropic`, `openai`, and `xai` prompt for an API key and save it in `~/.golem/credentials.json`
 - successful login saves your provider preference in `~/.golem/config.json`
 
 If you prefer environment variables, Golem also auto-detects credentials at runtime.
@@ -80,9 +80,9 @@ Shipped runtime paths support:
 - **Vertex AI**
 - **Vertex AI Anthropic**
 
-Important distinction: `golem login` supports `chatgpt`, `anthropic`, `openai`, and `xai`. Vertex providers are configured via environment variables.
+Important distinction: `golem login` supports `chatgpt`, `anthropic`, `openai`, and `xai`. Vertex providers are configured through environment variables.
 
-### Useful auth and config env vars
+### Useful auth and config environment variables
 
 | Variable | Purpose |
 | --- | --- |
@@ -209,7 +209,16 @@ Refactor the login flow and keep go test ./... green.
 | `/skills` | List detected skills |
 | `/skill <name>` | Toggle a skill |
 | `/spec [file]` | Start or show a spec workflow |
-| `/mission [new\|status\|tasks\|plan\|approve\|start\|pause\|cancel\|list]` | Run mission workflows |
+| `/mission new <goal>` | Create a new durable mission |
+| `/mission status` | Show the active mission summary |
+| `/mission tasks` | List tasks in the active mission |
+| `/mission plan` | Generate a task DAG for the active mission |
+| `/mission approve` | Approve the pending mission plan |
+| `/mission start` | Start mission execution |
+| `/mission pause` | Pause the active mission |
+| `/mission cancel` | Cancel the active mission |
+| `/mission retry [task-id]` | Retry failed or blocked tasks, or one task by ID |
+| `/mission list` | List known missions |
 | `/quit` or `/exit` | Quit Golem |
 
 ## Durable mission workflow
@@ -223,10 +232,21 @@ For bigger tasks, start in the main TUI:
 /mission plan
 /mission approve
 /mission start
+/mission retry
+/mission retry task-123
 /mission pause
 /mission cancel
 /mission list
 ```
+
+What that flow looks like in practice:
+
+- `/mission new <goal>` creates a durable mission in draft state
+- `/mission plan` generates the task DAG
+- `/mission approve` approves the pending plan
+- `/mission start` starts execution when approvals allow it
+- `/mission retry [task-id]` retries failed or blocked tasks, for all eligible tasks or for one task ID
+- `golem dashboard` opens Mission Control for durable visibility into mission state
 
 Inspect durable mission state in a separate dashboard:
 
@@ -258,35 +278,83 @@ Golem stores local state under `~/.golem/`, including:
 - `sessions/` — saved sessions for resume, search, and replay
 - `memory/` — project-scoped persistent memory
 - `missions.db` — durable mission store
-- `automations.json` — automation config
+- `automations.json` — local automation configuration
 
-On startup, Golem also looks for project instructions in places such as:
+Golem discovers project instructions from:
 
-- `GOLEM.md`
-- `CLAUDE.md`
-- `.golem/instructions.md`
-- `~/.golem/instructions.md`
+1. `GOLEM.md` in the working directory
+2. `CLAUDE.md` in the working directory
+3. `.golem/instructions.md` in the working directory
+4. `~/.golem/instructions.md` for global instructions
+
+Instructions from parent directories up to the git root are also loaded.
 
 ## Where to go next
 
-- **Feature guide:** [`docs/features.md`](docs/features.md)
-- **Documentation/source-of-truth audit:** [`docs/documentation-audit.md`](docs/documentation-audit.md)
-- **Mission orchestration details:** [`docs/mission-orchestration-prd.md`](docs/mission-orchestration-prd.md)
+- **Feature reference:** [`docs/features.md`](docs/features.md)
+- **Mission behavior and orchestration details:** [`docs/mission-orchestration-prd.md`](docs/mission-orchestration-prd.md)
+- **Spec workflow reference:** [`docs/spec-acceptance-checklist.md`](docs/spec-acceptance-checklist.md)
+- **Repository entrypoint:** [`main.go`](main.go)
 
-## Development
+## Typical first-week workflows
 
-Build the project:
-
-```bash
-go build ./...
-```
-
-Run the test suite:
+### Fix something in a repo
 
 ```bash
-go test ./...
+golem
 ```
 
-## Contributing
+Then in the TUI:
 
-Issues and pull requests are welcome. If you change user-visible behavior, keep documentation aligned with the shipped command surfaces and keep `go test ./...` green.
+```text
+/help
+/doctor
+Summarize this repo and identify the riskiest area.
+```
+
+### Recover an earlier fix
+
+```text
+/search loader bug
+/replay list
+/rewind
+```
+
+### Start a larger multi-step task
+
+```text
+/mission new Stabilize the flaky end-to-end suite
+/mission plan
+/mission approve
+/mission start
+```
+
+### Check runtime and cost
+
+```bash
+golem status
+golem runtime
+```
+
+Then in the TUI:
+
+```text
+/runtime
+/cost
+/budget
+```
+
+## Notes on shipped surfaces
+
+This README intentionally documents the currently shipped CLI and slash-command surfaces only.
+
+In particular:
+
+- durable mission control is available through `/mission ...` in the main TUI and `golem dashboard`
+- `golem automations ...` is the shipped automation CLI family
+- `/search <query>` is the supported search entry point for saved sessions
+- mission retry is available as `/mission retry [task-id]`
+
+## License
+
+See the repository for license details.
