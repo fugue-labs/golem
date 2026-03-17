@@ -23,6 +23,10 @@ This repository contains the `golem` CLI and TUI app.
 
 ## Installation
 
+For the full onboarding flow, including provider selection, authentication choices, environment-variable setup, and first-session checks, start with the dedicated guide:
+
+- [Getting started with Golem](docs/getting-started.md)
+
 ### Prerequisites
 
 - Go **1.26+**
@@ -42,45 +46,19 @@ go install github.com/fugue-labs/golem@latest
 
 ## Quick start
 
-### 1. Authenticate
-
-Pick one of the supported providers:
+If you already know how you want to authenticate, the short version is:
 
 ```bash
 golem login
-```
-
-Or log into a specific provider directly:
-
-```bash
-golem login chatgpt
-golem login anthropic
-golem login openai
-golem login xai
-```
-
-`golem login` stores provider preferences in `~/.golem/config.json`. API keys are stored in `~/.golem/credentials.json`. ChatGPT login uses browser-based OAuth and stores credentials in `~/.golem/auth.json`.
-
-If you prefer environment variables, Golem also detects credentials automatically.
-
-### 2. Launch the TUI
-
-```bash
 golem
 ```
 
-Or start with an initial prompt:
-
-```bash
-golem fix the failing tests
-```
-
-### 3. Try the built-in help
-
-Inside the app:
+Inside the app, start with:
 
 ```text
 /help
+/runtime
+/doctor
 ```
 
 Useful first commands:
