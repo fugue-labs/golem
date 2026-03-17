@@ -267,7 +267,7 @@ go test ./...
 
 ## Release notes for this repo
 
-- The module depends on **`github.com/fugue-labs/gollem v0.2.1`**.
+- The module depends on **`github.com/fugue-labs/gollem v0.3.0`**.
 - The previous local `replace` directive has been removed so release builds resolve Gollem from the published module version.
 
 ## Documentation

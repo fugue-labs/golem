@@ -54,6 +54,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
+github.com/fugue-labs/gollem v0.3.0 h1:bLV3812sjj3/nq3KzJdyGw9qmldykEfUYc4/6WqosZY=
+github.com/fugue-labs/gollem v0.3.0/go.mod h1:TgOCoiGTE4THJPyZb+UEl0QtpzYAq69kwhbHbHZq/xg=
 github.com/fugue-labs/monty-go v0.0.0-20260221005309-f9f147b4245f h1:x1ndjBoWknSP+xffrwNMEB5WFitcHflxWqry1frrgIo=
 github.com/fugue-labs/monty-go v0.0.0-20260221005309-f9f147b4245f/go.mod h1:/IEDxFEvHB+vxZCdJTF3pMv6HwSd5LYLthYIH4uI7gg=
 github.com/go-sql-driver/mysql v1.9.3 h1:U/N249h2WzJ3Ukj8SowVFjdtZKfu9vlLZxjPXV1aweo=

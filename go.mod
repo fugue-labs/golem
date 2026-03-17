@@ -12,7 +12,7 @@ require (
 	github.com/charmbracelet/x/exp/charmtone v0.0.0-20260109001716-2fbdffcb221f
 	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260311145557-c83711a11ffa
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/fugue-labs/gollem v0.1.10-0.20260309050238-84dc0900d269
+	github.com/fugue-labs/gollem v0.3.0
 	github.com/fugue-labs/monty-go v0.0.0-20260221005309-f9f147b4245f
 	github.com/go-sql-driver/mysql v1.9.3
 	modernc.org/sqlite v1.46.1
@@ -60,5 +60,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/fugue-labs/gollem => ../gollem
