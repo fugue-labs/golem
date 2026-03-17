@@ -162,33 +162,9 @@ Mission Control should still produce a valid empty state when no missions exist.
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show all commands and keybindings |
-| `/clear` | Clear the conversation transcript |
-| `/plan` | Show the current tracked plan with progress |
-| `/invariants` | Show the invariant checklist with pass/fail status |
-| `/runtime` | Show the effective runtime profile |
-| `/verify` | Show the latest verification summary |
-| `/compact` | Compress conversation context to free up space |
-| `/cost` | Show detailed session cost breakdown |
-| `/replay [file\|list]` | Replay a recorded session trace |
-| `/budget` | Show budget status and limits |
-| `/resume` | Restore the last saved session |
-| `/search <query>` | Search across all saved sessions |
-| `/model [name]` | Show or switch the active model |
-| `/diff` | Show git diff of uncommitted changes |
-| `/undo [path]` | Revert unstaged changes (all files, or a specific path) |
-| `/mission [new\|status\|tasks\|plan\|approve\|start\|pause\|cancel\|list]` | Mission orchestration commands |
-| `/rewind [N]` | Rewind to a saved checkpoint or list checkpoints |
-| `/doctor` | Diagnose setup issues |
-| `/config` | Show effective configuration and environment variables |
-| `/team` | Show team member status |
-| `/context` | Show context window usage |
-| `/skills` | List detected skills |
-| `/skill <name>` | Toggle a skill on or off |
-| `/spec [file]` | Start or show spec-driven development |
-| `/quit` or `/exit` | Quit the app |
+For the authoritative shell-command, slash-command, mission-workflow, and keybinding reference, see [command-reference.md](command-reference.md).
+
+The summary below keeps feature context short and defers command-by-command detail to that reference.
 
 ## Keybindings
 
