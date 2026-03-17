@@ -1,47 +1,31 @@
 # Missions and Mission Control
 
-Golem has two different ways to work:
+Golem has two distinct ways to work:
 
-- **Beginner / short sessions**: open `golem`, ask for a change, and stay in the main chat-first TUI.
-- **Advanced / long-running work**: use the durable **`/mission`** flow and the separate **Mission Control** dashboard.
+- **Beginner / short sessions**: open `golem`, work directly in the main chat-first TUI, and use slash commands like `/help`, `/search <query>`, and `/doctor`.
+- **Advanced / long-running work**: stay in the TUI for control, but switch into the durable **`/mission`** flow and monitor progress in the separate **Mission Control** dashboard.
 
-This guide focuses on the shipped advanced workflow: creating a mission, planning it, approving it, running it, and watching progress in the dashboard.
+This guide covers the shipped advanced workflow only. It is the right guide when you want tracked tasks, explicit approval gates, pause/resume controls, and a monitoring view that survives beyond a single transcript.
 
 If you still need installation or authentication help, start with [Getting started with Golem](getting-started.md).
 
 ## When to use missions
 
-Use a mission when the work is bigger than a single prompt and you want durable state that survives beyond one transcript view. Missions are a better fit when you want to:
+Use a mission when the job is larger than a single prompt and you want durable state instead of a one-off chat exchange. Missions are a better fit when you want to:
 
-- break a larger goal into tracked tasks,
-- inspect progress and blockers,
-- pause and resume work deliberately,
-- review approval state before execution starts, or
-- monitor work from a separate terminal.
+- turn one goal into tracked tasks,
+- inspect mission status and the task graph separately,
+- review approval state before execution starts,
+- pause and later resume work deliberately, or
+- keep a second terminal open on progress while the main TUI remains your control surface.
 
-If you are just getting started, begin with the normal `golem` TUI and `/help`. Move to missions when you need a more operator-driven workflow.
-
-## The shipped mission flow
-
-Inside the main TUI, the shipped mission commands are:
-
-- `/mission new <goal>`
-- `/mission status`
-- `/mission tasks`
-- `/mission plan`
-- `/mission approve`
-- `/mission start`
-- `/mission pause`
-- `/mission cancel`
-- `/mission list`
-
-You can always rediscover the flow from `/help`.
+If you are new to Golem, start with the normal `golem` TUI first. Move to missions when you need a more operator-driven workflow.
 
 ## Beginner path vs advanced path
 
 ### Beginner path
 
-For a quick task, launch Golem and work directly in chat:
+For normal interactive work, launch Golem and stay in chat:
 
 ```bash
 golem
@@ -55,11 +39,11 @@ Useful first commands:
 /doctor
 ```
 
-This is the fastest path when you do not need durable orchestration.
+This path is best when you want a quick coding session and do not need durable orchestration.
 
 ### Advanced path
 
-For longer-running work, stay in the TUI but switch into the mission lifecycle:
+For longer-running work, control the mission from the main TUI and watch it from another terminal:
 
 ```text
 /mission new Build the feature and add verification
@@ -68,15 +52,33 @@ For longer-running work, stay in the TUI but switch into the mission lifecycle:
 /mission start
 ```
 
-Then open the dashboard in another terminal:
+Then open Mission Control separately:
 
 ```bash
 golem dashboard
 ```
 
-## Mission lifecycle
+The main TUI is where you create, approve, start, pause, and cancel missions. The dashboard is where you monitor the durable mission state.
 
-The shipped lifecycle is intentionally explicit.
+## The shipped `/mission` command surface
+
+Inside the main TUI, the shipped mission commands are:
+
+- `/mission new <goal>`
+- `/mission status`
+- `/mission tasks`
+- `/mission plan`
+- `/mission approve`
+- `/mission start`
+- `/mission pause`
+- `/mission cancel`
+- `/mission list`
+
+That is the current operator-facing mission surface. Task-scoped retry, replan, or escalation controls discussed elsewhere in the repo are not the shipped command contract for this guide.
+
+## Shipped mission flow
+
+The shipped mission lifecycle is explicit on purpose: create, plan, approve, start, inspect, then pause or cancel when needed.
 
 ### 1. Create a draft mission
 
@@ -86,9 +88,9 @@ Create a durable mission from the main TUI:
 /mission new <goal>
 ```
 
-This creates the mission in **`draft`** state. At this point the mission exists, but it does not have a task graph yet.
+This creates a mission in **`draft`** state. The mission exists durably, but it does not have a task graph yet.
 
-**Operator expectation:** after creating a mission, the normal next step is `/mission plan`.
+**Operator expectation:** after `/mission new`, the normal next step is `/mission plan`.
 
 ### 2. Plan the mission
 
@@ -98,11 +100,11 @@ Run:
 /mission plan
 ```
 
-Planning moves the mission through the planner and applies a durable task graph. Once the plan is applied, the mission moves to **`awaiting_approval`**.
+Planning invokes the planner, applies a durable task graph, creates durable tasks and dependencies, records a mission-plan approval, and moves the mission to **`awaiting_approval`**.
 
-**Operator expectation:** planning is the normal path from a new draft mission to tracked tasks. If you want to inspect the resulting work, use `/mission status` and `/mission tasks`.
+**Operator expectation:** use planning to turn a goal into the tracked task DAG. After planning, inspect `/mission status` or `/mission tasks` before approving execution.
 
-### 3. Review and approve
+### 3. Approve the plan
 
 Run:
 
@@ -110,9 +112,9 @@ Run:
 /mission approve
 ```
 
-Approval resolves the durable mission-plan approval gate and immediately attempts to start execution. If some other approval still blocks execution, Golem reports that the plan is approved but the mission is still gated.
+Approval resolves the durable mission-plan approval gate and immediately attempts to start execution. If some other approval is still required, Golem reports that the plan is approved but execution is still gated.
 
-**Operator expectation:** approval is not implicit. The mission flow is designed so you can inspect the plan before work begins.
+**Operator expectation:** approval is explicit. The shipped flow is designed so you can inspect the plan before the mission starts running.
 
 ### 4. Start or resume execution
 
@@ -124,41 +126,53 @@ Run:
 
 `/mission start` is used for two shipped cases:
 
-- start an already approved mission that is waiting to run, or
+- start an `awaiting_approval` mission only after the required approvals are already resolved, or
 - resume a mission that is currently **`paused`**.
 
 `/mission start` does **not** bypass approval.
 
-**Operator expectation:** if approval is still pending, approve first.
+**Operator expectation:** if the mission is waiting on approvals, resolve those first. Resume is currently handled by `/mission start`; there is no separate `/mission resume` slash command.
 
-### 5. Inspect progress
+### 5. Inspect durable mission state
 
-Two commands are the main status surfaces in the TUI:
+The two primary in-TUI inspection commands are:
 
 ```text
 /mission status
 /mission tasks
 ```
 
-`/mission status` summarizes durable mission state, including status, phase, next action, attention text, focus information, and related counts.
+`/mission status` is the high-level summary. It reports durable mission state such as:
 
-`/mission tasks` shows the current task DAG details, including task IDs, statuses, titles/objectives, and dependency edges.
+- overall status,
+- phase label,
+- attention text,
+- next action,
+- focus task,
+- queued next task,
+- task-count summaries,
+- active runs,
+- approvals,
+- blocked tasks, and
+- ready or review queues.
 
-**Operator expectation:** use `/mission status` for the high-level answer to “what is happening?” and `/mission tasks` for the detailed answer to “what is the task graph?”
+`/mission tasks` is the task-graph view. It lists the task DAG with task IDs, statuses, titles or objectives, and dependency edges.
 
-### 6. Pause or cancel when needed
+**Operator expectation:** use `/mission status` to answer “what is happening and what needs my attention?” Use `/mission tasks` to answer “what is the current DAG?”
 
-Run either of these from the TUI:
+### 6. Pause or cancel deliberately
+
+From the main TUI, run either:
 
 ```text
 /mission pause
 /mission cancel
 ```
 
-- `/mission pause` stops new task leasing so the mission remains paused.
-- `/mission cancel` cancels the mission and clears the active mission from the current TUI session.
+- `/mission pause` stops the in-process orchestrator so new work is not leased while the mission stays paused.
+- `/mission cancel` stops the in-process orchestrator, marks the mission cancelled, and clears the active mission from the current TUI session.
 
-**Operator expectation:** pausing is the safe control for stopping further execution without throwing away mission state. Cancelling is the terminal stop.
+**Operator expectation:** pause when you want to stop further execution without discarding mission state. Cancel when you want a terminal stop.
 
 ### 7. List known missions
 
@@ -168,11 +182,11 @@ Run:
 /mission list
 ```
 
-This shows known missions and marks the mission that is active in the current chat session.
+This lists known missions and marks the mission that is active in the current chat session.
 
 ## Mission Control dashboard
 
-The dashboard is a separate operator surface for durable missions.
+Mission Control is the separate operator dashboard for durable missions.
 
 Launch it from another terminal:
 
@@ -186,17 +200,17 @@ You can also target a specific mission directly:
 golem dashboard <mission-id>
 ```
 
-### What Mission Control is for
+### What the dashboard is for
 
-Mission Control is the dashboard for long-running mission work. It exists so you can inspect durable mission state even when you are not focused on the main transcript.
+Mission Control exists so you can inspect durable mission state even when the main transcript is not your current focus.
 
-In practice, that means:
+In practice:
 
-- the main TUI is where you create and control missions,
-- the dashboard is where you monitor them, and
-- you can keep the dashboard open in another terminal while work continues.
+- the main TUI is the control surface,
+- `golem dashboard` is the monitoring surface, and
+- keeping both open is the intended advanced workflow for long-running mission work.
 
-If no mission ID is supplied, the dashboard auto-selects the most relevant non-terminal mission. The shipped priority is:
+If you do not supply a mission ID, the dashboard auto-selects the most relevant non-terminal mission in this priority order:
 
 1. `running`
 2. `blocked`
@@ -205,21 +219,18 @@ If no mission ID is supplied, the dashboard auto-selects the most relevant non-t
 5. `planning`
 6. `draft`
 
-## Dashboard layout
+## Dashboard layout and pane purpose
 
-The shipped dashboard layout is:
+The shipped Mission Control layout has a header plus four panes:
 
-- a **Mission Control** header,
-- a mission summary section, and
-- four panes:
-  - **Tasks**
-  - **Workers**
-  - **Evidence**
-  - **Events**
+- **Tasks**
+- **Workers**
+- **Evidence**
+- **Events**
 
 ### Header
 
-The header surfaces operator-facing mission context such as:
+The header is the fast operator summary. It surfaces:
 
 - mission status,
 - task progress,
@@ -231,7 +242,7 @@ The header surfaces operator-facing mission context such as:
 - branch, and
 - worker budget.
 
-This is the fastest place to answer “is the mission healthy, blocked, or waiting on me?”
+Use it to answer the first question quickly: is the mission healthy, blocked, waiting for approval, or actively running?
 
 ### Tasks pane
 
@@ -239,44 +250,83 @@ The **Tasks** pane is the execution map. Use it to understand what work exists, 
 
 ### Workers pane
 
-The **Workers** pane shows current worker activity. Use it to see what is actively being worked on and whether there are active workers at all.
+The **Workers** pane shows worker activity. Use it to see what is currently in progress and whether active workers exist at all.
 
 ### Evidence pane
 
-The **Evidence** pane is where approval and review-related signal shows up. Pending approvals are surfaced here, along with other review results, failures, and recorded artifacts.
+The **Evidence** pane is where approval and review-related signal is surfaced. Pending approvals appear here, along with review results, failures, and recorded artifacts.
 
 ### Events pane
 
-The **Events** pane is the mission timeline. Use it to see durable state changes and operator-relevant activity as the mission progresses.
+The **Events** pane is the timeline view. Use it to follow durable mission events and operator-relevant progress over time.
 
 ## Dashboard navigation
 
-Mission Control is designed to be navigated directly from the keyboard. The shipped navigation hints are:
+Mission Control is keyboard navigable. The shipped hints are:
 
 - `Tab` — switch panes
-- `Shift+Tab` — reverse pane switch
+- `Shift+Tab` — switch panes in reverse
 - `1-4` — jump directly to a pane
 - `j/k` — scroll within the focused pane
 
-These hints also appear in Golem’s help copy so the dashboard remains discoverable from the main shell.
+These same hints are surfaced in `/help`, so the shell continues to teach the dashboard workflow.
 
-## Empty-state behavior
+## Empty-state and persistence expectations
 
-The dashboard is still useful before work starts. If there is no active mission, Mission Control shows an explicit empty state instead of failing silently.
+Mission orchestration is local-first and persistence-backed. The dashboard reads durable mission state directly, so it can attach to existing mission data even when no active chat transcript is open.
 
-The important operator expectation is simple: create a mission from the main TUI with `/mission new`, then reopen or refresh the dashboard.
+When no mission is active, Mission Control still renders a valid empty state with guidance to create one using `/mission new`.
 
-## Operator expectations for long-running work
+That means the advanced workflow is intentionally split:
 
-The mission system is designed for deliberate control, not fire-and-forget magic. The practical expectations are:
+- create and control missions from the main `golem` TUI, and
+- monitor durable progress from `golem dashboard`.
 
-- **You create the mission from the main TUI.**
-- **You plan before execution starts.**
-- **You approve before execution starts.**
-- **You use `/mission start` to begin or resume work.**
-- **You use `/mission status` and `/mission tasks` for in-shell inspection.**
-- **You use `golem dashboard` for a separate monitoring view.**
-- **You pause when you want to stop new work cleanly.**
-- **You cancel when you want to end the mission.**
+## Recommended first advanced workflow
 
-In short: beginners can stay in the main chat flow, while advanced operators can move to durable missions plus Mission Control when they need a longer-running, inspectable workflow.
+If you are trying missions for the first time, use this order:
+
+1. Start the main TUI:
+
+   ```bash
+   golem
+   ```
+
+2. Create the mission:
+
+   ```text
+   /mission new Improve the feature and add tests
+   ```
+
+3. Plan it:
+
+   ```text
+   /mission plan
+   ```
+
+4. Inspect status or tasks:
+
+   ```text
+   /mission status
+   /mission tasks
+   ```
+
+5. Approve it:
+
+   ```text
+   /mission approve
+   ```
+
+6. Start or resume it when appropriate:
+
+   ```text
+   /mission start
+   ```
+
+7. Open Mission Control in another terminal:
+
+   ```bash
+   golem dashboard
+   ```
+
+This keeps beginner work simple while giving advanced operators a clear, durable workflow for long-running repository changes.
