@@ -70,6 +70,11 @@ const (
 	RunLeaseLost RunStatus = "lease_lost"
 )
 
+// IsActive returns true while the run still represents live queued/running work.
+func (s RunStatus) IsActive() bool {
+	return s == RunQueued || s == RunRunning
+}
+
 // RunMode categorizes the type of run.
 type RunMode string
 
@@ -324,6 +329,7 @@ type MissionRecoveryState struct {
 	NewlyReady       int       `json:"newly_ready,omitempty"`
 	OrphanedRunning  bool      `json:"orphaned_running,omitempty"`
 	RepairNeeded     bool      `json:"repair_needed,omitempty"`
+	Current          bool      `json:"current,omitempty"`
 }
 
 // MissionTaskView is a compact task snapshot used in mission summaries.

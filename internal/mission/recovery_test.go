@@ -618,6 +618,57 @@ func TestRecoverMission_UsesLatestRecoveryEventAfterSorting(t *testing.T) {
 	}
 }
 
+func TestRecoverMission_LeaseLostClearsLiveLeaseFields(t *testing.T) {
+	store := newRecoveryMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	heartbeat := past.Add(-5 * time.Minute)
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskRunning}
+	run := &Run{ID: "r1", MissionID: "m1", TaskID: "t1", Status: RunRunning, LeaseOwner: "worker-1", LeaseExpires: &past, HeartbeatAt: &heartbeat}
+	store.runs[run.ID] = run
+	store.runsList = []*Run{run}
+
+	rm := NewMissionRecoveryManager(store, nil, nil)
+	if _, err := rm.RecoverMission(context.Background(), "m1"); err != nil {
+		t.Fatalf("RecoverMission: %v", err)
+	}
+	if run.Status != RunLeaseLost {
+		t.Fatalf("run status = %s, want %s", run.Status, RunLeaseLost)
+	}
+	if run.LeaseOwner != "" {
+		t.Fatalf("lease owner = %q, want empty", run.LeaseOwner)
+	}
+	if run.LeaseExpires != nil {
+		t.Fatalf("lease expires = %v, want nil", run.LeaseExpires)
+	}
+	if run.HeartbeatAt != nil {
+		t.Fatalf("heartbeat = %v, want nil", run.HeartbeatAt)
+	}
+	if run.EndedAt == nil {
+		t.Fatal("expected ended_at to be set")
+	}
+}
+
+func TestRecoveryIsCurrent_IgnoresExpiredLeaseOnFinishedRun(t *testing.T) {
+	now := time.Now().UTC()
+	ended := now.Add(-10 * time.Minute)
+	staleLease := now.Add(24 * time.Hour)
+	summary := &MissionSummary{
+		Mission: &Mission{ID: "m1", Status: MissionRunning, UpdatedAt: now.Add(-30 * time.Minute)},
+		LastStateChangeAt: ended,
+		Recovery: &MissionRecoveryState{LastReconciledAt: now, RepairNeeded: true},
+	}
+	summary.Recovery.Current = recoveryIsCurrent(summary)
+	if !summary.Recovery.Current {
+		t.Fatal("expected recovery to remain current after a finished run")
+	}
+	started := now.Add(-20 * time.Minute)
+	finishedRun := &Run{ID: "r1", Status: RunSucceeded, StartedAt: &started, EndedAt: &ended, LeaseExpires: &staleLease}
+	if got := runStateChangedAt(finishedRun); !got.Equal(ended) {
+		t.Fatalf("runStateChangedAt() = %s, want ended_at %s", got, ended)
+	}
+}
+
 func TestRecoverMission_PropagatesTaskUpdateFailure(t *testing.T) {
 	store := newRecoveryMockStore()
 	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}

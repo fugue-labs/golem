@@ -62,14 +62,7 @@ func (c *Controller) GetMission(ctx context.Context, id string) (*Mission, error
 
 // GetMissionSummary returns an aggregate view of mission state without mutating durable mission health.
 func (c *Controller) GetMissionSummary(ctx context.Context, id string) (*MissionSummary, error) {
-	summary, err := BuildMissionSummary(ctx, c.store, id)
-	if err != nil {
-		return nil, err
-	}
-	if summary != nil {
-		summary.FillDisplayDefaults()
-	}
-	return summary, nil
+	return c.buildMissionSummary(ctx, id)
 }
 
 // ReconcileMissionHealth idempotently repairs durable mission/run/task state so UI callers can trust the returned summary.
@@ -84,6 +77,10 @@ func (c *Controller) ReconcileMissionHealth(ctx context.Context, id string) (*Mi
 			return nil, err
 		}
 	}
+	return c.buildMissionSummary(ctx, id)
+}
+
+func (c *Controller) buildMissionSummary(ctx context.Context, id string) (*MissionSummary, error) {
 	summary, err := BuildMissionSummary(ctx, c.store, id)
 	if err != nil {
 		return nil, err

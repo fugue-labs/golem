@@ -75,7 +75,7 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 	activeRuns := 0
 	lastStateChangeAt := m.UpdatedAt
 	for _, run := range runs {
-		if run.Status == RunQueued || run.Status == RunRunning {
+		if run.Status.IsActive() {
 			activeRuns++
 		}
 		if changedAt := runStateChangedAt(run); changedAt.After(lastStateChangeAt) {
@@ -90,6 +90,9 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 		DependencyEdges:   len(deps),
 		LastStateChangeAt: lastStateChangeAt,
 		Recovery:          latestMissionRecoveryState(events),
+	}
+	if summary.Recovery != nil {
+		summary.Recovery.Current = recoveryIsCurrent(summary)
 	}
 
 	planApproval := latestMissionPlanApproval(approvals)
@@ -214,7 +217,7 @@ func missionHealthState(summary *MissionSummary) (MissionHealthStatus, string) {
 		if summary.ActiveRuns == 0 && summary.TaskCounts.Running > 0 {
 			return MissionHealthRepairNeeded, "Running tasks have no active runs; reconcile mission health before continuing"
 		}
-		if summary.Recovery != nil && summary.Recovery.RepairNeeded && recoveryIsCurrent(summary) {
+		if summary.Recovery != nil && summary.Recovery.RepairNeeded && summary.Recovery.Current {
 			if summary.Recovery.OrphanedRunning {
 				return MissionHealthRepairNeeded, "Recovered orphaned running work; operator should verify resumed execution"
 			}
@@ -235,6 +238,7 @@ func recoveryIsCurrent(summary *MissionSummary) bool {
 	return !summary.Recovery.LastReconciledAt.Before(summary.LastStateChangeAt)
 }
 
+// runStateChangedAt returns the most recent durable state transition timestamp for a run.
 func runStateChangedAt(run *Run) time.Time {
 	if run == nil {
 		return time.Time{}
@@ -243,11 +247,13 @@ func runStateChangedAt(run *Run) time.Time {
 	if run.StartedAt != nil && run.StartedAt.After(latest) {
 		latest = *run.StartedAt
 	}
-	if run.HeartbeatAt != nil && run.HeartbeatAt.After(latest) {
-		latest = *run.HeartbeatAt
-	}
-	if run.LeaseExpires != nil && run.LeaseExpires.After(latest) {
-		latest = *run.LeaseExpires
+	if run.Status.IsActive() {
+		if run.HeartbeatAt != nil && run.HeartbeatAt.After(latest) {
+			latest = *run.HeartbeatAt
+		}
+		if run.LeaseExpires != nil && run.LeaseExpires.After(latest) {
+			latest = *run.LeaseExpires
+		}
 	}
 	if run.EndedAt != nil && run.EndedAt.After(latest) {
 		latest = *run.EndedAt
@@ -470,7 +476,7 @@ func missionPhaseLabel(summary *MissionSummary) string {
 			return awaitingApprovalPhaseLabel(summary)
 		}
 	case MissionRunning:
-		if summary.Recovery != nil && summary.Recovery.RepairNeeded && summary.TaskCounts.Ready == 0 && summary.ActiveRuns == 0 && summary.TaskCounts.Running == 0 && recoveryIsCurrent(summary) {
+		if summary.Recovery != nil && summary.Recovery.RepairNeeded && summary.TaskCounts.Ready == 0 && summary.ActiveRuns == 0 && summary.TaskCounts.Running == 0 && summary.Recovery.Current {
 			return "Running · repair needed"
 		}
 		if summary.TaskCounts.AwaitingReview > 0 {

@@ -175,6 +175,9 @@ func (rm *MissionRecoveryManager) markRunLeaseLost(ctx context.Context, missionI
 		return nil
 	}
 	run.Status = RunLeaseLost
+	run.LeaseOwner = ""
+	run.LeaseExpires = nil
+	run.HeartbeatAt = nil
 	run.EndedAt = &now
 	run.ErrorText = reason
 	if err := rm.store.UpdateRun(ctx, run); err != nil {

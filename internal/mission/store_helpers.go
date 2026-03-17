@@ -288,9 +288,16 @@ func runSortTime(r *Run) *time.Time {
 	if r == nil {
 		return nil
 	}
-	for _, candidate := range []*time.Time{r.StartedAt, r.HeartbeatAt, r.LeaseExpires, r.EndedAt} {
+	for _, candidate := range []*time.Time{r.StartedAt, r.EndedAt} {
 		if candidate != nil && !candidate.IsZero() {
 			return candidate
+		}
+	}
+	if r.Status.IsActive() {
+		for _, candidate := range []*time.Time{r.HeartbeatAt, r.LeaseExpires} {
+			if candidate != nil && !candidate.IsZero() {
+				return candidate
+			}
 		}
 	}
 	return nil
