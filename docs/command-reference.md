@@ -212,15 +212,29 @@ These commands are documented by the in-app help generated in `internal/ui/comma
 | `/skills` | `/skills` | Lists detected skills. |
 | `/skill <name>` | `/skill <name>` | Toggles or activates a named skill in the current session. |
 | `/spec [file]` | `/spec` or `/spec <file>` | Shows the current spec workflow state, or starts/specifies a spec-driven workflow target. |
-| `/mission [new\|status\|tasks\|plan\|approve\|start\|pause\|cancel\|list]` | `/mission ...` | Runs the shipped TUI mission workflow. See the mission section below for semantics. |
+| `/mission` | `/mission`, `/mission help`, or `/mission <subcommand>` | Runs the shipped TUI mission workflow. Bare `/mission` and `/mission help` show the full subcommand surface, including `/mission retry [task-id]`. See the mission section below for semantics. |
 | `/quit` or `/exit` | `/quit` or `/exit` | Quits the app. |
 
 ## Mission workflow reference
 
-The main TUI help intentionally documents the mission workflow as:
+The mission workflow is shipped through the dedicated `/mission` command family inside the main TUI.
+
+- Top-level `/help` currently shows the abbreviated label `/mission [new|status|tasks|plan|approve|start|pause|cancel|list]` as a compact discoverability hint.
+- Bare `/mission` and `/mission help` show the fuller in-app mission help, which includes `/mission retry [task-id]`.
+
+The full shipped subcommand surface is:
 
 ```text
-/mission [new|status|tasks|plan|approve|start|pause|cancel|list]
+/mission new <goal>
+/mission status
+/mission tasks
+/mission plan
+/mission approve
+/mission start
+/mission pause
+/mission cancel
+/mission retry [task-id]
+/mission list
 ```
 
 This is the shipped mission control surface to document for operators.
@@ -237,6 +251,7 @@ These semantics align with `docs/features.md`:
 - `/mission start` does **not** bypass approval. It starts a mission from `paused`, or from `awaiting_approval` only after the plan approval is already approved and no pending approvals remain.
 - `/mission pause` stops new task leasing by pausing the in-process orchestrator.
 - `/mission cancel` stops the orchestrator, marks the mission cancelled, and clears the active mission from the current chat session.
+- `/mission retry [task-id]` retries failed or blocked work. With a task ID, it retries that task; without one, it retries all failed or blocked tasks that are eligible for retry.
 - `/mission list` lists known missions and marks the current active mission in the TUI session.
 - Resume semantics are `/mission start`; there is no separate shipped `/mission resume` slash command.
 
@@ -244,7 +259,7 @@ These semantics align with `docs/features.md`:
 
 `/mission ...` and `golem dashboard` operate on the same durable mission state, but they serve different operator needs:
 
-- use `/mission ...` in the main chat TUI to create, plan, approve, start, pause, cancel, and inspect the active mission
+- use `/mission ...` in the main chat TUI to create, plan, approve, start, pause, cancel, retry, and inspect the active mission
 - use `golem dashboard` to inspect durable mission state outside the chat transcript
 - expect Mission Control to render the header plus **Tasks**, **Workers**, **Evidence**, and **Events** panes
 - expect the dashboard to open into a valid empty state if no mission exists
@@ -282,4 +297,5 @@ Use these implementation files when updating this page:
 
 - `main.go` for shell commands
 - `internal/ui/commands.go` for top-level slash-command help and usage intent
+- `internal/ui/mission_commands.go` for the shipped `/mission` subcommand surface, including retry behavior
 - `docs/features.md` for mission workflow semantics and Mission Control behavior

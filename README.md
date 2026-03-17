@@ -106,29 +106,13 @@ Inside the TUI, common starting points are:
 
 ## Mission Control
 
-Golem includes a durable mission system for longer-running, multi-step work.
-
-From the main TUI you can:
-
-```text
-/mission new Build a REST API with authentication
-/mission status
-/mission tasks
-/mission plan
-/mission approve
-/mission start
-/mission pause
-/mission cancel
-/mission list
-```
-
-You can inspect the same mission state in a dedicated dashboard:
+Golem includes a durable mission system for longer-running, multi-step work. Create and operate missions from the main TUI with `/mission ...`, and inspect the same durable state in Mission Control with:
 
 ```bash
 golem dashboard
 ```
 
-The dashboard shows mission status plus **Tasks**, **Workers**, **Evidence**, and **Events** panes.
+For the full shipped mission slash-command surface, including retry behavior and approval/start semantics, see [docs/command-reference.md](docs/command-reference.md).
 
 ## Configuration
 
