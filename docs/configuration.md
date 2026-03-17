@@ -80,9 +80,12 @@ A successful `golem login` writes files under `~/.golem/`:
 
 For both `vertexai` and `vertexai_anthropic`:
 
-- project: `VERTEX_PROJECT`
-- region: `VERTEX_REGION` with default `us-central1`
-- validation requires both project and region
+- `VERTEX_PROJECT` is required
+- `VERTEX_REGION` defaults to `us-central1`
+- validation always requires a non-empty project ID
+- validation only fails on region if it somehow ends up empty after defaulting
+
+`GOOGLE_APPLICATION_CREDENTIALS` participates in provider auto-detection, but config validation does not require that specific env var. In practice, you still need Google credentials available to the underlying Vertex AI client.
 
 ## Key environment variables
 
@@ -105,6 +108,7 @@ The following variables directly affect provider choice, model/auth setup, or ru
 ### Model and timeout
 
 - `GOLEM_MODEL`
+- `GOLEM_FAST_MODEL` — overrides the fast model used by model routing before file/default routing config is consulted
 - `GOLEM_ROUTER_MODEL`
 - `GOLEM_CHEAP_MODEL` — fallback source for `router_model` when `GOLEM_ROUTER_MODEL` is unset
 - `GOLEM_TIMEOUT`
