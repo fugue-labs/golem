@@ -1,27 +1,28 @@
 # Golem
 
-Golem is a terminal-native coding agent for real software projects. It combines a fast chat-first TUI, repo-aware tooling, mission orchestration, persistent session search, and practical guardrails so you can ship changes without leaving your terminal.
+Golem is a terminal-native coding agent for real repositories: chat with an agent that understands your repo, inspect and edit code from the same interface, recover prior work with session search, and manage longer-running missions without leaving the terminal.
 
 This repository contains the `golem` CLI and TUI app.
 
 ## Why Golem
 
-- **Terminal-first**: chat, inspect files, run workflows, and manage missions without switching tools.
-- **Repo-aware**: understands git state, project instructions, saved sessions, and persistent memory.
-- **Operator-friendly**: slash commands, status summaries, cost tracking, verification state, and a dashboard for long-running work.
-- **Local-first workflows**: missions, sessions, memory, and automations are stored under `~/.golem/`.
-- **Model-flexible**: supports Anthropic, OpenAI, OpenAI-compatible providers such as xAI, and Vertex AI.
+Golem is built for people who want an agent that feels like part of the terminal workflow instead of a separate product.
 
-## Highlights
+- **Chat-first, terminal-native** — start in the TUI, send a prompt, use slash commands, and keep working without context switching.
+- **Repo-aware by default** — Golem reads git state, project instructions, saved sessions, and runtime configuration.
+- **Operator-friendly** — built-in help, diagnostics, runtime/status summaries, cost tracking, verification state, and explicit mission controls.
+- **Local-first state** — sessions, credentials, memory, missions, and automation config live under `~/.golem/`.
+- **More than one-shot chat** — search old sessions, replay traces, rewind to checkpoints, and use durable missions for multi-step work.
 
-- Interactive TUI with transcript, input history, paging, slash-command completion, and cancellation.
-- Built-in code tools for reading, searching, editing, writing, listing, and running commands in your repo.
-- Mission orchestration with durable task planning and a separate **Mission Control** dashboard.
-- Session replay, rewind, resume, and cross-session search.
-- Verification, invariant tracking, budgeting, and per-session cost summaries.
-- Optional automations for webhook- or schedule-driven workflows.
+## What you can do with Golem
 
-## Installation
+- Work interactively in a repo with a coding agent that can read, search, edit, write, list, and run commands.
+- Validate setup quickly with `golem status`, `golem runtime`, and `/doctor`.
+- Recover earlier work with `/resume`, `/search <query>`, `/replay`, and `/rewind`.
+- Run durable mission workflows from the main TUI with `/mission ...` and inspect them in **Mission Control** with `golem dashboard`.
+- Configure local automation workflows with `golem automations ...`.
+
+## Install
 
 ### Prerequisites
 
@@ -34,23 +35,21 @@ This repository contains the `golem` CLI and TUI app.
 go build -o golem .
 ```
 
-You can also install it directly:
+### Install directly
 
 ```bash
 go install github.com/fugue-labs/golem@latest
 ```
 
-## Quick start
+## Authentication and provider setup
 
-### 1. Authenticate
-
-Pick one of the supported providers:
+### Fastest path: `golem login`
 
 ```bash
 golem login
 ```
 
-Or log into a specific provider directly:
+Or choose a specific shipped login flow:
 
 ```bash
 golem login chatgpt
@@ -59,11 +58,68 @@ golem login openai
 golem login xai
 ```
 
-`golem login` stores provider preferences in `~/.golem/config.json`. API keys are stored in `~/.golem/credentials.json`. ChatGPT login uses browser-based OAuth and stores credentials in `~/.golem/auth.json`.
+What these do:
 
-If you prefer environment variables, Golem also detects credentials automatically.
+- `chatgpt` uses browser-based OAuth and stores credentials in `~/.golem/auth.json`
+- `anthropic`, `openai`, and `xai` prompt for an API key and store it in `~/.golem/credentials.json`
+- successful login saves your provider preference in `~/.golem/config.json`
 
-### 2. Launch the TUI
+If you prefer environment variables, Golem also auto-detects credentials at runtime.
+
+### Runtime providers
+
+Shipped runtime paths support:
+
+- **Anthropic**
+- **OpenAI**
+- **OpenAI-compatible / xAI**
+- **Vertex AI**
+- **Vertex AI Anthropic**
+
+Important distinction: `golem login` supports `chatgpt`, `anthropic`, `openai`, and `xai`. Vertex providers are configured via environment variables.
+
+### Useful auth/config env vars
+
+| Variable | Purpose |
+| --- | --- |
+| `GOLEM_PROVIDER` | Explicitly override provider selection |
+| `GOLEM_MODEL` | Override the active model |
+| `GOLEM_BASE_URL` | Custom OpenAI-compatible endpoint |
+| `GOLEM_TIMEOUT` | Request timeout, for example `30m` |
+| `GOLEM_PERMISSION_MODE` | Permission mode such as `suggest` or `auto` |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `XAI_API_KEY` | xAI API key |
+| `VERTEX_PROJECT` | Google Cloud project for Vertex AI |
+| `VERTEX_REGION` | Vertex AI region |
+
+Use `golem status`, `golem runtime`, and `/config` to confirm the effective configuration.
+
+## First successful session
+
+If you want the shortest path from install to a useful first run, do this in a repo:
+
+### 1. Log in
+
+```bash
+golem login
+```
+
+### 2. Confirm your runtime is valid before launching
+
+```bash
+golem status
+golem runtime
+```
+
+Use `--json` if you want machine-readable output:
+
+```bash
+golem status --json
+golem runtime --json
+```
+
+### 3. Launch Golem
 
 ```bash
 golem
@@ -75,94 +131,82 @@ Or start with an initial prompt:
 golem fix the failing tests
 ```
 
-### 3. Try the built-in help
-
-Inside the app:
+### 4. Inside the TUI, run these first
 
 ```text
 /help
+/doctor
+/search <query>
+/mission new Fix the flaky integration tests
 ```
 
-Useful first commands:
+What each one gives you:
 
-- `/help`
-- `/search <query>`
-- `/doctor`
-- `/runtime`
-- `/plan`
-- `/cost`
-- `/mission new <goal>`
+- `/help` — discover commands and keybindings
+- `/doctor` — diagnose auth, repo, instructions, tool availability, and other setup issues
+- `/search <query>` — search across saved sessions for earlier fixes and context
+- `/mission new <goal>` — create a durable mission for larger multi-step work
 
-## Core commands
+If `/search <query>` returns no useful results yet, that is expected on a brand-new setup. It becomes more valuable as Golem saves sessions over time.
 
-### Shell commands
+### 5. Ask for real work
 
-```bash
-golem                     # launch the TUI
-golem login               # interactive provider login
-golem logout              # remove saved local auth/config
-golem status              # one-shot status summary
-golem runtime             # one-shot runtime profile
-golem dashboard           # open Mission Control
-golem automations list    # list configured automations
-golem automations init    # print an example automations config
-golem automations status  # show daemon status
+Examples:
+
+```text
+Summarize this repository and identify the riskiest area.
+Add a failing test for the bug in the session loader.
+Refactor the login flow and keep go test ./... green.
 ```
 
-For machine-readable status output:
+## Core CLI commands
 
-```bash
-golem status --json
-golem runtime --json
-```
+| Command | What it does |
+| --- | --- |
+| `golem` | Launch the main TUI |
+| `golem <prompt>` | Launch the TUI with an initial prompt |
+| `golem login [provider]` | Run the interactive login flow |
+| `golem logout` | Remove saved local auth/config files |
+| `golem status [--json]` | Show a one-shot status summary |
+| `golem runtime [--json]` | Show the effective runtime profile |
+| `golem dashboard [mission-id]` | Open Mission Control |
+| `golem automations [list]` | List configured automations |
+| `golem automations start` | Start the automation daemon |
+| `golem automations status` | Show automation daemon status |
+| `golem automations init` | Print an example automations config |
 
-### In-app slash commands
+`golem logout` removes saved files under `~/.golem/`, but it does **not** clear environment variables.
+
+## Useful slash commands in the TUI
 
 | Command | What it does |
 | --- | --- |
 | `/help` | Show commands and keybindings |
 | `/clear` | Clear the current transcript |
 | `/plan` | Show tracked plan progress |
-| `/invariants` | Show tracked hard/soft constraints |
-| `/runtime` | Show effective runtime configuration |
-| `/verify` | Show latest verification summary |
-| `/compact` | Compress conversation context |
+| `/runtime` | Show the effective runtime profile |
+| `/verify` | Show the latest verification summary |
 | `/cost` | Show session cost summary |
-| `/budget` | Show budget status and fallback info |
+| `/budget` | Show budget status |
 | `/resume` | Restore the last saved session |
 | `/search <query>` | Search across saved sessions |
 | `/model [name]` | Show or switch the active model |
 | `/diff` | Show uncommitted git diff |
-| `/undo [path]` | Revert unstaged changes |
+| `/undo [path]` | Revert an unstaged change |
 | `/replay [file\|list]` | Replay a recorded session trace |
 | `/rewind [N]` | Rewind to a checkpoint or list checkpoints |
 | `/doctor` | Diagnose setup issues |
 | `/config` | Show effective configuration |
-| `/team` | Show team status |
 | `/context` | Show context usage |
 | `/skills` | List detected skills |
 | `/skill <name>` | Toggle a skill |
 | `/spec [file]` | Start or show a spec workflow |
-| `/mission [new\|status\|tasks\|plan\|approve\|start\|pause\|cancel\|list]` | Run mission workflows |
+| `/mission [new\|status\|tasks\|plan\|approve\|start\|pause\|cancel\|retry [task-id]\|list]` | Run mission workflows |
 | `/quit` or `/exit` | Quit Golem |
 
-### Keybindings
+## Mission workflow
 
-| Key | Action |
-| --- | --- |
-| `Enter` | Send message |
-| `Shift+Enter` | Insert newline |
-| `Tab` | Autocomplete slash commands |
-| `Esc` | Cancel the active run |
-| `Ctrl+L` | Clear the transcript |
-| `↑ / ↓` | Recall input history |
-| `PgUp / PgDn` | Scroll the transcript |
-
-## Mission Control
-
-Golem includes a durable mission system for longer-running, multi-step work.
-
-From the main TUI you can:
+For bigger tasks, start in the main TUI:
 
 ```text
 /mission new Build a REST API with authentication
@@ -176,80 +220,50 @@ From the main TUI you can:
 /mission list
 ```
 
-You can inspect the same mission state in a dedicated dashboard:
+You can inspect durable mission state in a separate dashboard:
 
 ```bash
 golem dashboard
 ```
 
-The dashboard shows mission status plus **Tasks**, **Workers**, **Evidence**, and **Events** panes.
+Mission Control shows mission status plus **Tasks**, **Workers**, **Evidence**, and **Events** panes.
 
-## Configuration
+## Keybindings
 
-Golem supports both saved config and environment variables.
-
-### Common environment variables
-
-| Variable | Purpose |
+| Key | Action |
 | --- | --- |
-| `GOLEM_PROVIDER` | Force the provider (`anthropic`, `openai`, `openai_compatible`, `vertexai`, `vertexai_anthropic`) |
-| `GOLEM_MODEL` | Override the active model |
-| `GOLEM_ROUTER_MODEL` | Set a cheaper routing model |
-| `GOLEM_BASE_URL` | Custom OpenAI-compatible endpoint |
-| `GOLEM_TIMEOUT` | Request timeout, e.g. `30m` |
-| `GOLEM_PERMISSION_MODE` | Permission mode, typically `suggest` or `auto` |
-| `GOLEM_TEAM_MODE` | Team mode (`auto`, `on`, `off`) |
-| `GOLEM_SESSION_BUDGET` | Per-session budget in USD |
-| `GOLEM_PROJECT_BUDGET` | Per-project budget in USD |
-| `GOLEM_BUDGET_WARN_PCT` | Budget warning threshold |
-| `GOLEM_FALLBACK_MODEL` | Model to switch to when budget pressure is high |
-| `GOLEM_REASONING_EFFORT` | OpenAI reasoning effort |
-| `GOLEM_THINKING_BUDGET` | Thinking budget for Anthropic / Gemini-style models |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `OPENAI_API_KEY` | OpenAI API key |
-| `OPENAI_BASE_URL` | OpenAI-compatible base URL |
-| `XAI_API_KEY` | xAI API key |
-| `XAI_BASE_URL` | xAI base URL |
-| `VERTEX_PROJECT` | Google Cloud project for Vertex AI |
-| `VERTEX_REGION` | Vertex AI region |
+| `Enter` | Send message |
+| `Shift+Enter` | Insert newline |
+| `Tab` | Autocomplete slash commands |
+| `Esc` | Cancel the active run |
+| `Ctrl+L` | Clear the transcript |
+| `↑ / ↓` | Recall input history |
+| `PgUp / PgDn` | Scroll the transcript |
 
-### Project instructions
-
-On startup, Golem loads project instructions from locations such as:
-
-- `GOLEM.md`
-- `CLAUDE.md`
-- `.golem/instructions.md`
-- `~/.golem/instructions.md`
-
-Parent-directory instructions up to the git root are also considered.
-
-## Local data directory
+## Local data and project instructions
 
 Golem stores local state under `~/.golem/`, including:
 
 - `config.json` — saved provider and budget preferences
-- `credentials.json` — API keys
+- `credentials.json` — saved API keys
 - `auth.json` — ChatGPT OAuth credentials
 - `sessions/` — saved sessions for resume/search/replay
 - `memory/` — project-scoped persistent memory
 - `missions.db` — durable mission store
 - `automations.json` — automation config
 
-## Automations
+On startup, Golem also looks for project instructions in places such as:
 
-Golem can run automation workflows from a local config file:
+- `GOLEM.md`
+- `CLAUDE.md`
+- `.golem/instructions.md`
+- `~/.golem/instructions.md`
 
-```bash
-golem automations init
-```
+## Where to go next
 
-That prints an example `~/.golem/automations.json`. After configuring it, you can inspect the setup with:
-
-```bash
-golem automations list
-golem automations status
-```
+- **User-facing feature guide:** [`docs/features.md`](docs/features.md)
+- **Shipped command and surface audit:** [`docs/documentation-audit.md`](docs/documentation-audit.md)
+- **Mission orchestration details:** [`docs/mission-orchestration-prd.md`](docs/mission-orchestration-prd.md)
 
 ## Development
 
@@ -265,15 +279,6 @@ Run the test suite:
 go test ./...
 ```
 
-## Release notes for this repo
-
-- The module depends on **`github.com/fugue-labs/gollem v0.3.0`**.
-- The previous local `replace` directive has been removed so release builds resolve Gollem from the published module version.
-
-## Documentation
-
-Additional internal documentation lives in `docs/`, including feature notes and implementation specs.
-
 ## Contributing
 
-Issues and pull requests are welcome. If you are working on behavior that affects the terminal UX, mission workflows, or command surfaces, please preserve the existing command contracts and keep `go test ./...` green.
+Issues and pull requests are welcome. If you change user-visible behavior, keep documentation aligned with the shipped command surfaces and keep `go test ./...` green.
