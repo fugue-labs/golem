@@ -68,7 +68,7 @@ Primary source of truth: `internal/ui/app.go` for top-level dispatch and complet
 
 Source of truth: `internal/ui/commands.go`, `internal/ui/app.go`, `internal/ui/mission_commands.go`, `docs/features.md`
 
-- `/help` is the canonical in-app command list.
+- `/help` is the primary in-app discoverability surface. It is safe to document it as the first place users should look for commands and key hints, but not as the canonical complete command registry when dispatch/completion live elsewhere.
 - Slash-command tab completion is shipped.
 - Unknown slash commands are explicitly handled.
 - `/search` without an argument shows usage text including `/search <query>` and examples.
@@ -117,7 +117,7 @@ Provider/auth paths docs may claim:
   - default model: `gpt-5.4`
 - `openai_compatible`
   - runtime path used for xAI/custom compatible endpoints
-  - auth: `GOLEM_API_KEY` or `XAI_API_KEY`
+  - auth: `GOLEM_API_KEY`, `XAI_API_KEY`, or saved `xai` key in `~/.golem/credentials.json`
   - base URL: `GOLEM_BASE_URL`, `XAI_BASE_URL`, or default `https://api.x.ai/v1`
   - default model: `grok-3`
 - `vertexai`
@@ -137,11 +137,11 @@ Source of truth: `internal/config/config.go`, `internal/agent/runtime_report.go`
   - API key
   - ChatGPT subscription (OAuth)
   - missing / will fail at runtime
-- Provider source can be described as one of:
+- Provider source can be described as one of the surfaced values:
   - `GOLEM_PROVIDER`
   - `golem login`
-  - env detection
-  - default
+  - `env`
+  - `default`
 
 ### Provider/auth claims to avoid
 
