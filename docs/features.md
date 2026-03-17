@@ -130,7 +130,8 @@ The current shipped mission contract is:
 - Resume semantics are currently `/mission start`; there is no separate `/mission resume` slash command.
 - `/mission pause` stops new task leasing by stopping the in-process orchestrator.
 - `/mission cancel` transitions the mission to `cancelled` and clears the active mission from the current TUI session.
-- Shipped mission docs should stay centered on `/mission new|status|tasks|plan|approve|start|pause|cancel|list` plus `golem dashboard`; task-scoped retry/replan/escalation controls are not yet a shipped command surface.
+- `/mission retry [task-id]` is a shipped recovery control. With a task ID it retries that failed or blocked task; without a task ID it retries all failed or blocked tasks eligible for retry.
+- Shipped mission docs should stay centered on `/mission new|status|tasks|plan|approve|start|pause|cancel|retry [task-id]|list` plus `golem dashboard`; replanning and escalation controls are not yet a shipped command surface.
 
 ### Mission summary, orchestration, and dashboard behavior
 
