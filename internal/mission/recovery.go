@@ -3,6 +3,7 @@ package mission
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,6 +17,22 @@ type RecoveryReport struct {
 	NewlyReady      int
 	OrphanedRunning bool
 	StateChanged    bool
+}
+
+// ErrMissionRecoveryTerminalState indicates reconciliation was requested for a terminal mission.
+var ErrMissionRecoveryTerminalState = errors.New("mission recovery skipped for terminal mission")
+
+type missionRecoveryTerminalStateError struct {
+	missionID string
+	status    MissionStatus
+}
+
+func (e *missionRecoveryTerminalStateError) Error() string {
+	return fmt.Sprintf("recover: mission %s is in terminal state %s", e.missionID, e.status)
+}
+
+func (e *missionRecoveryTerminalStateError) Unwrap() error {
+	return ErrMissionRecoveryTerminalState
 }
 
 // ReplanRequest represents a pending request to revise the task graph.
@@ -52,7 +69,7 @@ func (rm *MissionRecoveryManager) RecoverMission(ctx context.Context, missionID 
 		return nil, fmt.Errorf("recover: get mission: %w", err)
 	}
 	if m.Status.IsTerminal() {
-		return nil, fmt.Errorf("recover: mission %s is in terminal state %s", missionID, m.Status)
+		return nil, &missionRecoveryTerminalStateError{missionID: missionID, status: m.Status}
 	}
 
 	report := &RecoveryReport{MissionID: missionID}
@@ -535,7 +552,13 @@ func (rm *MissionRecoveryManager) recordRecoveryState(ctx context.Context, missi
 		return err
 	}
 	if last != nil && string(last.PayloadJSON) == string(payloadJSON) {
-		return nil
+		durableChanged, err := rm.hasDurableStateChangesSinceRecoveryEvent(ctx, missionID, last)
+		if err != nil {
+			return err
+		}
+		if !durableChanged {
+			return nil
+		}
 	}
 	return rm.store.AppendEvent(ctx, &Event{
 		MissionID:   missionID,
@@ -543,6 +566,120 @@ func (rm *MissionRecoveryManager) recordRecoveryState(ctx context.Context, missi
 		PayloadJSON: payloadJSON,
 		CreatedAt:   time.Now().UTC(),
 	})
+}
+
+func (rm *MissionRecoveryManager) hasDurableStateChangesSinceRecoveryEvent(ctx context.Context, missionID string, last *Event) (bool, error) {
+	if last == nil {
+		return true, nil
+	}
+	events, err := rm.store.ListEvents(ctx, missionID, 0)
+	if err != nil {
+		return false, err
+	}
+	ordered := append([]*Event(nil), events...)
+	sortEvents(ordered)
+	seenLast := false
+	for _, event := range ordered {
+		if event == nil {
+			continue
+		}
+		if !seenLast {
+			if sameRecoveryEvent(event, last) {
+				seenLast = true
+			}
+			continue
+		}
+		if event.Type != "recovery.completed" {
+			return true, nil
+		}
+	}
+	if seenLast {
+		return false, nil
+	}
+	return rm.hasDurableStateChangesSince(ctx, missionID, last.CreatedAt)
+}
+
+func sameRecoveryEvent(left, right *Event) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	if left.ID != 0 && right.ID != 0 {
+		return left.ID == right.ID
+	}
+	return left.MissionID == right.MissionID &&
+		left.Type == right.Type &&
+		left.CreatedAt.Equal(right.CreatedAt) &&
+		string(left.PayloadJSON) == string(right.PayloadJSON)
+}
+
+func (rm *MissionRecoveryManager) hasDurableStateChangesSince(ctx context.Context, missionID string, since time.Time) (bool, error) {
+	events, err := rm.store.ListEvents(ctx, missionID, 0)
+	if err != nil {
+		return false, err
+	}
+	for _, event := range events {
+		if event == nil || event.Type == "recovery.completed" {
+			continue
+		}
+		if event.CreatedAt.After(since) {
+			return true, nil
+		}
+	}
+
+	mission, err := rm.store.GetMission(ctx, missionID)
+	if err != nil {
+		return false, err
+	}
+	if mission != nil && mission.UpdatedAt.After(since) {
+		return true, nil
+	}
+
+	tasks, err := rm.store.ListTasks(ctx, missionID)
+	if err != nil {
+		return false, err
+	}
+	for _, task := range tasks {
+		if task != nil && task.UpdatedAt.After(since) {
+			return true, nil
+		}
+	}
+
+	runs, err := rm.store.ListRuns(ctx, missionID)
+	if err != nil {
+		return false, err
+	}
+	for _, run := range runs {
+		if run == nil {
+			continue
+		}
+		if changedAt := runStateChangedAt(run); changedAt.After(since) {
+			return true, nil
+		}
+	}
+
+	approvals, err := rm.store.ListApprovals(ctx, missionID)
+	if err != nil {
+		return false, err
+	}
+	for _, approval := range approvals {
+		if approval == nil {
+			continue
+		}
+		if approvalStateChangedAt(approval).After(since) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func approvalStateChangedAt(approval *Approval) time.Time {
+	if approval == nil {
+		return time.Time{}
+	}
+	if approval.ResolvedAt != nil && approval.ResolvedAt.After(approval.CreatedAt) {
+		return *approval.ResolvedAt
+	}
+	return approval.CreatedAt
 }
 
 func (rm *MissionRecoveryManager) latestRecoveryEvent(ctx context.Context, missionID string) (*Event, error) {

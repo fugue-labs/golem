@@ -603,6 +603,49 @@ func TestRecoverMission_IdempotentDoesNotAppendDuplicateRecoveryCompleted(t *tes
 	}
 }
 
+func TestRecoverMission_RepeatsRecoveryCompletedAfterNewDurableStateChange(t *testing.T) {
+	store := newRecoveryMockStore()
+	now := time.Now().UTC()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning, UpdatedAt: now.Add(-2 * time.Minute)}
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskRunning, UpdatedAt: now.Add(-90 * time.Second)}
+	store.runsList = []*Run{{ID: "r1", MissionID: "m1", TaskID: "t1", Status: RunSucceeded, EndedAt: timePtr(now.Add(-80 * time.Second))}}
+
+	rm := NewMissionRecoveryManager(store, nil, nil)
+	if _, err := rm.RecoverMission(context.Background(), "m1"); err != nil {
+		t.Fatalf("first RecoverMission: %v", err)
+	}
+	firstCount := countEventsByType(store.events, "recovery.completed")
+	if firstCount != 1 {
+		t.Fatalf("recovery.completed count after first pass = %d, want 1", firstCount)
+	}
+
+	store.tasks["t1"].Status = TaskRunning
+	store.tasks["t1"].UpdatedAt = time.Now().UTC().Add(1 * time.Second)
+	if err := store.UpdateMission(context.Background(), &Mission{ID: "m1", Status: MissionRunning, UpdatedAt: time.Now().UTC().Add(2 * time.Second)}); err != nil {
+		t.Fatalf("UpdateMission: %v", err)
+	}
+	if _, err := rm.RecoverMission(context.Background(), "m1"); err != nil {
+		t.Fatalf("second RecoverMission after task state change: %v", err)
+	}
+	if got := countEventsByType(store.events, "recovery.completed"); got != 2 {
+		t.Fatalf("recovery.completed count after durable state change = %d, want 2", got)
+	}
+}
+
+func countEventsByType(events []*Event, eventType string) int {
+	count := 0
+	for _, event := range events {
+		if event != nil && event.Type == eventType {
+			count++
+		}
+	}
+	return count
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
+}
+
 func TestRecoverMission_UsesLatestRecoveryEventAfterSorting(t *testing.T) {
 	newer := time.Now().UTC()
 	older := newer.Add(-1 * time.Minute)

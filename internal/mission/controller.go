@@ -68,14 +68,8 @@ func (c *Controller) GetMissionSummary(ctx context.Context, id string) (*Mission
 // ReconcileMissionHealth idempotently repairs durable mission/run/task state so UI callers can trust the returned summary.
 func (c *Controller) ReconcileMissionHealth(ctx context.Context, id string) (*MissionSummary, error) {
 	recovery := NewMissionRecoveryManager(c.store, nil, nil)
-	if _, err := recovery.RecoverMission(ctx, id); err != nil {
-		mission, missionErr := c.store.GetMission(ctx, id)
-		if missionErr != nil {
-			return nil, err
-		}
-		if !mission.Status.IsTerminal() {
-			return nil, err
-		}
+	if _, err := recovery.RecoverMission(ctx, id); err != nil && !errors.Is(err, ErrMissionRecoveryTerminalState) {
+		return nil, err
 	}
 	return c.buildMissionSummary(ctx, id)
 }

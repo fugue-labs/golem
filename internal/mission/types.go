@@ -323,13 +323,18 @@ type MissionSummary struct {
 
 // MissionRecoveryState summarizes the latest durable reconciliation outcome for a mission.
 type MissionRecoveryState struct {
-	LastReconciledAt time.Time `json:"last_reconciled_at,omitempty"`
-	StaleRecovered   int       `json:"stale_recovered,omitempty"`
-	StuckReset       int       `json:"stuck_reset,omitempty"`
-	NewlyReady       int       `json:"newly_ready,omitempty"`
-	OrphanedRunning  bool      `json:"orphaned_running,omitempty"`
-	RepairNeeded     bool      `json:"repair_needed,omitempty"`
-	Current          bool      `json:"current,omitempty"`
+	LastReconciledAt   time.Time `json:"last_reconciled_at,omitempty"`
+	StaleRecovered     int       `json:"stale_recovered,omitempty"`
+	StuckReset         int       `json:"stuck_reset,omitempty"`
+	NewlyReady         int       `json:"newly_ready,omitempty"`
+	OrphanedRunning    bool      `json:"orphaned_running,omitempty"`
+	RepairNeeded       bool      `json:"repair_needed,omitempty"`
+	Current            bool      `json:"current,omitempty"`
+	HealthyRunning     bool      `json:"healthy_running,omitempty"`
+	Paused             bool      `json:"paused,omitempty"`
+	Blocked            bool      `json:"blocked,omitempty"`
+	RepairNeededFlow   bool      `json:"repair_needed_flow,omitempty"`
+	RepairReason       string    `json:"repair_reason,omitempty"`
 }
 
 // MissionTaskView is a compact task snapshot used in mission summaries.
@@ -452,4 +457,5 @@ func (s *MissionSummary) FillDisplayDefaults() {
 	if s.Attention == "" {
 		s.Attention = missionAttention(s)
 	}
+	applyRecoveryFlowState(s)
 }

@@ -152,6 +152,7 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 	}
 
 	summary.HealthStatus, summary.RepairReason = missionHealthState(summary)
+	applyRecoveryFlowState(summary)
 	summary.PhaseLabel = missionPhaseLabel(summary)
 	summary.NextAction = missionNextAction(summary)
 	summary.Attention = missionAttention(summary)
@@ -226,6 +227,17 @@ func missionHealthState(summary *MissionSummary) (MissionHealthStatus, string) {
 		return MissionHealthHealthy, ""
 	}
 	return MissionHealthHealthy, ""
+}
+
+func applyRecoveryFlowState(summary *MissionSummary) {
+	if summary == nil || summary.Recovery == nil || summary.Mission == nil {
+		return
+	}
+	summary.Recovery.RepairReason = summary.RepairReason
+	summary.Recovery.HealthyRunning = summary.Mission.Status == MissionRunning && summary.HealthStatus == MissionHealthHealthy
+	summary.Recovery.Paused = summary.HealthStatus == MissionHealthPaused
+	summary.Recovery.Blocked = summary.HealthStatus == MissionHealthBlockedState
+	summary.Recovery.RepairNeededFlow = summary.HealthStatus == MissionHealthRepairNeeded
 }
 
 func recoveryIsCurrent(summary *MissionSummary) bool {

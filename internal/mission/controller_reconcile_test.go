@@ -153,6 +153,59 @@ func TestControllerReconcileMissionHealth_PropagatesPartialRepairFailure(t *test
 	}
 }
 
+func TestControllerReconcileMissionHealth_IgnoresOnlyTerminalMissionRecoveryError(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryStore()
+	ctrl := NewController(store)
+	now := time.Now().UTC()
+	mission := &Mission{ID: "m-terminal", Title: "Done", Goal: "done", Status: MissionCompleted, CreatedAt: now, UpdatedAt: now, EndedAt: &now}
+	if err := store.CreateMission(ctx, mission); err != nil {
+		t.Fatalf("CreateMission: %v", err)
+	}
+
+	summary, err := ctrl.ReconcileMissionHealth(ctx, mission.ID)
+	if err != nil {
+		t.Fatalf("ReconcileMissionHealth on terminal mission: %v", err)
+	}
+	if summary.Mission == nil || summary.Mission.Status != MissionCompleted {
+		t.Fatalf("summary mission status = %#v", summary.Mission)
+	}
+	if summary.HealthStatus != MissionHealthHealthy {
+		t.Fatalf("health status = %q, want %q", summary.HealthStatus, MissionHealthHealthy)
+	}
+	if summary.Recovery != nil {
+		t.Fatalf("unexpected recovery state on terminal mission: %+v", summary.Recovery)
+	}
+}
+
+func TestControllerReconcileMissionHealth_ReportsPausedSummaryState(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryStore()
+	ctrl := NewController(store)
+	now := time.Now().UTC()
+	mission := &Mission{ID: "m-paused", Title: "Paused", Goal: "pause", Status: MissionPaused, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateMission(ctx, mission); err != nil {
+		t.Fatalf("CreateMission: %v", err)
+	}
+	task := &Task{ID: "t-paused", MissionID: mission.ID, Title: "Resume lane", Kind: TaskKindCode, Status: TaskReady, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	summary, err := ctrl.ReconcileMissionHealth(ctx, mission.ID)
+	if err != nil {
+		t.Fatalf("ReconcileMissionHealth: %v", err)
+	}
+	if summary.HealthStatus != MissionHealthPaused {
+		t.Fatalf("health status = %q, want %q", summary.HealthStatus, MissionHealthPaused)
+	}
+	if summary.Recovery != nil {
+		if !summary.Recovery.Paused || summary.Recovery.Blocked || summary.Recovery.RepairNeededFlow || summary.Recovery.HealthyRunning {
+			t.Fatalf("unexpected paused recovery flow state: %+v", summary.Recovery)
+		}
+	}
+}
+
 func countRecoveryCompletedEvents(events []*Event) int {
 	count := 0
 	for _, event := range events {
