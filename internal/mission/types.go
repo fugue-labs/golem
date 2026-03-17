@@ -282,24 +282,47 @@ type PlanTask struct {
 	RiskLevel          RiskLevel `json:"risk_level"`
 }
 
+// MissionHealthStatus classifies whether durable mission state is healthy or needs operator attention after reconciliation.
+type MissionHealthStatus string
+
+const (
+	MissionHealthHealthy      MissionHealthStatus = "healthy"
+	MissionHealthPaused       MissionHealthStatus = "paused"
+	MissionHealthBlockedState MissionHealthStatus = "blocked"
+	MissionHealthRepairNeeded MissionHealthStatus = "repair_needed"
+)
+
 // MissionSummary provides a concise view of mission state for the TUI.
 type MissionSummary struct {
-	Mission              *Mission          `json:"mission"`
-	TaskCounts           TaskCounts        `json:"task_counts"`
-	ActiveRuns           int               `json:"active_runs"`
-	PendingApprovals     int               `json:"pending_approvals"`
-	DependencyEdges      int               `json:"dependency_edges"`
-	PlanApprovalStatus   ApprovalStatus    `json:"plan_approval_status,omitempty"`
-	PhaseLabel           string            `json:"phase_label,omitempty"`
-	NextAction           string            `json:"next_action,omitempty"`
-	Attention            string            `json:"attention,omitempty"`
-	FocusTask            *MissionTaskView  `json:"focus_task,omitempty"`
-	NextTask             *MissionTaskView  `json:"next_task,omitempty"`
-	RunningTasks         []MissionTaskView `json:"running_tasks,omitempty"`
-	ReviewTasks          []MissionTaskView `json:"review_tasks,omitempty"`
-	ReadyTasks           []MissionTaskView `json:"ready_tasks,omitempty"`
-	BlockedTasks         []MissionTaskView `json:"blocked_tasks,omitempty"`
-	PendingApprovalItems []MissionTaskView `json:"pending_approval_items,omitempty"`
+	Mission              *Mission              `json:"mission"`
+	TaskCounts           TaskCounts            `json:"task_counts"`
+	ActiveRuns           int                   `json:"active_runs"`
+	PendingApprovals     int                   `json:"pending_approvals"`
+	DependencyEdges      int                   `json:"dependency_edges"`
+	PlanApprovalStatus   ApprovalStatus        `json:"plan_approval_status,omitempty"`
+	HealthStatus         MissionHealthStatus   `json:"health_status,omitempty"`
+	RepairReason         string                `json:"repair_reason,omitempty"`
+	Recovery             *MissionRecoveryState `json:"recovery,omitempty"`
+	PhaseLabel           string                `json:"phase_label,omitempty"`
+	NextAction           string                `json:"next_action,omitempty"`
+	Attention            string                `json:"attention,omitempty"`
+	FocusTask            *MissionTaskView      `json:"focus_task,omitempty"`
+	NextTask             *MissionTaskView      `json:"next_task,omitempty"`
+	RunningTasks         []MissionTaskView     `json:"running_tasks,omitempty"`
+	ReviewTasks          []MissionTaskView     `json:"review_tasks,omitempty"`
+	ReadyTasks           []MissionTaskView     `json:"ready_tasks,omitempty"`
+	BlockedTasks         []MissionTaskView     `json:"blocked_tasks,omitempty"`
+	PendingApprovalItems []MissionTaskView     `json:"pending_approval_items,omitempty"`
+}
+
+// MissionRecoveryState summarizes the latest durable reconciliation outcome for a mission.
+type MissionRecoveryState struct {
+	LastReconciledAt time.Time `json:"last_reconciled_at,omitempty"`
+	StaleRecovered   int       `json:"stale_recovered,omitempty"`
+	StuckReset       int       `json:"stuck_reset,omitempty"`
+	NewlyReady       int       `json:"newly_ready,omitempty"`
+	OrphanedRunning  bool      `json:"orphaned_running,omitempty"`
+	RepairNeeded     bool      `json:"repair_needed,omitempty"`
 }
 
 // MissionTaskView is a compact task snapshot used in mission summaries.
@@ -409,6 +432,9 @@ func (s *MissionSummary) PrimaryReadyTask() *MissionTaskView {
 func (s *MissionSummary) FillDisplayDefaults() {
 	if s == nil {
 		return
+	}
+	if s.HealthStatus == "" {
+		s.HealthStatus, s.RepairReason = missionHealthState(s)
 	}
 	if s.PhaseLabel == "" {
 		s.PhaseLabel = missionPhaseLabel(s)

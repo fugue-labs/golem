@@ -11,7 +11,10 @@ import (
 // needed by MissionRecoveryManager (event listing for replan counting).
 type recoveryMockStore struct {
 	integratorMockStore
-	createdTasks []*Task // tracks order of task creation
+	createdTasks  []*Task // tracks order of task creation
+	updateTaskErr error
+	updateRunErr  error
+	appendEventErr error
 }
 
 func newRecoveryMockStore() *recoveryMockStore {
@@ -39,6 +42,30 @@ func (s *recoveryMockStore) ListEvents(_ context.Context, _ string, _ int) ([]*E
 func (s *recoveryMockStore) CreateTask(_ context.Context, t *Task) error {
 	s.tasks[t.ID] = t
 	s.createdTasks = append(s.createdTasks, t)
+	return nil
+}
+
+func (s *recoveryMockStore) UpdateTask(_ context.Context, t *Task) error {
+	if s.updateTaskErr != nil {
+		return s.updateTaskErr
+	}
+	s.tasks[t.ID] = t
+	return nil
+}
+
+func (s *recoveryMockStore) UpdateRun(_ context.Context, r *Run) error {
+	if s.updateRunErr != nil {
+		return s.updateRunErr
+	}
+	s.runs[r.ID] = r
+	return nil
+}
+
+func (s *recoveryMockStore) AppendEvent(_ context.Context, e *Event) error {
+	if s.appendEventErr != nil {
+		return s.appendEventErr
+	}
+	s.events = append(s.events, e)
 	return nil
 }
 
@@ -508,6 +535,9 @@ func TestRecoverMission_StaleRunningMissionOffersReadyQueue(t *testing.T) {
 	if summary.PhaseLabel != "Running · ready queue" {
 		t.Fatalf("phase label = %q", summary.PhaseLabel)
 	}
+	if summary.HealthStatus != MissionHealthRepairNeeded {
+		t.Fatalf("health status = %q, want %q", summary.HealthStatus, MissionHealthRepairNeeded)
+	}
 	if summary.Attention != "1 ready task(s)" {
 		t.Fatalf("attention = %q", summary.Attention)
 	}
@@ -548,6 +578,95 @@ func TestRecoverMission_StaleRunningMissionOffersReadyQueue(t *testing.T) {
 	}
 	if !foundCompleted {
 		t.Fatal("expected recovery.completed event for repairable running mission")
+	}
+}
+
+func TestRecoverMission_IdempotentDoesNotAppendDuplicateRecoveryCompleted(t *testing.T) {
+	store := newRecoveryMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskRunning}
+	store.runsList = []*Run{{ID: "r1", MissionID: "m1", TaskID: "t1", Status: RunSucceeded}}
+
+	rm := NewMissionRecoveryManager(store, nil, nil)
+	if _, err := rm.RecoverMission(context.Background(), "m1"); err != nil {
+		t.Fatalf("first RecoverMission: %v", err)
+	}
+	firstEvents := len(store.events)
+	if firstEvents == 0 {
+		t.Fatal("expected initial recovery events")
+	}
+	if _, err := rm.RecoverMission(context.Background(), "m1"); err != nil {
+		t.Fatalf("second RecoverMission: %v", err)
+	}
+	if got := len(store.events); got != firstEvents {
+		t.Fatalf("event count after idempotent recovery = %d, want %d", got, firstEvents)
+	}
+}
+
+func TestRecoverMission_UsesLatestRecoveryEventAfterSorting(t *testing.T) {
+	newer := time.Now().UTC()
+	older := newer.Add(-1 * time.Minute)
+	state := latestMissionRecoveryState([]*Event{
+		{ID: 20, MissionID: "m1", Type: "recovery.completed", CreatedAt: newer, PayloadJSON: []byte(`{"stale_recovered":"2","stuck_reset":"1","newly_ready":"0","orphaned_running":"true"}`)},
+		{ID: 10, MissionID: "m1", Type: "recovery.completed", CreatedAt: older, PayloadJSON: []byte(`{"stale_recovered":"0","stuck_reset":"0","newly_ready":"1","orphaned_running":"false"}`)},
+	})
+	if state == nil {
+		t.Fatal("expected recovery state")
+	}
+	if state.StaleRecovered != 2 || state.StuckReset != 1 || !state.OrphanedRunning {
+		t.Fatalf("unexpected latest recovery state: %+v", state)
+	}
+}
+
+func TestRecoverMission_PropagatesTaskUpdateFailure(t *testing.T) {
+	store := newRecoveryMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskRunning}
+	store.runsList = []*Run{{ID: "r1", MissionID: "m1", TaskID: "t1", Status: RunSucceeded}}
+	store.updateTaskErr = context.DeadlineExceeded
+
+	rm := NewMissionRecoveryManager(store, nil, nil)
+	_, err := rm.RecoverMission(context.Background(), "m1")
+	if err == nil {
+		t.Fatal("expected error when task update fails")
+	}
+	if !strings.Contains(err.Error(), "reset stuck task t1") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRecoverMission_PropagatesRunUpdateFailure(t *testing.T) {
+	store := newRecoveryMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskRunning}
+	store.runsList = []*Run{{ID: "r1", MissionID: "m1", TaskID: "t1", Status: RunRunning, LeaseExpires: &past}}
+	store.updateRunErr = context.Canceled
+
+	rm := NewMissionRecoveryManager(store, nil, nil)
+	_, err := rm.RecoverMission(context.Background(), "m1")
+	if err == nil {
+		t.Fatal("expected error when run update fails")
+	}
+	if !strings.Contains(err.Error(), "mark run r1 lease lost") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRecoverMission_PropagatesRecoveryEventFailure(t *testing.T) {
+	store := newRecoveryMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning}
+	store.tasks["t1"] = &Task{ID: "t1", MissionID: "m1", Status: TaskRunning}
+	store.runsList = []*Run{{ID: "r1", MissionID: "m1", TaskID: "t1", Status: RunSucceeded}}
+	store.appendEventErr = context.DeadlineExceeded
+
+	rm := NewMissionRecoveryManager(store, nil, nil)
+	_, err := rm.RecoverMission(context.Background(), "m1")
+	if err == nil {
+		t.Fatal("expected error when recovery event append fails")
+	}
+	if !strings.Contains(err.Error(), "record recovery state") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

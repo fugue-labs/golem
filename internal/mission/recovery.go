@@ -10,10 +10,12 @@ import (
 
 // RecoveryReport summarizes what was recovered during a mission restart.
 type RecoveryReport struct {
-	MissionID      string
-	StaleRecovered int
-	StuckReset     int
-	NewlyReady     int
+	MissionID       string
+	StaleRecovered  int
+	StuckReset      int
+	NewlyReady      int
+	OrphanedRunning bool
+	StateChanged    bool
 }
 
 // ReplanRequest represents a pending request to revise the task graph.
@@ -55,50 +57,72 @@ func (rm *MissionRecoveryManager) RecoverMission(ctx context.Context, missionID 
 
 	report := &RecoveryReport{MissionID: missionID}
 
-	// 1. Recover stale workers (delegates to WorkerLauncher.RecoverStaleWorkers).
-	staleRecovered, err := rm.workers.RecoverStaleWorkers(ctx, missionID)
+	staleRecovered, err := rm.recoverStaleRuns(ctx, missionID)
 	if err != nil {
 		return nil, fmt.Errorf("recover: stale workers: %w", err)
 	}
 	report.StaleRecovered = staleRecovered
 
-	// 2. Check for stuck tasks — running tasks with no active run.
-	stuck, err := rm.resetStuckTasks(ctx, missionID)
+	stuck, orphanedRunning, err := rm.resetStuckTasks(ctx, missionID)
 	if err != nil {
 		return nil, fmt.Errorf("recover: stuck tasks: %w", err)
 	}
 	report.StuckReset = stuck
+	report.OrphanedRunning = orphanedRunning
 
-	// 3. Resolve newly ready tasks (tasks whose deps completed while offline).
 	newlyReady, err := rm.resolveNewlyReady(ctx, missionID)
 	if err != nil {
 		return nil, fmt.Errorf("recover: resolve ready: %w", err)
 	}
 	report.NewlyReady = newlyReady
+	report.StateChanged = staleRecovered > 0 || stuck > 0 || newlyReady > 0
 
-	rm.logEvent(ctx, missionID, "", "", "recovery.completed", map[string]string{
-		"stale_recovered": fmt.Sprintf("%d", report.StaleRecovered),
-		"stuck_reset":     fmt.Sprintf("%d", report.StuckReset),
-		"newly_ready":     fmt.Sprintf("%d", report.NewlyReady),
-	})
+	if report.StateChanged {
+		if err := rm.recordRecoveryState(ctx, missionID, report); err != nil {
+			return nil, fmt.Errorf("recover: record recovery state: %w", err)
+		}
+	}
 
 	return report, nil
 }
 
-// resetStuckTasks finds tasks in TaskRunning state that have no active
-// (running) run and resets them to TaskReady.
-func (rm *MissionRecoveryManager) resetStuckTasks(ctx context.Context, missionID string) (int, error) {
-	tasks, err := rm.store.ListTasks(ctx, missionID)
-	if err != nil {
-		return 0, err
-	}
-
+func (rm *MissionRecoveryManager) recoverStaleRuns(ctx context.Context, missionID string) (int, error) {
 	runs, err := rm.store.ListRuns(ctx, missionID)
 	if err != nil {
 		return 0, err
 	}
 
-	// Build set of task IDs that have an active (running) run.
+	now := time.Now().UTC()
+	recovered := 0
+	for _, run := range runs {
+		if run == nil || run.Status != RunRunning {
+			continue
+		}
+		if run.LeaseExpires == nil || run.LeaseExpires.After(now) {
+			continue
+		}
+		if err := rm.markRunLeaseLost(ctx, missionID, run, now, "lease expired"); err != nil {
+			return recovered, err
+		}
+		recovered++
+	}
+	return recovered, nil
+}
+
+// resetStuckTasks finds tasks in TaskRunning/TaskLeased state that have no active
+// (running) run and resets them to TaskReady. It also reports whether a running
+// mission had orphaned work that required repair.
+func (rm *MissionRecoveryManager) resetStuckTasks(ctx context.Context, missionID string) (int, bool, error) {
+	tasks, err := rm.store.ListTasks(ctx, missionID)
+	if err != nil {
+		return 0, false, err
+	}
+
+	runs, err := rm.store.ListRuns(ctx, missionID)
+	if err != nil {
+		return 0, false, err
+	}
+
 	activeTaskIDs := make(map[string]bool)
 	for _, r := range runs {
 		if r.Status == RunRunning && r.TaskID != "" {
@@ -106,28 +130,71 @@ func (rm *MissionRecoveryManager) resetStuckTasks(ctx context.Context, missionID
 		}
 	}
 
+	mission, err := rm.store.GetMission(ctx, missionID)
+	if err != nil {
+		return 0, false, err
+	}
+
 	now := time.Now().UTC()
 	stuck := 0
+	orphanedRunning := false
 	for _, t := range tasks {
-		if t.Status != TaskRunning {
+		if t.Status != TaskRunning && t.Status != TaskLeased {
 			continue
 		}
 		if activeTaskIDs[t.ID] {
-			continue // has an active run, not stuck
-		}
-
-		// Stuck: running state but no active run.
-		t.Status = TaskReady
-		t.UpdatedAt = now
-		if err := rm.store.UpdateTask(ctx, t); err != nil {
 			continue
 		}
 
-		rm.logEvent(ctx, missionID, t.ID, "", "recovery.stuck_task_reset", nil)
+		previousStatus := t.Status
+		if mission.Status == MissionRunning {
+			orphanedRunning = true
+		}
+		t.Status = TaskReady
+		t.UpdatedAt = now
+		if err := rm.store.UpdateTask(ctx, t); err != nil {
+			return stuck, orphanedRunning, fmt.Errorf("reset stuck task %s: %w", t.ID, err)
+		}
+
+		rm.logEvent(ctx, missionID, t.ID, "", "recovery.stuck_task_reset", map[string]string{
+			"previous_status": string(previousStatus),
+		})
 		stuck++
 	}
 
-	return stuck, nil
+	return stuck, orphanedRunning, nil
+}
+
+func (rm *MissionRecoveryManager) markRunLeaseLost(ctx context.Context, missionID string, run *Run, now time.Time, reason string) error {
+	if run == nil {
+		return nil
+	}
+	run.Status = RunLeaseLost
+	run.EndedAt = &now
+	run.ErrorText = reason
+	if err := rm.store.UpdateRun(ctx, run); err != nil {
+		return fmt.Errorf("mark run %s lease lost: %w", run.ID, err)
+	}
+	if run.TaskID != "" {
+		task, err := rm.store.GetTask(ctx, run.TaskID)
+		if err != nil {
+			return fmt.Errorf("get task %s for lease-lost run %s: %w", run.TaskID, run.ID, err)
+		}
+		if task != nil && (task.Status == TaskRunning || task.Status == TaskLeased) {
+			task.Status = TaskReady
+			task.UpdatedAt = now
+			if err := rm.store.UpdateTask(ctx, task); err != nil {
+				return fmt.Errorf("reset task %s after lease loss on run %s: %w", task.ID, run.ID, err)
+			}
+		}
+	}
+	rm.logEvent(ctx, missionID, run.TaskID, run.ID, "worker.lease_lost", map[string]string{
+		"reason": reason,
+	})
+	if rm.worktrees != nil && run.TaskID != "" {
+		_ = rm.worktrees.Release(ctx, run.TaskID)
+	}
+	return nil
 }
 
 // resolveNewlyReady transitions pending tasks whose dependencies are all
@@ -170,7 +237,7 @@ func (rm *MissionRecoveryManager) resolveNewlyReady(ctx context.Context, mission
 			t.Status = TaskReady
 			t.UpdatedAt = now
 			if err := rm.store.UpdateTask(ctx, t); err != nil {
-				continue
+				return promoted, fmt.Errorf("promote task %s to ready: %w", t.ID, err)
 			}
 			promoted++
 		}
@@ -206,7 +273,7 @@ func (rm *MissionRecoveryManager) RequestReplan(ctx context.Context, missionID s
 	}
 
 	rm.logEvent(ctx, missionID, "", "", "replan.requested", map[string]string{
-		"reason":        reason,
+		"reason":         reason,
 		"affected_tasks": strings.Join(affectedTaskIDs, ","),
 	})
 
@@ -403,7 +470,9 @@ func (rm *MissionRecoveryManager) resolveReadyTasks(ctx context.Context, mission
 		if unsatisfied[t.ID] == 0 {
 			t.Status = TaskReady
 			t.UpdatedAt = now
-			rm.store.UpdateTask(ctx, t) //nolint:errcheck
+			if err := rm.store.UpdateTask(ctx, t); err != nil {
+				return fmt.Errorf("resolve ready task %s: %w", t.ID, err)
+			}
 		}
 	}
 
@@ -438,6 +507,51 @@ func (rm *MissionRecoveryManager) ResolveBlockedTask(ctx context.Context, missio
 	})
 
 	return nil
+}
+
+func (rm *MissionRecoveryManager) recordRecoveryState(ctx context.Context, missionID string, report *RecoveryReport) error {
+	if report == nil {
+		return nil
+	}
+	payloadJSON, err := json.Marshal(map[string]string{
+		"stale_recovered":  fmt.Sprintf("%d", report.StaleRecovered),
+		"stuck_reset":      fmt.Sprintf("%d", report.StuckReset),
+		"newly_ready":      fmt.Sprintf("%d", report.NewlyReady),
+		"orphaned_running": fmt.Sprintf("%t", report.OrphanedRunning),
+	})
+	if err != nil {
+		return err
+	}
+	last, err := rm.latestRecoveryEvent(ctx, missionID)
+	if err != nil {
+		return err
+	}
+	if last != nil && string(last.PayloadJSON) == string(payloadJSON) {
+		return nil
+	}
+	return rm.store.AppendEvent(ctx, &Event{
+		MissionID:   missionID,
+		Type:        "recovery.completed",
+		PayloadJSON: payloadJSON,
+		CreatedAt:   time.Now().UTC(),
+	})
+}
+
+func (rm *MissionRecoveryManager) latestRecoveryEvent(ctx context.Context, missionID string) (*Event, error) {
+	events, err := rm.store.ListEvents(ctx, missionID, 0)
+	if err != nil {
+		return nil, err
+	}
+	ordered := append([]*Event(nil), events...)
+	sortEvents(ordered)
+	for i := len(ordered) - 1; i >= 0; i-- {
+		event := ordered[i]
+		if event == nil || event.Type != "recovery.completed" {
+			continue
+		}
+		return event, nil
+	}
+	return nil, nil
 }
 
 // logEvent appends a structured event to the mission event log.

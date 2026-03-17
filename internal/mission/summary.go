@@ -2,6 +2,7 @@ package mission
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -28,6 +29,10 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 		return nil, err
 	}
 	approvals, err := store.ListApprovals(ctx, missionID)
+	if err != nil {
+		return nil, err
+	}
+	events, err := store.ListEvents(ctx, missionID, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +83,7 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 		TaskCounts:      counts,
 		ActiveRuns:      activeRuns,
 		DependencyEdges: len(deps),
+		Recovery:        latestMissionRecoveryState(events),
 	}
 
 	planApproval := latestMissionPlanApproval(approvals)
@@ -133,11 +139,63 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 		summary.NextTask = next
 	}
 
+	summary.HealthStatus, summary.RepairReason = missionHealthState(summary)
 	summary.PhaseLabel = missionPhaseLabel(summary)
 	summary.NextAction = missionNextAction(summary)
 	summary.Attention = missionAttention(summary)
 
 	return summary, nil
+}
+
+func latestMissionRecoveryState(events []*Event) *MissionRecoveryState {
+	ordered := append([]*Event(nil), events...)
+	sortEvents(ordered)
+	for i := len(ordered) - 1; i >= 0; i-- {
+		event := ordered[i]
+		if event == nil || event.Type != "recovery.completed" {
+			continue
+		}
+		state := &MissionRecoveryState{LastReconciledAt: event.CreatedAt}
+		if len(event.PayloadJSON) > 0 {
+			var payload struct {
+				StaleRecovered int  `json:"stale_recovered,string"`
+				StuckReset     int  `json:"stuck_reset,string"`
+				NewlyReady     int  `json:"newly_ready,string"`
+				OrphanedRun    bool `json:"orphaned_running,string"`
+			}
+			if err := json.Unmarshal(event.PayloadJSON, &payload); err == nil {
+				state.StaleRecovered = payload.StaleRecovered
+				state.StuckReset = payload.StuckReset
+				state.NewlyReady = payload.NewlyReady
+				state.OrphanedRunning = payload.OrphanedRun
+			}
+		}
+		state.RepairNeeded = state.OrphanedRunning || state.StaleRecovered > 0 || state.StuckReset > 0
+		return state
+	}
+	return nil
+}
+
+func missionHealthState(summary *MissionSummary) (MissionHealthStatus, string) {
+	if summary == nil || summary.Mission == nil {
+		return "", ""
+	}
+	switch summary.Mission.Status {
+	case MissionPaused:
+		return MissionHealthPaused, ""
+	case MissionBlocked:
+		return MissionHealthBlockedState, ""
+	}
+	if summary.Recovery != nil && summary.Recovery.RepairNeeded {
+		if summary.Recovery.OrphanedRunning {
+			return MissionHealthRepairNeeded, "Recovered orphaned running work; operator should verify resumed execution"
+		}
+		return MissionHealthRepairNeeded, "Recovered stale mission work; verify the ready queue before continuing"
+	}
+	if summary.Mission.Status == MissionRunning && summary.ActiveRuns == 0 && summary.TaskCounts.Running > 0 {
+		return MissionHealthRepairNeeded, "Running tasks have no active runs; reconcile mission health before continuing"
+	}
+	return MissionHealthHealthy, ""
 }
 
 func approvalDisplayTitle(approval *Approval, taskByID map[string]*Task) string {
@@ -355,6 +413,9 @@ func missionPhaseLabel(summary *MissionSummary) string {
 			return awaitingApprovalPhaseLabel(summary)
 		}
 	case MissionRunning:
+		if summary.Recovery != nil && summary.Recovery.RepairNeeded && summary.TaskCounts.Ready == 0 && summary.ActiveRuns == 0 {
+			return "Running · repair needed"
+		}
 		if summary.TaskCounts.AwaitingReview > 0 {
 			return "Running · review"
 		}
