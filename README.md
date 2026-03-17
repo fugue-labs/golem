@@ -81,68 +81,28 @@ Useful first commands:
 
 ## Core commands
 
-### Shell commands
+For the authoritative shell-command, slash-command, mission-workflow, and keybinding reference, see [docs/command-reference.md](docs/command-reference.md).
+
+A few common entrypoints:
 
 ```bash
-golem                     # launch the TUI
-golem login               # interactive provider login
-golem logout              # remove saved local auth/config
-golem status              # one-shot status summary
-golem runtime             # one-shot runtime profile
-golem dashboard           # open Mission Control
-golem automations list    # list configured automations
-golem automations init    # print an example automations config
-golem automations status  # show daemon status
-```
-
-For machine-readable status output:
-
-```bash
+golem
+golem login
 golem status --json
 golem runtime --json
+golem dashboard
+golem automations list
 ```
 
-### In-app slash commands
+Inside the TUI, common starting points are:
 
-| Command | What it does |
-| --- | --- |
-| `/help` | Show commands and keybindings |
-| `/clear` | Clear the current transcript |
-| `/plan` | Show tracked plan progress |
-| `/invariants` | Show tracked hard/soft constraints |
-| `/runtime` | Show effective runtime configuration |
-| `/verify` | Show latest verification summary |
-| `/compact` | Compress conversation context |
-| `/cost` | Show session cost summary |
-| `/budget` | Show budget status and fallback info |
-| `/resume` | Restore the last saved session |
-| `/search <query>` | Search across saved sessions |
-| `/model [name]` | Show or switch the active model |
-| `/diff` | Show uncommitted git diff |
-| `/undo [path]` | Revert unstaged changes |
-| `/replay [file\|list]` | Replay a recorded session trace |
-| `/rewind [N]` | Rewind to a checkpoint or list checkpoints |
-| `/doctor` | Diagnose setup issues |
-| `/config` | Show effective configuration |
-| `/team` | Show team status |
-| `/context` | Show context usage |
-| `/skills` | List detected skills |
-| `/skill <name>` | Toggle a skill |
-| `/spec [file]` | Start or show a spec workflow |
-| `/mission [new\|status\|tasks\|plan\|approve\|start\|pause\|cancel\|list]` | Run mission workflows |
-| `/quit` or `/exit` | Quit Golem |
-
-### Keybindings
-
-| Key | Action |
-| --- | --- |
-| `Enter` | Send message |
-| `Shift+Enter` | Insert newline |
-| `Tab` | Autocomplete slash commands |
-| `Esc` | Cancel the active run |
-| `Ctrl+L` | Clear the transcript |
-| `↑ / ↓` | Recall input history |
-| `PgUp / PgDn` | Scroll the transcript |
+- `/help`
+- `/search <query>`
+- `/doctor`
+- `/runtime`
+- `/plan`
+- `/cost`
+- `/mission new <goal>`
 
 ## Mission Control
 
