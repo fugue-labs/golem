@@ -299,6 +299,7 @@ type MissionSummary struct {
 	ActiveRuns           int                   `json:"active_runs"`
 	PendingApprovals     int                   `json:"pending_approvals"`
 	DependencyEdges      int                   `json:"dependency_edges"`
+	LastStateChangeAt    time.Time             `json:"last_state_change_at,omitempty"`
 	PlanApprovalStatus   ApprovalStatus        `json:"plan_approval_status,omitempty"`
 	HealthStatus         MissionHealthStatus   `json:"health_status,omitempty"`
 	RepairReason         string                `json:"repair_reason,omitempty"`

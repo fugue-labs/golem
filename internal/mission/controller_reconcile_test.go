@@ -48,6 +48,51 @@ func TestControllerReconcileMissionHealth_RepairsOrphanedRunningTask(t *testing.
 	}
 }
 
+func TestControllerGetMissionSummary_DoesNotAutoReconcile(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryStore()
+	ctrl := NewController(store)
+	now := time.Now().UTC()
+
+	mission := &Mission{ID: "m-summary", Title: "Inspect stale lane", Goal: "inspect", Status: MissionRunning, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateMission(ctx, mission); err != nil {
+		t.Fatalf("CreateMission: %v", err)
+	}
+	task := &Task{ID: "t-summary", MissionID: mission.ID, Title: "Reconnect worker lane", Kind: TaskKindCode, Status: TaskRunning, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	run := &Run{ID: "r-summary", MissionID: mission.ID, TaskID: task.ID, Mode: RunModeWorker, Status: RunSucceeded}
+	if err := store.CreateRun(ctx, run); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	summary, err := ctrl.GetMissionSummary(ctx, mission.ID)
+	if err != nil {
+		t.Fatalf("GetMissionSummary: %v", err)
+	}
+	if summary.HealthStatus != MissionHealthRepairNeeded {
+		t.Fatalf("health status = %q, want %q", summary.HealthStatus, MissionHealthRepairNeeded)
+	}
+	if summary.Recovery != nil {
+		t.Fatalf("unexpected recovery state without explicit reconciliation: %+v", summary.Recovery)
+	}
+	updatedTask, err := store.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if updatedTask.Status != TaskRunning {
+		t.Fatalf("task status after GetMissionSummary = %s, want %s", updatedTask.Status, TaskRunning)
+	}
+	events, err := store.ListEvents(ctx, mission.ID, 0)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if got := countRecoveryCompletedEvents(events); got != 0 {
+		t.Fatalf("recovery.completed count after GetMissionSummary = %d, want 0", got)
+	}
+}
+
 func TestControllerReconcileMissionHealth_IdempotentRecoveryEvent(t *testing.T) {
 	ctx := context.Background()
 	store := NewInMemoryStore()

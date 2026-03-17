@@ -60,9 +60,9 @@ func (c *Controller) GetMission(ctx context.Context, id string) (*Mission, error
 	return c.store.GetMission(ctx, id)
 }
 
-// GetMissionSummary returns an aggregate view of mission state.
+// GetMissionSummary returns an aggregate view of mission state without mutating durable mission health.
 func (c *Controller) GetMissionSummary(ctx context.Context, id string) (*MissionSummary, error) {
-	summary, err := c.ReconcileMissionHealth(ctx, id)
+	summary, err := BuildMissionSummary(ctx, c.store, id)
 	if err != nil {
 		return nil, err
 	}

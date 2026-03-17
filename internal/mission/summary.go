@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // BuildMissionSummary derives a mission summary from durable mission, task,
@@ -72,18 +73,23 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 	}
 
 	activeRuns := 0
+	lastStateChangeAt := m.UpdatedAt
 	for _, run := range runs {
 		if run.Status == RunQueued || run.Status == RunRunning {
 			activeRuns++
 		}
+		if changedAt := runStateChangedAt(run); changedAt.After(lastStateChangeAt) {
+			lastStateChangeAt = changedAt
+		}
 	}
 
 	summary := &MissionSummary{
-		Mission:         m,
-		TaskCounts:      counts,
-		ActiveRuns:      activeRuns,
-		DependencyEdges: len(deps),
-		Recovery:        latestMissionRecoveryState(events),
+		Mission:           m,
+		TaskCounts:        counts,
+		ActiveRuns:        activeRuns,
+		DependencyEdges:   len(deps),
+		LastStateChangeAt: lastStateChangeAt,
+		Recovery:          latestMissionRecoveryState(events),
 	}
 
 	planApproval := latestMissionPlanApproval(approvals)
@@ -98,6 +104,9 @@ func BuildMissionSummary(ctx context.Context, store Store, missionID string) (*M
 			Status:         task.Status,
 			BlockingReason: task.BlockingReason,
 			DependsOn:      append([]string(nil), depMap[task.ID]...),
+		}
+		if task.UpdatedAt.After(summary.LastStateChangeAt) {
+			summary.LastStateChangeAt = task.UpdatedAt
 		}
 		switch task.Status {
 		case TaskRunning, TaskLeased:
@@ -185,17 +194,65 @@ func missionHealthState(summary *MissionSummary) (MissionHealthStatus, string) {
 		return MissionHealthPaused, ""
 	case MissionBlocked:
 		return MissionHealthBlockedState, ""
-	}
-	if summary.Recovery != nil && summary.Recovery.RepairNeeded {
-		if summary.Recovery.OrphanedRunning {
-			return MissionHealthRepairNeeded, "Recovered orphaned running work; operator should verify resumed execution"
+	case MissionAwaitingApproval:
+		if blocker := awaitingApprovalBlocker(summary); blocker != "" {
+			return MissionHealthBlockedState, blocker
 		}
-		return MissionHealthRepairNeeded, "Recovered stale mission work; verify the ready queue before continuing"
-	}
-	if summary.Mission.Status == MissionRunning && summary.ActiveRuns == 0 && summary.TaskCounts.Running > 0 {
-		return MissionHealthRepairNeeded, "Running tasks have no active runs; reconcile mission health before continuing"
+		return MissionHealthHealthy, ""
+	case MissionRunning:
+		if summary.TaskCounts.Blocked > 0 {
+			if blocked := summary.PrimaryBlockedTask(); blocked != nil {
+				if blocked.BlockingReason != "" {
+					return MissionHealthBlockedState, blocked.BlockingReason
+				}
+				if blocked.Title != "" {
+					return MissionHealthBlockedState, fmt.Sprintf("Blocked by task %s", blocked.Title)
+				}
+			}
+			return MissionHealthBlockedState, fmt.Sprintf("%d blocked task(s) require operator attention", summary.TaskCounts.Blocked)
+		}
+		if summary.ActiveRuns == 0 && summary.TaskCounts.Running > 0 {
+			return MissionHealthRepairNeeded, "Running tasks have no active runs; reconcile mission health before continuing"
+		}
+		if summary.Recovery != nil && summary.Recovery.RepairNeeded && recoveryIsCurrent(summary) {
+			if summary.Recovery.OrphanedRunning {
+				return MissionHealthRepairNeeded, "Recovered orphaned running work; operator should verify resumed execution"
+			}
+			return MissionHealthRepairNeeded, "Recovered stale mission work; verify the ready queue before continuing"
+		}
+		return MissionHealthHealthy, ""
 	}
 	return MissionHealthHealthy, ""
+}
+
+func recoveryIsCurrent(summary *MissionSummary) bool {
+	if summary == nil || summary.Recovery == nil {
+		return false
+	}
+	if summary.LastStateChangeAt.IsZero() {
+		return true
+	}
+	return !summary.Recovery.LastReconciledAt.Before(summary.LastStateChangeAt)
+}
+
+func runStateChangedAt(run *Run) time.Time {
+	if run == nil {
+		return time.Time{}
+	}
+	latest := time.Time{}
+	if run.StartedAt != nil && run.StartedAt.After(latest) {
+		latest = *run.StartedAt
+	}
+	if run.HeartbeatAt != nil && run.HeartbeatAt.After(latest) {
+		latest = *run.HeartbeatAt
+	}
+	if run.LeaseExpires != nil && run.LeaseExpires.After(latest) {
+		latest = *run.LeaseExpires
+	}
+	if run.EndedAt != nil && run.EndedAt.After(latest) {
+		latest = *run.EndedAt
+	}
+	return latest
 }
 
 func approvalDisplayTitle(approval *Approval, taskByID map[string]*Task) string {
@@ -413,7 +470,7 @@ func missionPhaseLabel(summary *MissionSummary) string {
 			return awaitingApprovalPhaseLabel(summary)
 		}
 	case MissionRunning:
-		if summary.Recovery != nil && summary.Recovery.RepairNeeded && summary.TaskCounts.Ready == 0 && summary.ActiveRuns == 0 {
+		if summary.Recovery != nil && summary.Recovery.RepairNeeded && summary.TaskCounts.Ready == 0 && summary.ActiveRuns == 0 && summary.TaskCounts.Running == 0 && recoveryIsCurrent(summary) {
 			return "Running · repair needed"
 		}
 		if summary.TaskCounts.AwaitingReview > 0 {

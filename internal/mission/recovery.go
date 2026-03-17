@@ -57,18 +57,19 @@ func (rm *MissionRecoveryManager) RecoverMission(ctx context.Context, missionID 
 
 	report := &RecoveryReport{MissionID: missionID}
 
-	staleRecovered, err := rm.recoverStaleRuns(ctx, missionID)
+	staleRecovered, staleOrphanedRunning, err := rm.recoverStaleRuns(ctx, missionID)
 	if err != nil {
 		return nil, fmt.Errorf("recover: stale workers: %w", err)
 	}
 	report.StaleRecovered = staleRecovered
+	report.OrphanedRunning = staleOrphanedRunning
 
-	stuck, orphanedRunning, err := rm.resetStuckTasks(ctx, missionID)
+	stuck, stuckOrphanedRunning, err := rm.resetStuckTasks(ctx, missionID)
 	if err != nil {
 		return nil, fmt.Errorf("recover: stuck tasks: %w", err)
 	}
 	report.StuckReset = stuck
-	report.OrphanedRunning = orphanedRunning
+	report.OrphanedRunning = report.OrphanedRunning || stuckOrphanedRunning
 
 	newlyReady, err := rm.resolveNewlyReady(ctx, missionID)
 	if err != nil {
@@ -86,14 +87,15 @@ func (rm *MissionRecoveryManager) RecoverMission(ctx context.Context, missionID 
 	return report, nil
 }
 
-func (rm *MissionRecoveryManager) recoverStaleRuns(ctx context.Context, missionID string) (int, error) {
+func (rm *MissionRecoveryManager) recoverStaleRuns(ctx context.Context, missionID string) (int, bool, error) {
 	runs, err := rm.store.ListRuns(ctx, missionID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	now := time.Now().UTC()
 	recovered := 0
+	orphanedRunning := false
 	for _, run := range runs {
 		if run == nil || run.Status != RunRunning {
 			continue
@@ -101,12 +103,15 @@ func (rm *MissionRecoveryManager) recoverStaleRuns(ctx context.Context, missionI
 		if run.LeaseExpires == nil || run.LeaseExpires.After(now) {
 			continue
 		}
+		if run.TaskID != "" {
+			orphanedRunning = true
+		}
 		if err := rm.markRunLeaseLost(ctx, missionID, run, now, "lease expired"); err != nil {
-			return recovered, err
+			return recovered, orphanedRunning, err
 		}
 		recovered++
 	}
-	return recovered, nil
+	return recovered, orphanedRunning, nil
 }
 
 // resetStuckTasks finds tasks in TaskRunning/TaskLeased state that have no active
