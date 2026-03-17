@@ -838,6 +838,83 @@ func TestMissionLifecycle(t *testing.T) {
 	t.Logf("Final summary: %d tasks total, %d integrated, %d active runs",
 		summary.TaskCounts.Total, summary.TaskCounts.Integrated, summary.ActiveRuns)
 
+	// -----------------------------------------------------------------------
+	// 11. Pause and restart a pre-existing mission after reopening.
+	// -----------------------------------------------------------------------
+	reopenedCtrl := NewController(store)
+	reattach, err := reopenedCtrl.GetMission(ctx, mission.ID)
+	if err != nil {
+		t.Fatalf("GetMission for reattach: %v", err)
+	}
+	if reattach.Status != MissionCompleted {
+		t.Fatalf("expected completed mission before reset, got %s", reattach.Status)
+	}
+	reatachReadyTask := &Task{
+		ID:        "t_reattach_ready",
+		MissionID: mission.ID,
+		Title:     "Reconnect reopened worker lane",
+		Kind:      TaskKindCode,
+		Status:    TaskReady,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateTask(ctx, reatachReadyTask); err != nil {
+		t.Fatalf("CreateTask reattach ready task: %v", err)
+	}
+	reattach.UpdatedAt = time.Now().UTC()
+	reattach.EndedAt = nil
+	reattach.Status = MissionRunning
+	if err := store.UpdateMission(ctx, reattach); err != nil {
+		t.Fatalf("UpdateMission for reattach: %v", err)
+	}
+
+	reopenedPauseCtrl := NewController(store)
+	if err := reopenedPauseCtrl.PauseMission(ctx, mission.ID); err != nil {
+		t.Fatalf("PauseMission on reattached mission: %v", err)
+	}
+	pausedMission, err := reopenedPauseCtrl.GetMission(ctx, mission.ID)
+	if err != nil {
+		t.Fatalf("GetMission after pause: %v", err)
+	}
+	if pausedMission.Status != MissionPaused {
+		t.Fatalf("mission status after pause = %s, want %s", pausedMission.Status, MissionPaused)
+	}
+	pausedSummary, err := reopenedPauseCtrl.GetMissionSummary(ctx, mission.ID)
+	if err != nil {
+		t.Fatalf("GetMissionSummary after pause: %v", err)
+	}
+	if pausedSummary.PhaseLabel != "Paused" {
+		t.Fatalf("paused phase label = %q", pausedSummary.PhaseLabel)
+	}
+	if pausedSummary.NextAction != "Resume mission execution with /mission start" {
+		t.Fatalf("paused next action = %q", pausedSummary.NextAction)
+	}
+	if pausedSummary.FocusTask == nil || pausedSummary.FocusTask.ID != reatachReadyTask.ID {
+		t.Fatalf("paused focus task = %#v, want %s", pausedSummary.FocusTask, reatachReadyTask.ID)
+	}
+
+	reopenedStartCtrl := NewController(store)
+	if err := reopenedStartCtrl.StartMission(ctx, mission.ID); err != nil {
+		t.Fatalf("StartMission from paused reattach: %v", err)
+	}
+	resumedMission, err := reopenedStartCtrl.GetMission(ctx, mission.ID)
+	if err != nil {
+		t.Fatalf("GetMission after restart: %v", err)
+	}
+	if resumedMission.Status != MissionRunning {
+		t.Fatalf("mission status after restart = %s, want %s", resumedMission.Status, MissionRunning)
+	}
+	resumedSummary, err := reopenedStartCtrl.GetMissionSummary(ctx, mission.ID)
+	if err != nil {
+		t.Fatalf("GetMissionSummary after restart: %v", err)
+	}
+	if resumedSummary.PhaseLabel != "Running · ready queue" {
+		t.Fatalf("resumed phase label = %q", resumedSummary.PhaseLabel)
+	}
+	if resumedSummary.NextAction != "Next ready task: Reconnect reopened worker lane" {
+		t.Fatalf("resumed next action = %q", resumedSummary.NextAction)
+	}
+
 	// Verify events were recorded throughout the lifecycle.
 	events, err := store.ListEvents(ctx, mission.ID, 100)
 	if err != nil {

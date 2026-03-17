@@ -464,6 +464,93 @@ func TestResolveBlockedTask_NotFound(t *testing.T) {
 	}
 }
 
+func TestRecoverMission_StaleRunningMissionOffersReadyQueue(t *testing.T) {
+	store := newRecoveryMockStore()
+	store.missions["m1"] = &Mission{ID: "m1", Status: MissionRunning, Goal: "Repair stale worker execution"}
+
+	stuckTask := &Task{
+		ID:        "t_repair",
+		MissionID: "m1",
+		Title:     "Repair stale worker lease",
+		Status:    TaskRunning,
+	}
+	store.tasks[stuckTask.ID] = stuckTask
+
+	completedRun := &Run{
+		ID:        "r_done",
+		MissionID: "m1",
+		TaskID:    stuckTask.ID,
+		Status:    RunSucceeded,
+	}
+	store.runs[completedRun.ID] = completedRun
+	store.runsList = []*Run{completedRun}
+
+	wt := NewWorktreeManager("/tmp/test-repo")
+	sched := NewScheduler(store)
+	workers := NewWorkerLauncher(sched, wt, store)
+	rm := NewMissionRecoveryManager(store, wt, workers)
+
+	report, err := rm.RecoverMission(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.StuckReset != 1 {
+		t.Fatalf("expected 1 stuck task reset, got %d", report.StuckReset)
+	}
+
+	summary, err := BuildMissionSummary(context.Background(), store, "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ActiveRuns != 0 {
+		t.Fatalf("active runs = %d, want 0", summary.ActiveRuns)
+	}
+	if summary.PhaseLabel != "Running · ready queue" {
+		t.Fatalf("phase label = %q", summary.PhaseLabel)
+	}
+	if summary.Attention != "1 ready task(s)" {
+		t.Fatalf("attention = %q", summary.Attention)
+	}
+	if summary.FocusTask == nil {
+		t.Fatal("expected focus task after recovery")
+	}
+	if summary.FocusTask.Title != "Repair stale worker lease" {
+		t.Fatalf("focus task = %q", summary.FocusTask.Title)
+	}
+	if summary.FocusTask.Status != TaskReady {
+		t.Fatalf("focus task status = %s, want %s", summary.FocusTask.Status, TaskReady)
+	}
+	if !strings.Contains(summary.NextAction, "Next ready task: Repair stale worker lease") {
+		t.Fatalf("next action = %q", summary.NextAction)
+	}
+
+	events, err := store.ListEvents(context.Background(), "m1", 10)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected recovery events to be recorded")
+	}
+	foundReset := false
+	foundCompleted := false
+	for _, event := range events {
+		switch event.Type {
+		case "recovery.stuck_task_reset":
+			if event.TaskID == stuckTask.ID {
+				foundReset = true
+			}
+		case "recovery.completed":
+			foundCompleted = true
+		}
+	}
+	if !foundReset {
+		t.Fatal("expected stuck-task recovery event for repairable running mission")
+	}
+	if !foundCompleted {
+		t.Fatal("expected recovery.completed event for repairable running mission")
+	}
+}
+
 func TestBuildReplanPrompt(t *testing.T) {
 	store := newRecoveryMockStore()
 	store.missions["m1"] = &Mission{

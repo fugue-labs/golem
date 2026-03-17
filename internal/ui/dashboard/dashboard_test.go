@@ -338,6 +338,95 @@ func TestAutoSelectMission(t *testing.T) {
 	}
 }
 
+func TestAutoSelectMissionPrefersPausedOverAwaitingApproval(t *testing.T) {
+	m, ctrl := setupTestDashboard(t)
+	ctx := context.Background()
+
+	paused := createTestMission(t, ctrl)
+	applyTestPlan(t, ctrl, paused.ID)
+	if err := ctrl.ApproveMission(ctx, paused.ID); err != nil {
+		t.Fatalf("approve paused mission: %v", err)
+	}
+	if err := ctrl.StartMission(ctx, paused.ID); err != nil {
+		t.Fatalf("start paused mission: %v", err)
+	}
+	if err := ctrl.PauseMission(ctx, paused.ID); err != nil {
+		t.Fatalf("pause mission: %v", err)
+	}
+
+	awaiting := createTestMission(t, ctrl)
+	applyTestPlan(t, ctrl, awaiting.ID)
+
+	m.missionID = ""
+	msg := m.doRefresh()
+	if rm, ok := msg.(refreshDoneMsg); ok && rm.err != nil {
+		t.Fatalf("refresh error: %v", rm.err)
+	}
+
+	if m.missionID != paused.ID {
+		t.Fatalf("expected paused mission %s to win auto-select, got %s", paused.ID, m.missionID)
+	}
+}
+
+func TestDashboardRefreshKeepsStaleRunningMissionActionable(t *testing.T) {
+	m, ctrl := setupTestDashboard(t)
+	ctx := context.Background()
+	ms := createTestMission(t, ctrl)
+	m.missionID = ms.ID
+	applyTestPlan(t, ctrl, ms.ID)
+	if err := ctrl.ApproveMission(ctx, ms.ID); err != nil {
+		t.Fatalf("approve mission: %v", err)
+	}
+	if err := ctrl.StartMission(ctx, ms.ID); err != nil {
+		t.Fatalf("start mission: %v", err)
+	}
+
+	reopened := New(ms.ID)
+	reopened.ctrl = mission.NewController(ctrl.Store())
+	reopened.width = 120
+	reopened.height = 40
+	msg := reopened.doRefresh()
+	if rm, ok := msg.(refreshDoneMsg); ok && rm.err != nil {
+		t.Fatalf("refresh error: %v", rm.err)
+	}
+
+	view := stripANSITest(viewString(reopened))
+	for _, want := range []string{"running", "Workers 0 active", "Ready 1 queued", "No active workers", "Mission Control is idle"} {
+		if !containsAny(view, want) {
+			t.Fatalf("expected %q in stale-running dashboard view, got %q", want, truncStr(view, 300))
+		}
+	}
+}
+
+func TestDashboardRefreshReattachesMissionAfterAutoSelect(t *testing.T) {
+	m, ctrl := setupTestDashboard(t)
+	ctx := context.Background()
+	attached := createTestMission(t, ctrl)
+	applyTestPlan(t, ctrl, attached.ID)
+	if err := ctrl.ApproveMission(ctx, attached.ID); err != nil {
+		t.Fatalf("approve mission: %v", err)
+	}
+	if err := ctrl.StartMission(ctx, attached.ID); err != nil {
+		t.Fatalf("start mission: %v", err)
+	}
+
+	m.missionID = ""
+	msg := m.doRefresh()
+	if rm, ok := msg.(refreshDoneMsg); ok && rm.err != nil {
+		t.Fatalf("refresh error: %v", rm.err)
+	}
+	if m.missionID != attached.ID {
+		t.Fatalf("missionID=%q, want %q", m.missionID, attached.ID)
+	}
+	if m.summary == nil || m.summary.Mission == nil || m.summary.Mission.ID != attached.ID {
+		t.Fatalf("expected attached summary for %s, got %#v", attached.ID, m.summary)
+	}
+	plain := stripANSITest(viewString(m))
+	if !containsAny(plain, attached.ID, attached.Title) {
+		t.Fatalf("expected attached mission details in view, got %q", truncStr(plain, 240))
+	}
+}
+
 func TestWindowResize(t *testing.T) {
 	m := New("")
 	m.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
