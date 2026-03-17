@@ -40,6 +40,8 @@ You can also install it directly:
 go install github.com/fugue-labs/golem@latest
 ```
 
+Prefer a prebuilt binary? Download the macOS Apple Silicon (`darwin-arm64`) or Linux x86_64 (`linux-amd64`) archive from this repository's GitHub Releases page.
+
 ## Quick start
 
 ### 1. Authenticate
