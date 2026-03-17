@@ -125,6 +125,7 @@ Golem supports both saved config and environment variables.
 | `GOLEM_PROVIDER` | Force the provider (`anthropic`, `openai`, `openai_compatible`, `vertexai`, `vertexai_anthropic`) |
 | `GOLEM_MODEL` | Override the active model |
 | `GOLEM_ROUTER_MODEL` | Set a cheaper routing model |
+| `GOLEM_API_KEY` | API key for OpenAI-compatible providers |
 | `GOLEM_BASE_URL` | Custom OpenAI-compatible endpoint |
 | `GOLEM_TIMEOUT` | Request timeout, e.g. `30m` |
 | `GOLEM_PERMISSION_MODE` | Permission mode, typically `suggest` or `auto` |
@@ -194,6 +195,14 @@ Run the test suite:
 ```bash
 go test ./...
 ```
+
+Run the lightweight documentation drift check:
+
+```bash
+go test ./test/docsqa
+```
+
+This narrow docs QA test intentionally checks only a few high-risk operator contracts: core onboarding commands, shipped shell/TUI command names, and critical runtime configuration variables.
 
 ## Release notes for this repo
 

@@ -10,6 +10,12 @@ It covers:
 
 If a command is not listed here, do not assume it is shipped.
 
+The repository also includes a lightweight docs QA test at `test/docsqa/docsqa_test.go`. It intentionally checks only a small set of high-risk documentation contracts:
+
+- core onboarding commands called out in the README and TUI help
+- shell and slash command names that are easy to let drift from implementation
+- critical runtime configuration variable names used for provider setup and onboarding
+
 ## Surface map
 
 Golem exposes three distinct operator-facing command surfaces:
@@ -182,6 +188,16 @@ Inspect or run local automation configuration.
 - `status` prints a daemon status summary
 - `init` prints an example `~/.golem/automations.json`
 - Unknown subcommands print usage and exit non-zero
+
+## Drift-prevention notes
+
+When you change command surfaces, update the implementation and the docs together:
+
+- shell command additions or removals should be reflected in `main.go`, this page, and any README entrypoint lists
+- top-level slash-command discoverability should stay aligned with `internal/ui/commands.go`
+- onboarding anchors such as `/help`, `/search <query>`, `/runtime`, and `/doctor` should remain consistent across help text and the README
+
+The docs QA test is intentionally not exhaustive; it is a cheap guardrail for the most failure-prone command-name drift.
 
 ## Slash commands in the TUI
 

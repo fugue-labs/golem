@@ -96,6 +96,8 @@ For both `vertexai` and `vertexai_anthropic`:
 
 The following variables directly affect provider choice, model/auth setup, or runtime reporting.
 
+The lightweight docs QA guardrail in `test/docsqa/docsqa_test.go` intentionally watches a narrow subset of the highest-risk names here: onboarding-critical provider/model variables plus the config keys most likely to break setup docs when they drift.
+
 ### Provider and auth
 
 - `GOLEM_PROVIDER`
