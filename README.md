@@ -1,26 +1,26 @@
 # Golem
 
-**Golem is a terminal-native coding agent for real repositories** — a local-first chat and mission workflow that starts in your shell, understands repo context on launch, and keeps sessions, memory, and durable mission state on your machine.
+**Golem is a terminal-native coding agent for real repositories** — a local-first chat and mission workflow that launches in your shell, understands repo context on startup, and keeps sessions, memory, and durable mission state on your machine.
 
 It is built for developers who want an agent that feels like part of the terminal workflow instead of a browser-heavy IDE.
 
 ## Why Golem
 
-Golem front-loads the things that matter in day-to-day repo work:
+Golem front-loads the things that matter in day-to-day repository work:
 
 - **Terminal-native by default** — launch a TUI, type prompts, use slash commands, and stay in the shell.
-- **Repo-aware on startup** — Golem reads git state, project instructions, runtime config, saved sessions, and local memory before helping.
-- **Local-first state** — sessions, auth, memory, missions, and automation config live under `~/.golem/`.
+- **Repo-aware on startup** — Golem loads git state, configuration, saved sessions, project instructions, and local memory before helping.
+- **Local-first state** — auth, sessions, memory, missions, and automation config live under `~/.golem/`.
 - **Operator-friendly UX** — `/help`, `/doctor`, runtime summaries, cost tracking, verification state, and explicit mission controls are shipped surfaces.
-- **More than one-shot chat** — search earlier sessions, replay traces, rewind checkpoints, and manage bigger work through durable missions.
+- **More than one-shot chat** — recover prior work with `/resume`, `/search <query>`, `/replay`, and `/rewind`, or manage larger efforts through durable missions.
 
 ## What you can do with Golem
 
-With the shipped CLI and TUI, you can:
+With the currently shipped CLI and TUI, you can:
 
 - work interactively in a repository with an agent that can read, search, edit, write, list, and run commands,
 - check setup and runtime quickly with `golem status`, `golem runtime`, and `/doctor`,
-- recover prior work with `/resume`, `/search <query>`, `/replay`, and `/rewind`,
+- search earlier saved sessions with `/search <query>` and replay or rewind prior work,
 - run durable mission workflows from the main TUI with `/mission ...` and inspect them in **Mission Control** with `golem dashboard`,
 - configure local automation workflows with `golem automations ...`.
 
@@ -148,7 +148,7 @@ golem fix the failing tests
 What each one gives you:
 
 - `/help` — discover commands and keybindings
-- `/doctor` — diagnose auth, repo, instructions, and tool availability issues
+- `/doctor` — diagnose auth, repo, instruction loading, and tool availability issues
 - `/search <query>` — search across saved sessions for earlier fixes and context
 - `/mission new <goal>` — create a durable mission for larger multi-step work
 
@@ -217,7 +217,6 @@ Refactor the login flow and keep go test ./... green.
 | `/mission start` | Start mission execution |
 | `/mission pause` | Pause the active mission |
 | `/mission cancel` | Cancel the active mission |
-| `/mission retry [task-id]` | Retry failed or blocked tasks, or one task by ID |
 | `/mission list` | List known missions |
 | `/quit` or `/exit` | Quit Golem |
 
@@ -232,8 +231,6 @@ For bigger tasks, start in the main TUI:
 /mission plan
 /mission approve
 /mission start
-/mission retry
-/mission retry task-123
 /mission pause
 /mission cancel
 /mission list
@@ -245,7 +242,6 @@ What that flow looks like in practice:
 - `/mission plan` generates the task DAG
 - `/mission approve` approves the pending plan
 - `/mission start` starts execution when approvals allow it
-- `/mission retry [task-id]` retries failed or blocked tasks, for all eligible tasks or for one task ID
 - `golem dashboard` opens Mission Control for durable visibility into mission state
 
 Inspect durable mission state in a separate dashboard:
@@ -268,7 +264,7 @@ Mission Control shows mission status plus **Tasks**, **Workers**, **Evidence**, 
 | `↑ / ↓` | Recall input history |
 | `PgUp / PgDn` | Scroll the transcript |
 
-## Local data and project instructions
+## Local data and instruction loading
 
 Golem stores local state under `~/.golem/`, including:
 
@@ -280,14 +276,15 @@ Golem stores local state under `~/.golem/`, including:
 - `missions.db` — durable mission store
 - `automations.json` — local automation configuration
 
-Golem discovers project instructions from:
+Golem discovers instructions in precedence order, concatenating lower-precedence files first and letting later files win when guidance overlaps:
 
-1. `GOLEM.md` in the working directory
-2. `CLAUDE.md` in the working directory
-3. `.golem/instructions.md` in the working directory
-4. `~/.golem/instructions.md` for global instructions
+1. `~/.golem/instructions.md`
+2. from the git root down to the current working directory, checking each directory for:
+   - `GOLEM.md`
+   - `CLAUDE.md`
+   - `.golem/instructions.md`
 
-Instructions from parent directories up to the git root are also loaded.
+That means nearer project files override broader user-level or ancestor guidance.
 
 ## Where to go next
 
@@ -353,8 +350,3 @@ In particular:
 - durable mission control is available through `/mission ...` in the main TUI and `golem dashboard`
 - `golem automations ...` is the shipped automation CLI family
 - `/search <query>` is the supported search entry point for saved sessions
-- mission retry is available as `/mission retry [task-id]`
-
-## License
-
-See the repository for license details.
