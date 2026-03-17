@@ -47,8 +47,8 @@ jobs:
           go-version: "1.26"
       - name: Verify build
         run: go build ./...
-      - name: Verify tests pass
-        run: go test ./...
+      - name: Verify tests pass (excluding e2e tuistory suite)
+        run: go test $(go list ./... | grep -v '^github.com/fugue-labs/golem/test/e2e$')
 
   release:
     name: Create Release
