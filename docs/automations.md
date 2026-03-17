@@ -7,6 +7,8 @@ Automations are the advanced, long-running shell workflow in Golem. They are dif
 
 This guide documents only the shell behavior that is currently shipped.
 
+If you still need installation or authentication help, start with [Getting started with Golem](getting-started.md).
+
 ## What is shipped
 
 The shipped automation command family is:

@@ -7,6 +7,8 @@ Golem has two different ways to work:
 
 This guide focuses on the shipped advanced workflow: creating a mission, planning it, approving it, running it, and watching progress in the dashboard.
 
+If you still need installation or authentication help, start with [Getting started with Golem](getting-started.md).
+
 ## When to use missions
 
 Use a mission when the work is bigger than a single prompt and you want durable state that survives beyond one transcript view. Missions are a better fit when you want to:

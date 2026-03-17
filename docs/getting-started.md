@@ -222,6 +222,11 @@ Other useful early commands:
 - `/cost`
 - `/mission new <goal>`
 
+When you are ready for advanced or long-running workflows, continue with:
+
+- [Missions and Mission Control](missions-and-dashboard.md)
+- [Automations](automations.md)
+
 ## Log out or switch providers later
 
 To remove saved login state:

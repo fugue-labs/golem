@@ -27,6 +27,11 @@ For the full onboarding flow, including provider selection, authentication choic
 
 - [Getting started with Golem](docs/getting-started.md)
 
+For advanced workflows, use the dedicated guides instead of the short summaries in this README:
+
+- [Missions and Mission Control](docs/missions-and-dashboard.md)
+- [Automations](docs/automations.md)
+
 The README keeps the short version below for users who already know how they want to authenticate.
 
 ### Prerequisites
@@ -87,6 +92,7 @@ golem status              # one-shot status summary
 golem runtime             # one-shot runtime profile
 golem dashboard           # open Mission Control
 golem automations list    # list configured automations
+golem automations start   # run the configured automations daemon
 golem automations init    # print an example automations config
 golem automations status  # show daemon status
 ```
@@ -144,27 +150,13 @@ golem runtime --json
 
 Golem includes a durable mission system for longer-running, multi-step work.
 
-From the main TUI you can:
+The short version is:
 
-```text
-/mission new Build a REST API with authentication
-/mission status
-/mission tasks
-/mission plan
-/mission approve
-/mission start
-/mission pause
-/mission cancel
-/mission list
-```
+- create and control missions from the main TUI with `/mission ...`
+- monitor durable progress from another terminal with `golem dashboard`
+- use Mission Control when work needs planning, approval, pause/resume, and separate operator visibility
 
-You can inspect the same mission state in a dedicated dashboard:
-
-```bash
-golem dashboard
-```
-
-The dashboard shows mission status plus **Tasks**, **Workers**, **Evidence**, and **Events** panes.
+For the full workflow, dashboard layout, and operator expectations, see [Missions and Mission Control](docs/missions-and-dashboard.md).
 
 ## Configuration
 
@@ -220,18 +212,16 @@ Golem stores local state under `~/.golem/`, including:
 
 ## Automations
 
-Golem can run automation workflows from a local config file:
+Golem can run advanced, config-backed automation workflows from your local Golem directory.
 
-```bash
-golem automations init
-```
+The short version is:
 
-That prints an example `~/.golem/automations.json`. After configuring it, you can inspect the setup with:
+- `golem automations` defaults to `golem automations list`
+- `golem automations init` prints an example `~/.golem/automations.json`
+- `golem automations start` runs the configured daemon
+- `golem automations status` prints a human-readable summary
 
-```bash
-golem automations list
-golem automations status
-```
+For the shipped command behavior and recommended operator workflow, see [Automations](docs/automations.md).
 
 ## Development
 
